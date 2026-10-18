@@ -4054,7 +4054,17 @@ namespace
 		void luaA_pushobject(lua_State* L, const TObject* o);
 		int luaopen_serialize(lua_State* L);
 		void reallymarkobject(GCState* gcState, GCObject* object);
-		int luaD_call(lua_State* L, StkId func, int nResults);
+		// noexcept(false) is load-bearing: this declaration sits inside the
+		// extern "C" block opened at the top of the file, and ExceptionHandling=Sync
+		// expands to /EHsc, which implies /EHc. MSVC therefore assumes luaD_call
+		// cannot throw, and the optimizer acts on that assumption: every try/catch
+		// wrapped around a luaD_call - LuaCallProtected's two handlers above all -
+		// is deleted as dead code under /O2. That is why every script error used
+		// to unwind past the engine's only protected boundary to std::terminate
+		// (0xC0000409) instead of returning the error code, and why the defect
+		// only ever appeared in Release: /Od never performs the elision. It does
+		// throw, at luaG_errormsg (LuaObject.cpp), which raises lua_RuntimeError.
+		int luaD_call(lua_State* L, StkId func, int nResults) noexcept(false);
 		LuaPlus::StkId luaD_precall(lua_State* L, StkId func);
 		void luaD_callhook(lua_State* L, int event, int line);
 		void luaD_poscall(lua_State* L, int wanted, StkId firstResult);
@@ -16088,7 +16098,7 @@ extern "C"
 	 * C++ throw through its setjmp anyway. A script error consequently unwound
 	 * past every protected boundary and out of WinMain.
 	 */
-	int LuaCallProtected(lua_State* const state, const int nargs, const int nresults)
+	int LuaCallProtected(lua_State* const state, const int nargs, const int nresults) noexcept(false)
 	{
 		StkId const func = state->top - (nargs + 1);
 		try {
@@ -16112,7 +16122,7 @@ extern "C"
 	 * Calls with no handler, so an error unwinds to the caller's own protected
 	 * boundary instead of being turned into a status nobody reads.
 	 */
-	void LuaCallUnprotected(lua_State* const state, const int nargs, const int nresults)
+	void LuaCallUnprotected(lua_State* const state, const int nargs, const int nresults) noexcept(false)
 	{
 		(void)luaD_call(state, state->top - (nargs + 1), nresults);
 	}
@@ -16317,7 +16327,7 @@ extern "C"
 	 * the caller expects it, and restoring the hook gate - before letting the
 	 * error continue outward.
 	 */
-	int luaD_call(lua_State* const state, StkId func, const int nResults)
+	int luaD_call(lua_State* const state, StkId func, const int nResults) noexcept(false)
 	{
 		constexpr unsigned int kMaxCCalls = 200;
 		constexpr unsigned int kMaxCCallsHandling = kMaxCCalls + (kMaxCCalls >> 3);

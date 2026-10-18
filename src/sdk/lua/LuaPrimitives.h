@@ -225,11 +225,24 @@ inline moho::Sim* lua_getglobaluserdata_typed(lua_State* state)
 #ifdef __cplusplus
 extern "C"
 {
-#endif
+// noexcept(false) is load-bearing, for the same reason luaM_realloc carries it
+// (see LuaObject.cpp). ExceptionHandling=Sync expands to /EHsc, which implies
+// /EHc: MSVC then assumes an extern "C" function cannot throw. The optimizer
+// acts on that assumption and deletes both handlers in the LuaCallProtected
+// body as dead code under /O2. Observed in the Release|Win32 build - uf
+// LuaCallProtected came back as a bare argument shuffle plus `call luaD_call`,
+// with no __CxxFrameHandler and no exception table, so every script error
+// unwound straight past the engine's only protected boundary to
+// std::terminate (0xC0000409) instead of returning the error code. Debug
+// (/Od) never performed that elision, which is why the defect only ever
+// showed up in Release. LuaCallUnprotected forwards to the same luaD_call and
+// is reached from the same protected callers, so it gets the same spec.
+int LuaCallProtected(lua_State* L, int nargs, int nresults) noexcept(false);
+void LuaCallUnprotected(lua_State* L, int nargs, int nresults) noexcept(false);
+}
+#else
 int LuaCallProtected(lua_State* L, int nargs, int nresults);
 void LuaCallUnprotected(lua_State* L, int nargs, int nresults);
-#ifdef __cplusplus
-}
 #endif
 #define lua_call LuaCallUnprotected
 
