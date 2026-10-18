@@ -140,6 +140,14 @@ namespace
     if (length > 96) {
       length = 96;
     }
+    // IsPlausiblePointer is only a range test, so `source` being in range says
+    // nothing about its payload. The %.*s below is the first read of `str` and
+    // it faults on a garbage payload - and it runs before the frame's own
+    // DumpLine, so the fault silently truncates the entire report at this VM.
+    if (length != 0 && !IsPlausiblePointer(source->str)) {
+      (void)std::snprintf(out, outBytes, "(bad source str)");
+      return;
+    }
     (void)std::snprintf(out, outBytes, "%.*s", static_cast<int>(length), source->str);
   }
 
@@ -292,7 +300,7 @@ namespace
             if (thread->ci != nullptr && thread->ci > thread->base_ci
                 && IsPlausiblePointer(thread->stack)) {
               DumpLine(
-                sink, "  VM %d coroutine %p (%td frame(s)):", index, static_cast<const void*>(thread),
+                sink, "  VM %d coroutine %p (%lld frame(s)):", index, static_cast<const void*>(thread),
                 static_cast<long long>(thread->ci - thread->base_ci)
               );
               // Same frame rendering; lstate follow suppressed - it points
@@ -322,6 +330,25 @@ namespace
     return fallback;
   }
 
+  void DescribeVmInternalImpl(
+    std::FILE* const sink, lua_State* const state, const int index, const bool followLstate
+  );
+
+  // A crash reporter that dies mid-dump is worse than one that reports less:
+  // the sections after the fault are lost too, which is exactly what happened
+  // when the Lobby VM's 371-frame chain faulted on its first frame. The
+  // IsPlausiblePointer guards are range tests only, so they cannot keep a
+  // garbage-but-mapped payload from faulting. This wrapper keeps one bad VM
+  // from taking the rest of the report with it.
+  void DescribeVmInternal(std::FILE* const sink, lua_State* const state, const int index, const bool followLstate)
+  {
+    __try {
+      DescribeVmInternalImpl(sink, state, index, followLstate);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      DumpLine(sink, "  VM %d: dump aborted by a memory fault (state=%p)", index, static_cast<void*>(state));
+    }
+  }
+
   void DescribeVm(std::FILE* const sink, lua_State* const state, const int index)
   {
     if (IsPlausiblePointer(state)) {
@@ -340,7 +367,9 @@ namespace
     DescribeVmInternal(sink, state, index, true);
   }
 
-  void DescribeVmInternal(std::FILE* const sink, lua_State* const state, const int index, const bool followLstate)
+  void DescribeVmInternalImpl(
+    std::FILE* const sink, lua_State* const state, const int index, const bool followLstate
+  )
   {
     if (!IsPlausiblePointer(state)) {
       DumpLine(sink, "%s: <bad pointer>", VmNameAt(index));
@@ -364,7 +393,7 @@ namespace
     if (followLstate && IsPlausiblePointer(runningThread) && runningThread != state
         && runningThread->l_G == state->l_G) {
       DumpLine(sink, "  VM %d: running on coroutine thread %p", index, static_cast<void*>(runningThread));
-      DescribeVmInternal(sink, runningThread, index, true);
+      DescribeVmInternalImpl(sink, runningThread, index, true);
     }
 
     const bool livePcValid = (runningThread == state);
@@ -378,20 +407,35 @@ namespace
       return;
     }
     const std::ptrdiff_t frameCount = currentCi - baseCi;
-    if (frameCount > 200) {
-      DumpLine(sink, "  VM %d: ci chain implausible (%td frames); skipping", index,
-               static_cast<long long>(frameCount));
+    // Bound the walk by the CallInfo array itself rather than by a magic frame
+    // count. size_ci grows to kLuaMaxCallInfoFrames (0x1000), so several hundred
+    // Lua frames is legal: kMaxCCalls (200) bounds nested *C* calls, and a pure
+    // Lua-to-Lua frame never passes through luaD_call, so it never moves
+    // nCcalls. The old cap of 200 therefore silently dropped exactly the deep
+    // chains a crash report exists to show. end_ci - base_ci is the allocated
+    // capacity, so a chain running past it really is corrupt.
+    if (!IsPlausiblePointer(state->end_ci)) {
+      DumpLine(sink, "  VM %d: bad end_ci %p", index, static_cast<void*>(state->end_ci));
+      return;
+    }
+    const std::ptrdiff_t allocatedFrames = state->end_ci - baseCi;
+    if (frameCount > allocatedFrames) {
+      DumpLine(sink, "  VM %d: ci chain implausible (%lld frames, array holds %lld); skipping", index,
+               static_cast<long long>(frameCount), static_cast<long long>(allocatedFrames));
       return;
     }
 
-    DumpLine(sink, "  VM %d: %td frame(s)", index, static_cast<long long>(frameCount));
+    DumpLine(sink, "  VM %d: %lld frame(s) [ci=%p base_ci=%p end_ci=%p size_ci=%u]", index,
+             static_cast<long long>(frameCount), static_cast<const void*>(currentCi),
+             static_cast<const void*>(baseCi), static_cast<const void*>(state->end_ci),
+             static_cast<unsigned>(state->size_ci));
 
     // Print innermost 32 frames, innermost first (that is where the bug is).
     const std::ptrdiff_t printed = (frameCount < 32) ? frameCount : 32;
     for (std::ptrdiff_t f = 0; f < printed; ++f) {
       CallInfo* const ci = currentCi - f;
       if (!IsPlausiblePointer(ci->base)) {
-        DumpLine(sink, "  VM %d frame %td: bad base", index, static_cast<long long>(f));
+        DumpLine(sink, "  VM %d frame %lld: bad base", index, static_cast<long long>(f));
         continue;
       }
 
@@ -400,13 +444,13 @@ namespace
         (ci->base > state->stack) ? static_cast<const Closure*>(ci->base[-1].value.p) : nullptr;
 
       if (closure == nullptr || !IsPlausiblePointer(closure)) {
-        DumpLine(sink, "  VM %d frame %td: <no closure> state=%d", index, static_cast<long long>(f), frameState);
+        DumpLine(sink, "  VM %d frame %lld: <no closure> state=%d", index, static_cast<long long>(f), frameState);
         continue;
       }
 
       const Proto* const proto = closure->l.p;
       if (!IsPlausiblePointer(proto) || !IsPlausiblePointer(proto->code)) {
-        DumpLine(sink, "  VM %d frame %td: <bad proto> state=%d", index, static_cast<long long>(f), frameState);
+        DumpLine(sink, "  VM %d frame %lld: <bad proto> state=%d", index, static_cast<long long>(f), frameState);
         continue;
       }
 
@@ -438,11 +482,11 @@ namespace
 
       if (frameState >= 3) { // C function / special frames have no Lua source
         DumpLine(
-          sink, "  VM %d frame %td: <C or suspended> state=%d", index, static_cast<long long>(f), frameState
+          sink, "  VM %d frame %lld: <C or suspended> state=%d", index, static_cast<long long>(f), frameState
         );
       } else {
         DumpLine(
-          sink, "  VM %d frame %td: %s:%d (lineDefined=%d, %s)", index, static_cast<long long>(f), source, line,
+          sink, "  VM %d frame %lld: %s:%d (lineDefined=%d, %s)", index, static_cast<long long>(f), source, line,
           proto->lineDefined, pcKind
         );
         DumpFrameRegisters(sink, index, f, ci);
@@ -452,7 +496,7 @@ namespace
       }
     }
     if (frameCount > printed) {
-      DumpLine(sink, "  VM %d: ... %td outer frame(s) elided", index,
+      DumpLine(sink, "  VM %d: ... %lld outer frame(s) elided", index,
                static_cast<long long>(frameCount - printed));
     }
 
