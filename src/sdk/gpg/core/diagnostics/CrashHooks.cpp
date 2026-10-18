@@ -74,20 +74,63 @@ namespace gpg::diag
     return sPath;
   }
 
+  namespace
+  {
+    // One append handle for the process, opened lazily.
+    //
+    // DiagLine used to fopen/fclose per line, and that malloc inside a crash
+    // handler is exactly what a fault cannot survive. When the handler itself
+    // faults, the OS terminates the process with the *original* exception code
+    // and no remaining handler runs - so a Release|Win32 access violation left a
+    // bare 0xC0000005 exit code and not one [FAULT] line anywhere. WriteFile on
+    // a cached handle keeps the write path off the CRT heap entirely.
+    HANDLE DiagSink()
+    {
+      static HANDLE sSink = INVALID_HANDLE_VALUE;
+      if (sSink == INVALID_HANDLE_VALUE) {
+        sSink = ::CreateFileA(
+          DiagLogPath(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+          OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr
+        );
+      }
+      return sSink;
+    }
+  } // namespace
+
   void DiagLine(const char* const format, ...)
   {
-    std::FILE* sink = nullptr;
-    if (::fopen_s(&sink, DiagLogPath(), "a") != 0 || sink == nullptr) {
-      return;
+    // Isolated on purpose, see DiagSink: nothing below may escape, or the fault
+    // being reported gets replaced by this one and everything is lost.
+    __try {
+      char line[512] = {};
+      std::va_list args;
+      va_start(args, format);
+      // _TRUNCATE still null-terminates, so a long line is logged in part
+      // rather than dropped - the return value is deliberately not used as a
+      // gate. sizeof - 1 leaves room for the newline appended below.
+      (void)_vsnprintf_s(line, sizeof(line) - 1, _TRUNCATE, format, args);
+      va_end(args);
+      std::size_t length = std::strlen(line);
+      line[length] = '\n';
+      ++length;
+
+      const HANDLE sink = DiagSink();
+      if (sink != INVALID_HANDLE_VALUE) {
+        // Both game instances append to this file, so loop on short writes.
+        const char* payload = line;
+        DWORD remaining = static_cast<DWORD>(length);
+        while (remaining != 0u) {
+          DWORD chunk = 0u;
+          if (::WriteFile(sink, payload, remaining, &chunk, nullptr) == FALSE || chunk == 0u) {
+            break;
+          }
+          payload += chunk;
+          remaining -= chunk;
+        }
+      }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      ::OutputDebugStringA("faf_diag: DiagLine failed\n");
     }
-
-    std::va_list args;
-    va_start(args, format);
-    (void)std::vfprintf(sink, format, args);
-    va_end(args);
-
-    (void)std::fputc(0x0A, sink);
-    (void)std::fclose(sink);
   }
 
   // ---------------------------------------------------------------------
@@ -131,6 +174,10 @@ namespace gpg::diag
   {
     const auto raw = reinterpret_cast<DWORD64>(address);
 
+    // dbghelp is a large amount of code to run at a crash site, and a garbage
+    // return address can reach it in any state. One undescribable frame must
+    // cost one line, not the rest of the report.
+    __try {
     // Module + RVA always works, even with no symbols, and is what makes an
     // unresolved frame decodable offline against the map file.
     char moduleName[MAX_PATH] = "?";
@@ -183,18 +230,36 @@ namespace gpg::diag
       out, outBytes, _TRUNCATE, "%08llX %s+0x%llX%s",
       raw, moduleName, (moduleBase != 0) ? (raw - moduleBase) : 0ull, symbolText
     );
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      (void)::_snprintf_s(out, outBytes, _TRUNCATE, "%08llX <undescribable>", raw);
+    }
   }
 
   void DiagLogStack(const char* const tag)
   {
-    void* frames[40] = {};
-    const USHORT captured = ::RtlCaptureStackBackTrace(1, 40, frames, nullptr);
+    // Cheap and complete first, expensive and pretty second.
+    //
+    // STATUS_STACK_OVERFLOW arrives here with no stack left, and dbghelp needs
+    // several KB plus heap for one symbol. Symbolising first therefore lost the
+    // entire walk: the header printed and all 40 frames were missing. The raw
+    // return addresses are written as one cheap loop before any of that, which
+    // is enough to symbolise offline against main.pdb.
+    __try {
+      void* frames[24] = {};
+      const USHORT captured = ::RtlCaptureStackBackTrace(1, 24, frames, nullptr);
 
-    DiagLine("[STACK] %s tid=%lu frames=%u", tag, ::GetCurrentThreadId(), static_cast<unsigned>(captured));
-    for (USHORT i = 0; i < captured; ++i) {
-      char described[420] = {};
-      DiagDescribeAddress(frames[i], described, sizeof(described));
-      DiagLine("[STACK]   #%02u %s", static_cast<unsigned>(i), described);
+      DiagLine("[STACK] %s tid=%lu frames=%u", tag, ::GetCurrentThreadId(), static_cast<unsigned>(captured));
+      for (USHORT i = 0; i < captured; ++i) {
+        DiagLine("[STACKRAW] %02u %p", static_cast<unsigned>(i), frames[i]);
+      }
+
+      for (USHORT i = 0; i < captured; ++i) {
+        char described[256] = {};
+        DiagDescribeAddress(frames[i], described, sizeof(described));
+        DiagLine("[STACK]   #%02u %s", static_cast<unsigned>(i), described);
+      }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+      DiagLine("[STACK] %s <symbol walk stopped>", tag);
     }
   }
 
@@ -269,6 +334,13 @@ namespace gpg::diag
 
       static int sFaultBudget = 0;
 
+      // This handler is the only thing that records an unhandled fault - it does
+      // not take the fatal path, so no report and no minidump are written - so
+      // it must not be able to fault itself. A handler that faults is skipped by
+      // the OS, which then terminates the process with the original exception
+      // code and no diagnostics whatsoever. Anything raised inside is therefore
+      // swallowed here on purpose.
+      __try {
       if (code == kCppException) {
         if (!sLogThrows || sThrowBudget >= 40) {
           return EXCEPTION_CONTINUE_SEARCH;
@@ -300,11 +372,20 @@ namespace gpg::diag
         );
       }
 
+      // No module lookup here: on a stack-overflow fault the thread has room
+      // for roughly one DiagLine call, and RtlPcToFileHeader is what pushed the
+      // walk over the edge twice. The image base is logged once at startup
+      // instead, where there is stack to spare.
       DiagLine(
         "[FAULT] code=0x%08lX at %08IX%s",
         code, reinterpret_cast<std::uintptr_t>(info->ExceptionRecord->ExceptionAddress), detail
       );
       DiagLogStack("fault");
+      } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // Deliberately empty. This handler exists to observe, never to alter:
+        // falling through to CONTINUE_SEARCH leaves the default handling - and
+        // therefore the exit code the operator sees - completely unchanged.
+      }
       return EXCEPTION_CONTINUE_SEARCH;
     }
 
@@ -341,7 +422,13 @@ namespace gpg::diag
     (void)_set_purecall_handler(&DiagPureCallHandler);
     (void)_set_abort_behavior(0U, _WRITE_ABORT_MSG); // no modal box on abort
 
-    DiagLine("[CRTDIAG] ==== run start, pid=%lu ====", ::GetCurrentProcessId());
+    // The image base belongs here, not at the fault site. On a stack-overflow
+    // fault the thread has room for about one DiagLine call, and a loader-lock
+    // lookup there is what cost us the whole stack walk twice; logging it once
+    // here is what makes the raw [STACKRAW] addresses resolvable after ASLR.
+    DiagLine(
+      "[CRTDIAG] ==== run start, pid=%lu base=%p ====", ::GetCurrentProcessId(), ::GetModuleHandleA(nullptr)
+    );
 
     if (options.enableHeapCheck) {
       // _CRTDBG_CHECK_ALWAYS_DF walks every live block on every alloc and free.
