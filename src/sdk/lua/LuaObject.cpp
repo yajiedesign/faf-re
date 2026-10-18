@@ -16338,10 +16338,21 @@ extern "C"
 		const lu_byte savedAllowHook = state->l_G->allowhook;
 		const ptrdiff_t funcOffset = reinterpret_cast<char*>(func) - reinterpret_cast<char*>(state->stack);
 
-		if (++state->nCcalls >= kMaxCCalls) {
-			if (state->nCcalls == kMaxCCalls) {
+		const unsigned int nestedCalls = ++state->nCcalls;
+		if (nestedCalls >= kMaxCCalls) {
+			// Both raises below sit outside the try, so on this path nothing
+			// restores the counter - unlike every frame further out, whose
+			// unwindFrameForError puts nCcalls back. Leaving it pinned at the
+			// limit means the very next luaD_call re-trips the guard, and once
+			// it passes kMaxCCallsHandling the plain "C stack overflow" becomes
+			// a LUA_ERRERR that carries no message at all. That exception then
+			// escapes any caller on the unprotected lua_call path and terminates
+			// the game (0xC0000409). Restore first, then raise.
+			state->nCcalls = savedNestedCalls;
+
+			if (nestedCalls == kMaxCCalls) {
 				luaG_runerror(state, "C stack overflow");
-			} else if (state->nCcalls >= kMaxCCallsHandling) {
+			} else if (nestedCalls >= kMaxCCallsHandling) {
 				throw lua_ErrorError(lua::lua_Error(state, LUA_ERRERR, "error in Lua error handling"));
 			}
 		}
