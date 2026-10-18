@@ -867,6 +867,53 @@ namespace gpg::diag
     constexpr int kCloseButtonId = 1067;
     constexpr int kEditControlId = 1068;
 
+    // ---------------------------------------------------------------------
+    // Auto-close countdown.
+    //
+    // A crash dialog that waits for a human wedges anything automated: the
+    // harness waits on the process, the process waits on the dialog, and the
+    // run never finishes or reports. Five seconds is long enough to read the
+    // top of the report - which is where the exception and the first frames
+    // are - and short enough that a scripted run gets on with it.
+    //
+    // FAF_CRASHDIALOG_SECONDS overrides it; 0 restores the wait-for-a-human
+    // behaviour. The escape hatch follows FAF_MINIDUMP's convention.
+    // ---------------------------------------------------------------------
+    constexpr UINT_PTR kCountdownTimerId = 1;
+    constexpr int kDefaultCountdownSeconds = 5;
+    int sCountdownRemaining = 0;
+
+    int CrashDialogCountdownSeconds()
+    {
+      char value[8]{};
+      const DWORD length =
+        ::GetEnvironmentVariableA("FAF_CRASHDIALOG_SECONDS", value, static_cast<DWORD>(sizeof(value)));
+      if (length == 0u || length >= sizeof(value)) {
+        return kDefaultCountdownSeconds;
+      }
+      const int seconds = std::atoi(value);
+      return (seconds < 0) ? 0 : seconds;
+    }
+
+    // The countdown runs on the Close button, so the wait is visible and the
+    // dialog still dismisses immediately if someone clicks it.
+    void UpdateCrashDialogCountdown(HWND dialog)
+    {
+      wchar_t label[32] = {};
+      if (sCountdownRemaining > 0) {
+        (void)_snwprintf_s(label, sizeof(label) / sizeof(label[0]), _TRUNCATE, L"Close (%ds)", sCountdownRemaining);
+      } else {
+        (void)::wcscpy_s(label, L"Close");
+      }
+      (void)::SetDlgItemTextW(dialog, kCloseButtonId, label);
+    }
+
+    void EndCrashDialog(HWND dialog)
+    {
+      (void)::KillTimer(dialog, kCountdownTimerId);
+      (void)::EndDialog(dialog, 0);
+    }
+
     void CreateCrashDialogChildren(HWND dialog)
     {
       HFONT font = static_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
@@ -959,8 +1006,25 @@ namespace gpg::diag
           // did not exist yet), so lay out once now against the real client
           // rect; every later WM_SIZE re-runs it.
           LayoutCrashDialogChildren(dialog);
+
+          sCountdownRemaining = CrashDialogCountdownSeconds();
+          if (sCountdownRemaining > 0) {
+            (void)::SetTimer(dialog, kCountdownTimerId, 1000, nullptr);
+            UpdateCrashDialogCountdown(dialog);
+          }
           return TRUE;
         }
+        case WM_TIMER:
+          if (wParam == kCountdownTimerId) {
+            --sCountdownRemaining;
+            if (sCountdownRemaining <= 0) {
+              EndCrashDialog(dialog);
+            } else {
+              UpdateCrashDialogCountdown(dialog);
+            }
+            return TRUE;
+          }
+          break;
         case WM_SIZE:
           LayoutCrashDialogChildren(dialog);
           return TRUE;
@@ -983,13 +1047,13 @@ namespace gpg::diag
             return TRUE;
           }
           if (id == kCloseButtonId || id == IDCANCEL) {
-            (void)::EndDialog(dialog, 0);
+            EndCrashDialog(dialog);
             return TRUE;
           }
           break;
         }
         case WM_CLOSE:
-          (void)::EndDialog(dialog, 0);
+          EndCrashDialog(dialog);
           return TRUE;
         default:
           break;
