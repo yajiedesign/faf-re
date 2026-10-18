@@ -3961,10 +3961,17 @@ float moho::CScriptLazyVar_float::GetValue(
 
     lazyVarObject.PushStack(activeState);
     if (LuaCallProtected(rawState, 0, 1) != 0) {
-      LuaPlus::LuaStackObject errorStack(activeState, -1);
-      const char* errorText = errorStack.GetString();
+      // Read the error text without throwing. This function is noexcept and
+      // LuaStackObject::GetString raises a type error when the slot cannot
+      // coerce, so a non-string error object left a noexcept function and went
+      // straight to std::terminate (0xC0000409) - the "Evaluating LazyVar
+      // failed: <non-string>" fallback a few lines down was unreachable code.
+      // The slot really can hold a non-string: luaD_call's overflow guard
+      // throws lua_ErrorError before pushing any message. And the scripts raise
+      // handled errors here routinely - maui/control.lua ResetLayout is a
+      // deliberate circular dependency - so this path must stay non-fatal.
+      const char* errorText = lua_tostring(rawState, -1);
       if (errorText == nullptr) {
-        errorStack.TypeError("string");
         errorText = "<non-string>";
       }
       gpg::Warnf("Evaluating LazyVar failed: %s", errorText);
