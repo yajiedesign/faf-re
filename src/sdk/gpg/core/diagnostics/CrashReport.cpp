@@ -914,6 +914,66 @@ namespace gpg::diag
       (void)::EndDialog(dialog, 0);
     }
 
+    // ---------------------------------------------------------------------
+    // Auto-dismissing notices.
+    //
+    // Same reasoning as the dialog: a modal box nobody dismisses hangs an
+    // automated run just as badly, and these two are the fallbacks for when the
+    // report itself cannot be shown, so an agent would be wedged by the very
+    // case where diagnostics are already broken.
+    //
+    // Not MessageBoxTimeout - that is an undocumented user32 export whose
+    // availability cannot be relied on. A one-shot timerqueue timer posts
+    // WM_CLOSE to the box instead, using only documented APIs.
+    // ---------------------------------------------------------------------
+    DWORD sAutoDismissThreadId = 0;
+    HANDLE sAutoDismissTimer = nullptr;
+
+    BOOL CALLBACK FindCrashMessageBox(HWND const window, const LPARAM)
+    {
+      wchar_t className[32] = {};
+      if (::GetClassNameW(window, className, 32) <= 0) {
+        return TRUE; // keep looking
+      }
+      if (::wcscmp(className, L"#32770") == 0) {
+        (void)::PostMessageW(window, WM_CLOSE, 0, 0);
+        return FALSE;
+      }
+      return TRUE;
+    }
+
+    void CALLBACK AutoDismissMessageBoxCallback(void*, BOOLEAN)
+    {
+      if (sAutoDismissThreadId != 0u) {
+        (void)::EnumThreadWindows(sAutoDismissThreadId, &FindCrashMessageBox, 0);
+      }
+    }
+
+    void ShowAutoDismissingMessageBox(const wchar_t* const text, const UINT flags)
+    {
+      const int seconds = CrashDialogCountdownSeconds();
+      if (seconds > 0) {
+        sAutoDismissThreadId = ::GetCurrentThreadId();
+        // DueTime is milliseconds and Period 0 makes it one-shot.
+        if (::CreateTimerQueueTimer(
+              &sAutoDismissTimer, nullptr, &AutoDismissMessageBoxCallback, nullptr,
+              static_cast<DWORD>(seconds) * 1000u, 0, 0
+            ) != FALSE) {
+          // Timer is armed; fall through to the blocking call it will close.
+        } else {
+          sAutoDismissTimer = nullptr;
+        }
+      }
+
+      (void)::MessageBoxW(nullptr, text, L"FAF crash", flags);
+
+      if (sAutoDismissTimer != nullptr) {
+        (void)::DeleteTimerQueueTimer(nullptr, sAutoDismissTimer, nullptr);
+        sAutoDismissTimer = nullptr;
+      }
+      sAutoDismissThreadId = 0u;
+    }
+
     void CreateCrashDialogChildren(HWND dialog)
     {
       HFONT font = static_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
@@ -1109,7 +1169,7 @@ namespace gpg::diag
     // Read the report text (bounded) into a wide buffer for the edit control.
     std::FILE* const source = std::fopen(path, "rb");
     if (source == nullptr) {
-      ::MessageBoxW(nullptr, L"FAF crashed. The report file could not be read.", L"FAF crash", MB_ICONERROR | MB_OK);
+      ShowAutoDismissingMessageBox(L"FAF crashed. The report file could not be read.", MB_ICONERROR | MB_OK);
       return;
     }
     (void)std::fseek(source, 0, SEEK_END);
@@ -1142,10 +1202,9 @@ namespace gpg::diag
     (void)std::fclose(source);
 
     if (wide == nullptr) {
-      ::MessageBoxW(
-        nullptr,
+      ShowAutoDismissingMessageBox(
         L"FAF crashed. The report file is too large or unreadable; find faf_crash_latest.txt beside the game exe.",
-        L"FAF crash", MB_ICONERROR | MB_OK
+        MB_ICONERROR | MB_OK
       );
       return;
     }
