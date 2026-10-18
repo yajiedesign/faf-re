@@ -2960,7 +2960,7 @@ namespace
       return false;
     }
 
-    Entity* const targetEntity = FindEntityById(sim->mEntityDB, static_cast<EntId>(commandIssueData.mTarget.mEntityId));
+    Entity* targetEntity = FindEntityById(sim->mEntityDB, static_cast<EntId>(commandIssueData.mTarget.mEntityId));
     CUnitCommandQueue* const queue = unit->CommandQueue;
 
     if (unit->IsDead()) {
@@ -2972,8 +2972,17 @@ namespace
     // pointer at 0x0129315C) before falling back to the original reject at
     // 0x006EFACE. CQUEMOV units (e.g. mass extractors) accept orders - such as
     // a queued upgrade - while still being built.
-    if (unit->IsBeingBuilt() && !unit->IsInCategory("FACTORY") && !unit->IsInCategory("CQUEMOV")) {
-      return false;
+    if (unit->IsBeingBuilt() && !unit->IsInCategory("FACTORY")) {
+      if (!unit->IsInCategory("CQUEMOV")) {
+        return false;
+      }
+
+      // 0x0128D998 stores the failed FACTORY test's result (0) to `[esp+20h]`
+      // while the CQUEMOV string pointer is pushed, which lands on the frame
+      // slot holding the target entity. From here on the order is checked
+      // against its issued position only, and an entity order whose position
+      // lies off the map is dropped.
+      targetEntity = nullptr;
     }
 
     if (queue != nullptr && IsDuplicateSuppressionCommand(commandIssueData.mCommandType)) {
@@ -15131,7 +15140,7 @@ int moho::cfunc_SetAutoMode(lua_State* const luaContext)
  * What it does:
  * Publishes the global user-Lua binder for `SetAutoMode`.
  */
-moho::CScrLuaInitForm* moho::func_UnitSetAutoMode_LuaFuncDef()
+moho::CScrLuaInitForm* moho::func_SetAutoMode_LuaFuncDef()
 {
   static CScrLuaBinder binder(
     UserLuaInitSet(),
@@ -27028,6 +27037,7 @@ namespace
       (void)::moho::func_RegisterBeamBlueprint_LuaFuncDef();
       (void)::moho::func_ExecLuaInSim_LuaFuncDef();
       (void)::moho::func_SimCallback_LuaFuncDef();
+      (void)::moho::func_SetAutoMode_LuaFuncDef();
       (void)::moho::func_SetAutoSurfaceMode_LuaFuncDef();
       (void)::moho::func_ToggleScriptBit_LuaFuncDef();
       (void)::moho::func_SetPaused_LuaFuncDef();

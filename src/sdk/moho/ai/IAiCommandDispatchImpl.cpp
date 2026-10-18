@@ -323,7 +323,10 @@ namespace
         const SFootprint& footprint = unit->GetFootprint();
         const SOCellPos cell = footprint.ToCellPos(unit->GetPosition());
         SNavGoal goal(cell);
-        goal.aux0 = 4 * (layer == LAYER_Sub) + 4;
+        // 0x0060975C stores `(layer == Sub) * 4 + 4` at goal+0x20 (`[esp+74h]`
+        // with the goal at `[esp+54h]`), the layer slot SetNewTargetLayer
+        // reads: a submerged unit surfaces, anything else dives.
+        goal.mLayer = (layer == LAYER_Sub) ? LAYER_Water : LAYER_Sub;
         dispatch->SetNewTargetLayer(goal);
         return;
       }
@@ -998,11 +1001,12 @@ int IAiCommandDispatchImpl::Execute()
       return static_cast<ETaskStatus>(1);
     }
 
-    // 0x00598EC3..0x00598ED9: Attack (0xA), Patrol (0x10) and FormPatrol
-    // (0x12) rotate to the back; everything else is dropped.
+    // 0x00598EC3..0x00598ED9: Patrol (0x10) and FormPatrol (0x12) rotate to
+    // the back (0x006EDFC0); Attack (0xA) takes `je 0x598F67` to the remove
+    // call (0x006EDE70) with everything else, so a failed attack - such as a
+    // point defense whose target left its range - drops the order.
     const EUnitCommandType commandType = currentCommand->mVarDat.mCmdType;
-    if (commandType == EUnitCommandType::UNITCOMMAND_Attack || commandType == EUnitCommandType::UNITCOMMAND_Patrol ||
-        commandType == EUnitCommandType::UNITCOMMAND_FormPatrol) {
+    if (commandType == EUnitCommandType::UNITCOMMAND_Patrol || commandType == EUnitCommandType::UNITCOMMAND_FormPatrol) {
       commandQueue->MoveFirstCommandToBackOfQueue();
     } else {
       commandQueue->RemoveFirstCommandFromQueue();
