@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"faf-main/tools/gpgnet"
@@ -122,6 +123,22 @@ func Run(ctx context.Context, sc *Scenario, opts Options) (Result, error) {
 		}
 	}()
 
+	// A sim desync makes the game raise a modal dialog (uimain.lua:ShowDesyncDialog)
+	// and wait for a human click, so the process hangs until the scenario times
+	// out. Nothing we can send over GPGNet makes it quit on its own (the engine
+	// has no GameState receive path for EndGame), and WM_CLOSE only opens the
+	// Escape dialog. So we watch the journal for the Desync report, give the
+	// client a short grace period to finish flushing its synclog, and then kill
+	// every process. Killing goes through Launcher.Kill (TerminateProcess) and
+	// records killedByMpemu, which the NoCrash check skips, so a killed game is
+	// not reported as a crash. The kills cannot end the run by themselves - see
+	// killOnDesync on why - so it also cancels stepCtx, and the step loop
+	// unwinds into gamesGone() and writes the usual verdict.
+	watchStop := make(chan struct{})
+	stopWatch := sync.OnceFunc(func() { close(watchStop) })
+	defer stopWatch()
+	go r.killOnDesync(stepCtx, watchStop, stopSteps)
+
 	var failures []string
 	// gamesGone ends the run from step i on. It is only a failure when a step
 	// still to come needed a running game; otherwise the session is over.
@@ -159,6 +176,10 @@ func Run(ctx context.Context, sc *Scenario, opts Options) (Result, error) {
 		break
 	}
 
+	// The launcher is about to be closed; the watcher must not touch it after
+	// this point, so stop it before the check that reads the journal.
+	stopWatch()
+
 	failures = append(failures, r.check(sc.Expect)...)
 	final := r.l.Snapshot()
 	r.l.Close()
@@ -175,6 +196,62 @@ func Run(ctx context.Context, sc *Scenario, opts Options) (Result, error) {
 	}
 	fmt.Fprintf(r.out, "== journal: %s\n", filepath.Join(opts.RunDir, "journal.jsonl"))
 	return res, nil
+}
+
+// desyncGrace is how long a game keeps running after it reported a sim desync,
+// so its synclog is fully written before the process is killed.
+const desyncGrace = 10 * time.Second
+
+// killOnDesync watches the journal for a Desync report and, the first time one
+// shows up, notes it, waits desyncGrace for the client to flush its synclog,
+// then terminates every game and adapter. It returns when ctx ends or stop is
+// closed, so the caller can join it simply by closing stop; it never blocks the
+// step loop, which is the thread that ends the run.
+//
+// The kills alone do not end the run: Seat.Kill records the exit as
+// "intentional" (the `kill` step kills players a scenario may then start
+// again), and the launcher's all-gone test rejects an intentional exit, so
+// GamesGone never fires and a pending wait would sit out the scenario timeout.
+// So the kills are followed by ending the steps ourselves, which is exactly
+// what GamesGone would have done had the exit been recorded as a crash.
+func (r *runner) killOnDesync(ctx context.Context, stop <-chan struct{}, endSteps context.CancelCauseFunc) {
+	seen := false
+	for {
+		if !seen {
+			if d := r.j.Query(Match{Cmd: "Desync"}.matches); len(d) > 0 {
+				seen = true // only ever react once, even if the client desyncs repeatedly
+				first := d[0]
+				r.j.Note(journal.Note, first.UID,
+					fmt.Sprintf("sim desync reported by player %d; killing every game in %s so the run can finish (grace period lets the synclog be written)",
+						first.UID, desyncGrace),
+					map[string]any{"desyncReports": len(d), "firstUID": first.UID, "args": first.Args})
+			}
+		}
+		if seen {
+			select {
+			case <-time.After(desyncGrace):
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			}
+			for _, uid := range r.l.Players() {
+				if err := r.l.Kill(uid); err != nil {
+					r.j.Note(journal.Note, uid, fmt.Sprintf("kill after desync failed: %v", err), nil)
+				}
+			}
+			r.j.Note(journal.Note, 0, "every game instance terminated after the sim desync", nil)
+			endSteps(errGamesGone)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 func verdictText(pass bool) string {
