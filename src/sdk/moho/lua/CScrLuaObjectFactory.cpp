@@ -1032,11 +1032,11 @@ namespace moho
     // stock-layout walker over our lua_State and, because that one protects
     // with setjmp, let the C++ error unwind straight past here.
     if (LuaCallProtected(rawState, 0, 0) != 0) {
-      LuaPlus::LuaStackObject errorStackObject{};
-      errorStackObject.m_state = state;
-      errorStackObject.m_stackIndex = -1;
-      const char* const errorText = errorStackObject.GetString();
-      gpg::Warnf("Running \"%s\" failed: %s", filename, errorText);
+      // Non-throwing read: a failed luaD_call can leave a non-string on the slot
+      // (the overflow guard throws lua_ErrorError without pushing a message), and
+      // GetString would raise from inside this error path, which has no handler.
+      const char* const errorText = lua_tostring(rawState, -1);
+      gpg::Warnf("Running \"%s\" failed: %s", filename, errorText != nullptr ? errorText : "<non-string>");
       lua_settop(rawState, savedTop);
       return false;
     }

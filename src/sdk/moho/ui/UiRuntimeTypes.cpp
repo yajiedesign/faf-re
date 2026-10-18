@@ -3914,13 +3914,13 @@ moho::CScriptLazyVar_float::CScriptLazyVar_float(
   lua_pushnumber(rawState, 0.0f);
 
   if (LuaCallProtected(rawState, 1, 1) != 0) {
-    LuaPlus::LuaStackObject errorStack(state, -1);
-    const char* errorText = errorStack.GetString();
-    if (errorText == nullptr) {
-      errorStack.TypeError("string");
-      errorText = "<non-string>";
-    }
-    gpg::Warnf("Error in lazyvar.Create(): %s", errorText);
+    // Non-throwing read. luaD_call's overflow guard raises lua_ErrorError
+    // without pushing a message, so the slot really can hold a non-string, and
+    // GetString would raise a type error from inside this error path. The
+    // "<non-string>" fallback below used to sit behind that TypeError call,
+    // which made it unreachable.
+    const char* const errorText = lua_tostring(rawState, -1);
+    gpg::Warnf("Error in lazyvar.Create(): %s", errorText != nullptr ? errorText : "<non-string>");
   } else {
     LuaPlus::LuaObject created(state, -1);
     lazyVarObject = created;
@@ -4024,13 +4024,9 @@ void moho::CScriptLazyVar_float::SetValue(
   lua_pushnumber(rawState, next);
 
   if (LuaCallProtected(rawState, 2, 0) != 0) {
-    LuaPlus::LuaStackObject errorStack(activeState, -1);
-    const char* errorText = errorStack.GetString();
-    if (errorText == nullptr) {
-      errorStack.TypeError("string");
-      errorText = "<non-string>";
-    }
-    gpg::Warnf("Setting LazyVar value failed: %s", errorText);
+    // Non-throwing read; see the lazyvar.Create error branch above.
+    const char* const errorText = lua_tostring(rawState, -1);
+    gpg::Warnf("Setting LazyVar value failed: %s", errorText != nullptr ? errorText : "<non-string>");
   }
 
   lua_settop(rawState, savedTop);

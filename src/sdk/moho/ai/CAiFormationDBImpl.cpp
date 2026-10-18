@@ -510,8 +510,13 @@ moho::SFormationScriptResult moho::FORMATION_RunScript(
   scriptFunc.PushStack(state);
   unitTable.PushStack(state);
   if (LuaCallProtected(rawState, 1, 1) != 0) {
-    const LuaPlus::LuaStackObject errorSlot(state, -1);
-    gpg::Warnf("Formation script %s threw an error:\n%s", scriptName, errorSlot.GetString());
+    // Non-throwing read: a failed luaD_call can leave a non-string on the slot
+    // (the overflow guard throws lua_ErrorError without pushing a message), and
+    // GetString would raise from inside this error path.
+    const char* const errorText = lua_tostring(rawState, -1);
+    gpg::Warnf(
+      "Formation script %s threw an error:\n%s", scriptName, errorText != nullptr ? errorText : "<non-string>"
+    );
     lua_settop(rawState, savedTop);
     return result;
   }

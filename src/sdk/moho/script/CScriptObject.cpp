@@ -745,8 +745,9 @@ void CScriptObject::CreateLuaObject(
 
     const int nargs = lua_gettop(lstate) - funcTop;
     if (LuaCallProtected(lstate, nargs, 1) != 0) {
-      const LuaPlus::LuaStackObject err(state, -1);
-      gpg::Warnf("Error in lua: %s", err.GetString());
+      // Non-throwing read; see RunScriptMultiRet's error branch.
+      const char* const errorText = lua_tostring(lstate, -1);
+      gpg::Warnf("Error in lua: %s", errorText != nullptr ? errorText : "<non-string>");
       lua_settop(lstate, stackTop);
       return;
     }
@@ -932,8 +933,8 @@ bool CScriptObject::RunScriptMultiRet(
 
   const int nargs = lua_gettop(lstate) - funcTop;
   if (LuaCallProtected(lstate, nargs, LUA_MULTRET) != 0) {
-    const LuaPlus::LuaStackObject err(state, -1);
-    LogScriptWarning(this, funcName ? funcName : "<unknown>", err.GetString());
+    const char* const errorText = lua_tostring(lstate, -1);
+    LogScriptWarning(this, funcName ? funcName : "<unknown>", errorText != nullptr ? errorText : "<non-string>");
     out.Clear();
     lua_settop(lstate, stackTop);
     return false;
