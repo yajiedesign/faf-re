@@ -23,6 +23,7 @@ dependencies/zlib-1.2.3/**/*
 dependencies/LuaPlus_Build1081/**/*
 dependencies/boost_1_34_1/**/*
 dependencies/wxWindows-2.4.2/**/*
+dependencies/WildMagic3p8/
 dependencies/WildMagic3p8/**/*
 dependencies/*.7z
 *.pdb
