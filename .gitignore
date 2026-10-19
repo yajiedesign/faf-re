@@ -12,6 +12,11 @@ scripts/**/*.txt
 .tmp*/
 .tmp*
 tmp/
+# Ghidra projects for wmdiff retail-address hunting. Cannot live under .tmp/:
+# Ghidra rejects any path element that starts with '.'
+# ("Path element starting with '.' is not permitted"), so this has to be a
+# non-dot directory that is ignored by name instead.
+ghwork/
 bin/
 # Local-only recovery workspace, including decomp/recovery/reports/; never force-add.
 decomp/
