@@ -73,3 +73,7 @@ RECOVERY_STATUS.md
 
 # Local FFmpeg headers, import libraries and DLLs; see docs/FAF_SFD_COMPATIBILITY.md.
 dependencies/ffmpeg/
+
+# The x87 hardware reference (x87ref32.exe) is built on demand by
+# tools/x87sim/hwprobe/build.py; only the sources belong in the repo.
+tools/x87sim/hwprobe/build/
