@@ -17,6 +17,12 @@
  *   x87ref32 op   <op-hex> <reg> <rm> --st <6x float32 hex> [--mem <hex blob>]
  *   x87ref32 blob <hex bytes>                 --st <6x float32 hex> [--mem <hex blob>]
  *
+ * [--cw <hex>] is the control word in force during the run; it is
+ * loaded with fldcw after fninit and before the values are loaded.
+ * The default is 0x127F (53-bit precision, round to nearest, affine
+ * infinity); 0x007F is the 24-bit precision (_PC_24) the engine runs
+ * under.
+ *
  * <op-hex> is the escape byte (d8, d9, db, dc, dd, de, df) in hex;
  * <reg> and <rm> are decimal and select the ModRM fields of the
  * register form.  --st is six float32 bit patterns (8 hex digits
@@ -75,10 +81,13 @@ int main(int argc, char **argv)
     unsigned char *code, *pat, *out, *membuf, *swbuf, *cwbuf;
     unsigned int cw_addr;
     int have_st = 0;
+    /* the control word in force during the run; 0x127F is the
+     * 53-bit default, 0x007F the 24-bit (_PC_24) one. */
+    unsigned short cw = 0x127F;
 
     if (argc < 2) {
-        printf("usage: x87ref32 op <op> <reg> <rm> --st <hex> [--mem <hex>]\n");
-        printf("       x87ref32 blob <hex bytes> --st <hex> [--mem <hex>]\n");
+        printf("usage: x87ref32 op <op> <reg> <rm> --st <hex> [--mem <hex>] [--cw <hex>]\n");
+        printf("       x87ref32 blob <hex bytes> --st <hex> [--mem <hex>] [--cw <hex>]\n");
         return 2;
     }
     if (strcmp(argv[1], "op") == 0) {
@@ -108,6 +117,9 @@ int main(int argc, char **argv)
                 st_bits[i] = (unsigned int)strtoul(tmp, 0, 16);
             }
             have_st = 1;
+        } else if (strcmp(argv[argi], "--cw") == 0 && argi + 1 < argc) {
+            const char *hex = argv[++argi];
+            cw = (unsigned short)strtoul(hex, 0, 16);
         } else if (strcmp(argv[argi], "--mem") == 0 && argi + 1 < argc) {
             const char *hex = argv[++argi];
             size_t n = strlen(hex), k;
@@ -143,10 +155,11 @@ int main(int argc, char **argv)
     }
     if (mem_len) memcpy(membuf, mem, mem_len);
 
-    /* control word: precision control 53 bits (10), round to nearest
-     * (00), affine infinity (1) - i.e. 0x127F, the IEEE-like
-     * behaviour the simulator models. */
-    { unsigned short cw = 0x127F; memcpy(cwbuf, &cw, 2); }
+    /* the control word in force during the run: the default 0x127F is
+     * precision control 53 bits (10), round to nearest (00), affine
+     * infinity (1) - the IEEE-like behaviour the simulator models;
+     * 0x007F is the 24-bit (_PC_24) precision the engine runs under. */
+    { memcpy(cwbuf, &cw, 2); }
 
     /* build the code */
     cur = code;

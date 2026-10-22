@@ -9,6 +9,31 @@ The inputs are generated here - there is no corpus and no retail
 binary involved.  The hardware reference is built on demand by
 hwprobe/build.py; if that build fails the tests fail, they are never
 skipped.
+
+Two precision models are covered:
+
+  * `53' - 53-bit registers, the reference runs with the control word
+    0x127F.  This is the default and runs in this process.
+  * `24' - every operation is rounded to a 24-bit significand, the
+    reference runs with the control word 0x007F (_PC_24, the word the
+    engine runs under).  The simulator reads SIMPREC from the
+    environment *at import time*, so this model runs in a child process
+    with SIMPREC=24 set before the package is imported; the parent
+    drives that child and fails if it fails, so a disagreement in the
+    24-bit model is just as loud as one in the 53-bit model.
+
+Every encoding is checked with two sets of inputs:
+
+  * `base' - the ordinary values: exact float32 numbers of a moderate
+    size, so every operation is exact or one rounding away.
+  * `range' - the ends of the range: a signed zero, a very small and a
+    very large value.  The x87's register is the 80-bit extended
+    format, so its exponent range does not depend on the precision
+    control; the 24-bit model has to keep a value like 1e-30 and
+    1e30, and a quotient's sign has to survive.
+
+The model is selected by the environment variable X87SIM_PREC ('53' or
+'24'); the tests are otherwise identical for both.
 """
 
 import importlib.util
@@ -21,9 +46,22 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)                     # .../tools/x87sim
 
-# The precision the reference runs at (53-bit registers, float32
-# spills).  It has to be set before the package is imported.
-os.environ['SIMPREC'] = '53'
+# Which precision model this process tests.  The parent runs the 53-bit
+# model and drives the 24-bit model in a child process; the child is
+# told so by X87SIM_CHILD.
+PREC = os.environ.get('X87SIM_PREC', '53')
+if PREC not in ('24', '53'):
+    raise SystemExit('X87SIM_PREC must be 24 or 53, not %r' % PREC)
+IS_CHILD = os.environ.get('X87SIM_CHILD') == '1'
+
+# The precision the simulator models, and the control word the hardware
+# reference runs at.  0x127F is 53-bit precision / round to nearest /
+# affine infinity; 0x007F is 24-bit precision (_PC_24) / round to
+# nearest.
+CONTROL_WORD = {'53': '127F', '24': '007F'}
+
+# It has to be set before the package is imported.
+os.environ['SIMPREC'] = PREC
 sys.path.insert(0, ROOT)
 
 from x87sim import Machine, Stop, implemented            # noqa: E402
@@ -40,14 +78,26 @@ def _load_build_module():
 
 BUILD = _load_build_module()
 
-# Six known, distinct values, loaded in order, so the last one is in
-# ST0.  All of them are exact float32 values.
-VALUES = [1.5, -2.25, 3.125, 0.5, 100.0, -7.75]
-ST_HEX = ''.join('%08X' % struct.unpack('<I', struct.pack('<f', v))[0] for v in VALUES)
-
-# The two float32 values the memory forms read.
+# The memory the memory forms read: two float32 values, which the
+# 64-bit forms read as one double (a value with 53 significant bits,
+# so the load is not a 24-bit value).
 MEM_VALUES = [2.5, -1.75]
 MEM_BLOB = b''.join(struct.pack('<f', v) for v in MEM_VALUES)
+
+
+def _st_hex(values):
+    """The six float32 patterns the reference loads, in order."""
+    return ''.join('%08X' % struct.unpack('<I', struct.pack('<f', v))[0]
+                   for v in values)
+
+
+# The sets of inputs every encoding is checked with.  Every value is
+# exactly a float32, because that is what the reference loads (`fld
+# dword'); the simulator sees the same value.
+CORPORA = [
+    ('base', [1.5, -2.25, 3.125, 0.5, 100.0, -7.75]),
+    ('range', [0.0, -0.0, 2.0 ** -100, 2.0 ** 100, 3.0, 7.0]),
+]
 
 # The indefinite value the hardware leaves in a register that was never
 # written; it is not a value the simulator models, so those registers
@@ -73,10 +123,15 @@ class Reference(object):
         self.mem = fields['MEM']
 
 
-def run_reference(encoding, mem_blob=b''):
-    """Execute `encoding' on the real CPU and return what it left."""
+def run_reference(encoding, values, mem_blob=b''):
+    """Execute `encoding' on the real CPU and return what it left.
+
+    The reference runs with the control word of this process's
+    precision model.
+    """
     exe = BUILD.build()
-    args = [exe, 'blob', encoding.hex(), '--st', ST_HEX]
+    args = [exe, 'blob', encoding.hex(), '--st', _st_hex(values),
+            '--cw', CONTROL_WORD[PREC]]
     if mem_blob:
         args += ['--mem', mem_blob.hex()]
     proc = subprocess.run(args, capture_output=True, text=True)
@@ -102,10 +157,10 @@ def run_reference(encoding, mem_blob=b''):
     return Reference(fields)
 
 
-def run_simulator(encoding, membase, mem_blob=b''):
+def run_simulator(encoding, values, membase, mem_blob=b''):
     """Execute `encoding' in the simulator and return the machine."""
     m = Machine()
-    for v in VALUES:
+    for v in values:
         m.st.push(v)
     m.regs['ebx'] = membase
     if mem_blob:
@@ -146,21 +201,28 @@ def reads_empty_register(encoding, depth):
     return False
 
 
-def compare(testcase, encoding, mem_blob=b''):
+def compare(testcase, encoding, corpus, values, mem_blob=b''):
     """Run both sides and compare the register files."""
-    ref = run_reference(encoding, mem_blob)
-    sim = run_simulator(encoding, ref.membase, mem_blob)
+    ref = run_reference(encoding, values, mem_blob)
+    sim = run_simulator(encoding, values, ref.membase, mem_blob)
+    where = 'corpus %s: ' % corpus
+
+    # the control word the hardware really ran at
+    testcase.assertEqual(ref.cw, int(CONTROL_WORD[PREC], 16),
+                         where + 'control word: hardware %04X, expected %s'
+                         % (ref.cw, CONTROL_WORD[PREC]))
 
     # The stack rotation: TOP says where the top of the stack is, so
     # comparing it checks the pop and push behaviour of the encoding.
     testcase.assertEqual(sim.st.top, ref.top,
-                         'stack top: sim %d, hardware %d' % (sim.st.top, ref.top))
+                         where + 'stack top: sim %d, hardware %d'
+                         % (sim.st.top, ref.top))
 
     # the condition codes
     cc_mask = 0x0100 | 0x0400 | 0x4000
     if not reads_empty_register(encoding, sim.depth_before):
         testcase.assertEqual(sim.status_word() & cc_mask, ref.sw & cc_mask,
-                             'condition codes: sim %04X, hardware %04X'
+                             where + 'condition codes: sim %04X, hardware %04X'
                              % (sim.status_word(), ref.sw))
 
     # the register file
@@ -172,7 +234,8 @@ def compare(testcase, encoding, mem_blob=b''):
             continue
         sv = _double_bits(sim.st.s(i))
         if hw != sv:
-            testcase.fail('ST(%d): sim %016X, hardware %016X' % (i, sv, hw))
+            testcase.fail(where + 'ST(%d): sim %016X, hardware %016X'
+                          % (i, sv, hw))
 
     # the memory the instruction may have written
     if mem_blob:
@@ -180,8 +243,14 @@ def compare(testcase, encoding, mem_blob=b''):
         for k in range(len(mem_blob)):
             got = sim.mem.read_bytes(ref.membase + k, 1)
             if got != want[k:k + 1]:
-                testcase.fail('memory +%d: sim %02X, hardware %02X'
+                testcase.fail(where + 'memory +%d: sim %02X, hardware %02X'
                               % (k, got[0], want[k]))
+
+
+def compare_all(testcase, encoding, mem_blob=b''):
+    """Compare the encoding with every set of inputs."""
+    for corpus, values in CORPORA:
+        compare(testcase, encoding, corpus, values, mem_blob)
 
 
 def setUpModule():
@@ -196,14 +265,14 @@ class InstructionTest(unittest.TestCase):
 def _register_form_test(spec):
     def test(self):
         encoding = encode_reg(spec['opcode'], spec['reg'], spec['rm'])
-        compare(self, encoding)
+        compare_all(self, encoding)
     return test
 
 
 def _memory_form_test(spec):
     def test(self):
         encoding = encode_mem(spec['opcode'], spec['reg'], 'ebx', 0)
-        compare(self, encoding, MEM_BLOB)
+        compare_all(self, encoding, MEM_BLOB)
     return test
 
 
@@ -242,6 +311,51 @@ class CoverageTest(unittest.TestCase):
         m.image.add(CODE_BASE, bytes((0xD9, 0xE2)))
         with self.assertRaises(Stop):
             m.run(CODE_BASE)
+
+    def test_the_precision_model_is_the_one_asked_for(self):
+        # the simulator reads SIMPREC at import time; this process must
+        # model the precision it claims to
+        from x87sim import arithmetic
+        self.assertEqual(arithmetic.PREC, int(PREC))
+        self.assertEqual(os.environ['SIMPREC'], PREC)
+
+    def test_the_inputs_are_float32_values(self):
+        # the reference loads float32 patterns; the simulator has to see
+        # the same values, or the two sides compute different things
+        for corpus, values in CORPORA:
+            for v in values:
+                self.assertEqual(v, struct.unpack('<f', struct.pack('<f', v))[0],
+                                 'corpus %s: %r is not a float32' % (corpus, v))
+
+
+class OtherPrecisionModelTest(unittest.TestCase):
+    """The other precision model, run in a child process.
+
+    The simulator reads SIMPREC when the package is imported, so the
+    24-bit model cannot be switched on inside a running process
+    without patching the package's internals.  Instead the whole test
+    module is run again in a child process with SIMPREC=24 and the
+    hardware reference at the control word 0x007F; the child runs the
+    same per-encoding tests, so a disagreement there fails this test
+    and is reported in full.
+    """
+
+    def test_24_bit_model_matches_the_hardware(self):
+        if IS_CHILD:
+            self.skipTest('this process is the 24-bit child')
+        env = dict(os.environ)
+        env['X87SIM_PREC'] = '24'
+        env['X87SIM_CHILD'] = '1'
+        env['SIMPREC'] = '24'
+        proc = subprocess.run(
+            [sys.executable, '-m', 'unittest', '-v', 'test_instructions'],
+            cwd=HERE, env=env, capture_output=True, text=True)
+        if proc.returncode != 0:
+            self.fail('the 24-bit model does not match the hardware at '
+                      'control word 0x007F (child exit code %d)\n%s%s'
+                      % (proc.returncode, proc.stdout, proc.stderr))
+        # the child must really have compared the encodings
+        self.assertIn('Ran %d tests' % (TEST_COUNT + 5), proc.stderr)
 
 
 if __name__ == '__main__':
