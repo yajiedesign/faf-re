@@ -96,12 +96,28 @@ the way the hardware has it.
 
 `SIMPREC` selects the precision the control word has:
 
-* `SIMPREC=53` (what the retail's chain needs): the registers keep
-  53-bit significands, and only the spills to memory are rounded to
-  float32.
+* `SIMPREC=53`: the registers keep 53-bit significands, and only the
+  spills to memory are rounded to float32.
 * `SIMPREC=24`: every operation is rounded to a 24-bit significand
-  (float32), which is what the x87 does under the `_PC_24` control
-  word.
+  (float32).
+
+**Which one to use depends on the control word the code runs under.** The
+engine runs under `_PC_24` (`fninit; fldcw 0x007F`), so a chain executed
+there rounds *every* operation to float32 - that is `SIMPREC=24`. A 53-bit
+chain is what the hardware does with the ambient word (`0x027F`).
+
+Beware of the trap that cost this project a round of source changes: the
+engine's own `double` chains make MSVC emit an `fldcw`, which resets the
+control word. A probe that runs the rebuild between setting the control word
+and calling the retail therefore measures the retail at `0x027F` while the
+rows compare it at `0x007F`, and concludes the retail uses 53-bit
+intermediates. See "The swept rows, closed" in
+`dependencies/WildMagic3p8/wmdiff/README.md`, which retracts that
+conclusion.
+
+Note that the instruction-level tests exercise the `53` model; the `24`
+model is the one the engine's rows depend on, so a change to the rounding
+path needs a test of its own before it can be trusted.
 
 A division is rounded **once**, from the exact rational, never through
 a double: rounding to double and then to float32 is two roundings and
