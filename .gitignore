@@ -1,8 +1,8 @@
 __pycache__/
 
-.vscode/*
-!.vscode/settings.json
-!.vscode/c_cpp_properties.json
+# Editor and host configuration are machine-local, not part of the repository.
+.vscode/
+opencode.json
 
 # Temporary files of scripts
 scripts/**/*.txt
