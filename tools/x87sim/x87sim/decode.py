@@ -173,6 +173,11 @@ _MEM_TABLE = {
         # hardware (measured), not a 32-bit float.
         0: (X87Op('fadd', 'st0', 'mem', 'add', 0, False), 64),
         1: (X87Op('fmul', 'st0', 'mem', 'mul', 0, False), 64),
+        # DC /2 and DC /3 are FCOM and FCOMP on a 64-bit double - the
+        # forms the retail's double code uses for its comparisons (the
+        # retail's DistSegment3Segment3<double>::GetSquared has several).
+        2: (X87Op('fcom', 'st0', 'mem', 'cmp', 0, False), 64),
+        3: (X87Op('fcomp', 'st0', 'mem', 'cmp', 1, False), 64),
         4: (X87Op('fsub', 'st0', 'mem', 'sub', 0, False), 64),
         5: (X87Op('fsubr', 'st0', 'mem', 'rsub', 0, False), 64),
         6: (X87Op('fdiv', 'st0', 'mem', 'div', 0, False), 64),
