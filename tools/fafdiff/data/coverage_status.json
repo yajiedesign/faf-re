@@ -2,8 +2,8 @@
  "schema": "fafdiff-coverage/1",
  "functions": {
   "0x0044F7E0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0046FB20": {
    "status": "未匹配",
@@ -14,12 +14,12 @@
    "why": ""
   },
   "0x004E9DF0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004EB3F0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004EB740": {
    "status": "未匹配",
@@ -30,32 +30,32 @@
    "why": ""
   },
   "0x004EBA80": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004EBC00": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004ECED0": {
    "status": "未匹配",
    "why": ""
   },
   "0x004EDAA0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004EDED0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004F0AE0": {
    "status": "未匹配",
    "why": ""
   },
   "0x004F0CB0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x004FE130": {
    "status": "未匹配",
@@ -78,8 +78,8 @@
    "why": ""
   },
   "0x005382E0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x005657B0": {
    "status": "未匹配",
@@ -90,52 +90,52 @@
    "why": ""
   },
   "0x00565A10": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x00570750": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x005734D0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x005734E0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x005B1C90": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0062FB50": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0066D1D0": {
    "status": "未匹配",
    "why": ""
   },
   "0x00697360": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0069A1D0": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0069A360": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x0069AA50": {
    "status": "未匹配",
    "why": ""
   },
   "0x006C1070": {
-   "status": "不适用",
-   "why": "difffuzz already covers it; fafdiff adds no dimension"
+   "status": "未匹配",
+   "why": ""
   },
   "0x006D1E30": {
    "status": "未匹配",
@@ -145,639 +145,11 @@
    "status": "未匹配",
    "why": ""
   },
-  "0x00BCAED0": {
+  "0x00A8DA05": {
    "status": "未匹配",
    "why": ""
   },
-  "0x00BCAF30": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCAF90": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCAFF0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCB540": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCB5A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCB600": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCB660": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCBBD0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCBC30": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCBC90": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCBCF0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCBFB0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC010": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC070": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC0D0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC460": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC4C0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC520": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCC580": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCA70": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCAD0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCB30": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCB90": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCE40": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCEA0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCF00": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCCF60": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD0F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD150": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD1B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD210": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD420": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD480": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD4E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD540": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCD9F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCDA50": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCDAB0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCDB10": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE220": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE280": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE2E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE340": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE550": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE5B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE610": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCE670": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF0D0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF130": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF190": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF1F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF320": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF380": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF3E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF440": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF590": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF5F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF650": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCF6B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFAC0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFB20": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFB80": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFBE0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFE30": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFE90": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFEF0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BCFF50": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0080": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD00E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0140": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD01A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0390": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD03F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0450": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD04B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0760": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD07C0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0820": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0880": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0A10": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0A70": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0AD0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0B30": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0C60": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0CC0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0D20": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0D80": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0EB0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0F10": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0F70": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD0FD0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1160": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD11C0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1220": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1280": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD13F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1450": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD14B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1510": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1640": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD16A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1700": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1760": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1AB0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1B10": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1B70": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1BD0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1DE0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1E40": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1EA0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD1F00": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD2840": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD28A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD2900": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD2960": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD32E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD3340": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD33A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD3400": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD4A20": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD4A80": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD4AE0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6170": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD61D0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6230": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6290": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6870": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD68D0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6930": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6990": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6DE0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6E40": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6EA0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD6F00": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7330": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7390": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD73F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7450": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD75A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7600": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7660": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD76C0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7790": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD77F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD7850": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD78B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD8590": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD85F0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD8650": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD86B0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD90E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD9140": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD91A0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD9200": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD9680": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD96E0": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD9740": {
-   "status": "未匹配",
-   "why": ""
-  },
-  "0x00BD97A0": {
+  "0x00A8DE20": {
    "status": "未匹配",
    "why": ""
   }

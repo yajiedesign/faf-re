@@ -4,7 +4,7 @@ fafdiff :: screen_math.py
 
 First-pass screening filter for the retail floating-point surface.
 
-Reads the Doxygen `Address: 0xXXXXXXXX` annotations under `src/sdk`, slices
+Reads the Doxygen `Address: 0xXXXXXXXX` annotations under `src`, slices
 each annotated function's body out of the retail PE image, disassembles it with
 capstone (x86 / 32-bit) and ranks it by how much floating-point math it does
 -- with special attention to whether the retail body still uses x87.
@@ -15,10 +15,10 @@ the outputs are a candidate list for a human to triage.
 Usage:
 
     .tmp/venv/Scripts/python.exe tools/fafdiff/scripts/screen_math.py \
-        --src src/sdk --image C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe \
+        --src src --image C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe \
         --out .tmp/fafdiff
 
-Defaults: `--src <repo>/src/sdk`, `--image` the retail FA exe, `--out`
+Defaults: `--src <repo>/src`, `--image` the retail FA exe, `--out`
 `<repo>/.tmp/fafdiff`.  The repo root is derived from this file's own location
 (`tools/fafdiff/scripts` -> up three levels).
 
@@ -54,7 +54,7 @@ from capstone.x86_const import X86_OP_IMM
 # repo root: <root>/tools/fafdiff/scripts/screen_math.py -> up three levels
 REPO_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
-SRC_ROOT = os.path.join(REPO_ROOT, "src", "sdk")
+SRC_ROOT = os.path.join(REPO_ROOT, "src")
 RETAIL_EXE = r"C:\ProgramData\FAForever\bin\ForgedAlliance_6c6c92f.exe"
 
 OUT_DIR = os.path.join(REPO_ROOT, ".tmp", "fafdiff")
@@ -860,7 +860,7 @@ def main(argv=None):
     lines.append("| item | value |")
     lines.append("|---|---|")
     lines.append("| source root | `%s` |" % os.path.relpath(args.src, REPO_ROOT).replace("\\", "/"))
-    lines.append("| src/sdk git commit (`git rev-parse --short HEAD`) | `%s` |" % src_commit)
+    lines.append("| src git commit (`git rev-parse --short HEAD`) | `%s` |" % src_commit)
     lines.append("| annotation rows scanned | %d |" % total_rows)
     lines.append("| unique addresses | %d |" % unique_addrs)
     lines.append("| duplicate rows dropped | %d |" % dupes)
@@ -952,7 +952,7 @@ def main(argv=None):
     lines.append("| `ssedouble_to_first_ret` | double SSE instructions before the first `ret` |")
     lines.append("| `thirdparty` | 1 when the file or the symbol belongs to bundled "
                  "third-party code (libpng, zlib, lua, boost, ogg, vorbis, jpeg, tiff, freetype) |")
-    lines.append("| `tu_class` | `math` (src/sdk/moho/math, src/sdk/legacy/math, "
+    lines.append("| `tu_class` | `math` (src/moho/math, src/legacy/math, "
                  "gpg/gal/StringUtils.cpp), `thirdparty`, `noncode` (address not in a "
                  "code section) or `engine` |")
     lines.append("| `in_difffuzz` | 1 when the symbol is already a target in "

@@ -49,30 +49,38 @@ DEFAULT_OUT = os.path.join(REPO_ROOT, "tools", "fafdiff", "COVERAGE.md")
 #     tier == "x87"
 #     and section_is_code
 #     and x87_to_first_ret > 0
-#     and file under src/sdk/moho/math/** or src/sdk/legacy/math/**
+#     and file under src/moho/math/** or src/legacy/math/**
 #     and not MathReflection.cpp
 #     and not **/backends/** and not *D3D*
+#     and symbol does not contain "(dynamic initializer)"
 #
-# `calls <= 3` is NOT part of the set: on the current tree it removes 11 rows
-# (SLERP, QuatsNearEqual, MatrixColumnsToQuatCanonical, BuildTiltShortestArcDelta,
-# BuildRotationMatrixFromEulerHPR and six inline copies in QuaternionMath.h) and
-# yields 184 rows, not the 195 this ledger is specified to hold.  Set
-# CALLS_LIMIT to 3 to apply it; the count assertion below then fails loudly,
-# which is the point.
+# The last clause removes the compiler-generated dynamic initializers of the
+# four static quaternions in QuaternionMath.h: 159 rows, one copy per
+# translation unit that includes the header.  They are x87 code in the retail
+# image, but they are not functions -- nothing can be paired against them.
+# The mark is produced by the source-level name resolver (see
+# `NameResolver.resolve`), so the check is applied after the names are read.
+#
+# `calls <= 3` is NOT part of the set: the 195-row count of the previous
+# round was taken without it, and the leaf-ness question is answered by the
+# notes in this ledger, not by dropping rows silently.  Set CALLS_LIMIT to 3
+# to apply it; the rows it would remove are then listed in the ledger.
 CALLS_LIMIT = None  # None = not applied; 3 = apply the `calls <= 3` clause
 
-EXPECTED_SET_SIZE = 195
-
-MATH_DIRS = ("src/sdk/moho/math/", "src/sdk/legacy/math/")
+MATH_DIRS = ("src/moho/math/", "src/legacy/math/")
 EXCLUDED_FILES = ("MathReflection.cpp",)
 EXCLUDED_PATH_PARTS = ("/backends/",)
 EXCLUDED_NAME_PARTS = ("D3D",)
 
+# the mark the name resolver puts on a compiler-generated dynamic initializer
+DYNAMIC_INITIALIZER_MARK = "(dynamic initializer)"
+
 LEDGER_PREDICATE_TEXT = (
     "tier == 'x87' AND section_is_code AND x87_to_first_ret > 0 AND "
-    "(file starts with 'src/sdk/moho/math/' OR 'src/sdk/legacy/math/') AND "
+    "(file starts with 'src/moho/math/' OR 'src/legacy/math/') AND "
     "NOT file ends with 'MathReflection.cpp' AND "
-    "NOT '/backends/' in file AND NOT 'D3D' in file"
+    "NOT '/backends/' in file AND NOT 'D3D' in file AND "
+    "symbol does not contain '%s'" % DYNAMIC_INITIALIZER_MARK
     + (" AND calls <= %d" % CALLS_LIMIT if CALLS_LIMIT is not None else "")
 )
 
@@ -88,6 +96,9 @@ STATUS_NA = "不适用"
 STATUSES = (STATUS_UNMATCHED, STATUS_MATCHED, STATUS_FAILED, STATUS_NA)
 STATUSES_NEEDING_WHY = (STATUS_NA, STATUS_FAILED)
 
+# difffuzz is no longer a reason to skip a row: the engine moved to clang-cl
+# (cmake/FafCodegen.cmake) while tools/difffuzz still builds its copies with
+# MSVC cl, so its coverage no longer attests the shipped engine's code.
 DEFAULT_NA_WHY = "difffuzz already covers it; fafdiff adds no dimension"
 
 
@@ -108,9 +119,23 @@ def in_ledger(r, calls_limit=CALLS_LIMIT) -> bool:
         return False
     if any(p in f for p in EXCLUDED_NAME_PARTS):
         return False
+    if DYNAMIC_INITIALIZER_MARK in (r.get("symbol") or ""):
+        return False
     if calls_limit is not None and r.get("calls", 0) > calls_limit:
         return False
     return True
+
+
+def is_dynamic_initializer(row) -> bool:
+    """1 when the row is a compiler-generated dynamic initializer.
+
+    The screen symbol of such a row is the *next* address label (the screen
+    script reads the first symbol after the annotation line), so the mark is
+    only visible in the source-level name the resolver produced.
+    """
+    if row.get("kind") == "variable":
+        return True
+    return DYNAMIC_INITIALIZER_MARK in (row.get("display_name") or "")
 
 
 # --------------------------------------------------------------------------
@@ -258,6 +283,52 @@ class NameResolver:
             return (name, params, "variable")
         return (name, params, "function")
 
+    def has_definition(self, rel, name):
+        """Return the file that holds a *definition* of `name`, or None.
+
+        A ledger row must be pairable: the annotated function has to have a
+        body somewhere.  For a `.cpp` row that is the `.cpp` itself; for a
+        header row it is either an inline definition in that header or the
+        definition in the sibling `.cpp`.
+        """
+        for cand in self._definition_candidates(rel):
+            sf = self._file(cand)
+            if sf is None:
+                continue
+            for i in range(len(sf.lines)):
+                if not sf.is_code[i]:
+                    continue
+                m = RE_IDENT_CALL.search(sf.lines[i])
+                if not m or m.group("name") != name:
+                    continue
+                if self._body_follows(sf, i):
+                    return cand
+        return None
+
+    @staticmethod
+    def _definition_candidates(rel):
+        out = [rel]
+        stem, ext = os.path.splitext(rel)
+        out.append(stem + (".cpp" if ext == ".h" else ".h"))
+        return out
+
+    @staticmethod
+    def _body_follows(sf, i):
+        """1 when a `{` opens the body of the declaration on code line `i`."""
+        depth = 0
+        for j in range(i, min(len(sf.lines), i + 40)):
+            for ch in sf.lines[j]:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                elif depth <= 0:
+                    if ch == "{":
+                        return True
+                    if ch == ";":
+                        return False
+        return False
+
     def _doctitle(self, sf, i):
         """The `* name: ...` title of the doc block that owns line `i`."""
         # walk back to the start of the comment block, then take its title
@@ -294,13 +365,13 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
     out.append("# fafdiff :: coverage ledger")
     out.append("")
     out.append("Per-function coverage ledger for the x87-tier math surface of the engine")
-    out.append("rebuild (`src/sdk/moho/math/**`, `src/sdk/legacy/math/**`) as it exists")
+    out.append("rebuild (`src/moho/math/**`, `src/legacy/math/**`) as it exists")
     out.append("in the retail image.")
     out.append("")
     out.append("| item | value |")
     out.append("|---|---|")
     out.append("| functions in the ledger | **%d** |" % len(rows))
-    out.append("| `src/sdk` commit | `%s` |" % src_commit)
+    out.append("| `src` commit | `%s` |" % src_commit)
     out.append("| screen data | `%s` |" % os.path.relpath(screen_path, REPO_ROOT).replace("\\", "/"))
     out.append("| status data | `%s` |" % os.path.relpath(status_path, REPO_ROOT).replace("\\", "/"))
     out.append("| statuses | %s |" % ", ".join("`%s` %d" % (s, counts[s]) for s in STATUSES))
@@ -384,8 +455,10 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
     out.append(LEDGER_PREDICATE_TEXT)
     out.append("```")
     out.append("")
-    out.append("The set currently holds **%d** functions; the generator asserts that number" % len(rows))
-    out.append("and fails loudly if the tree, the screen or the predicate changes it.")
+    out.append("The set currently holds **%d** functions. The generator asserts that the set" % len(rows))
+    out.append("is non-empty and that every row is a real, named function (a `.cpp`")
+    out.append("definition or a real inline in a header) -- no dynamic initializers, no")
+    out.append("unresolved `sub_XXXX` names -- and fails loudly otherwise.")
     out.append("")
     if dropped_by_calls:
         out.append("The `calls <= 3` clause of the original specification is **not** applied:")
@@ -395,10 +468,11 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
         out.append("")
         for r in dropped_by_calls:
             out.append("* `%s` %s (`%s:%d`)"
-                       % (r["address"], r["symbol"], r["file"], r["line"]))
+                       % (r["address"], r["screen_symbol"], r["file"], r["line"]))
         out.append("")
-        out.append("Set `CALLS_LIMIT = 3` in the generator to apply the clause; the count")
-        out.append("assertion then fails loudly, which is the intended behaviour.")
+        out.append("Whether a row is a leaf is answered by the notes above, not by")
+        out.append("dropping rows silently. Set `CALLS_LIMIT = 3` in the generator to")
+        out.append("apply the clause anyway; the difference is then printed here.")
         out.append("")
     out.append("**Do not edit this file by hand.** Every line below the header is written")
     out.append("by the generator. Edit `tools/fafdiff/data/coverage_status.json` and")
@@ -407,6 +481,12 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
 
     # ------------------------------------------------------------- notes
     out.append("## Notes")
+    out.append("")
+    out.append("The compiler-generated dynamic initializers of the four static")
+    out.append("quaternions in `src/moho/math/QuaternionMath.h` (one copy per including")
+    out.append("translation unit) are **excluded** by the predicate: they are x87 code")
+    out.append("in the retail image, but they are not functions and nothing can be")
+    out.append("paired against them.")
     out.append("")
     ida_rows = [r for r in rows
                  if r["name_recovered"] and r["kind"] == "function"
@@ -429,17 +509,6 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
             out.append("* `%s` `%s` (%s:%d)"
                        % (r["address"], r["screen_symbol"], r["file"], r["line"]))
         out.append("")
-    var_rows = [r for r in rows if r["kind"] == "variable"]
-    if var_rows:
-        out.append("Rows marked *variable* are **compiler-generated dynamic initializers**")
-        out.append("of a `static const` object (one copy per including translation unit),")
-        out.append("not hand-written functions. There are %d of them; they are x87 code" % len(var_rows))
-        out.append("in the retail image and therefore belong to the set, but they cannot be")
-        out.append("paired one-by-one -- they are one row per TU copy of the same source")
-        out.append("object. (Their screen symbol is the *next* address label, because the")
-        out.append("screen script reads the first symbol after the annotation line, which")
-        out.append("for these rows is the following `Address:` entry.)")
-        out.append("")
     return "\n".join(out) + "\n", counts
 
 
@@ -455,26 +524,78 @@ def main(argv=None):
     ap.add_argument("--init-status", action="store_true",
                     help="write a default coverage_status.json (all 未匹配; "
                          "difffuzz-covered rows 不适用) and exit")
+    ap.add_argument("--sync-status", action="store_true",
+                    help="rewrite coverage_status.json: keep the entries of the "
+                         "addresses still in the set, drop the ones that left it, "
+                         "add the new rows with their default status")
     args = ap.parse_args(argv)
 
     with open(args.screen, "r", encoding="utf-8") as fh:
         screen = json.load(fh)
 
-    rows = [r for r in screen["functions"] if in_ledger(r)]
-    rows.sort(key=lambda r: r["addr"])
+    resolver = NameResolver(REPO_ROOT)
+
+    # ------------------------------------------------- the ledger set
+    cand = [r for r in screen["functions"] if in_ledger(r)]
+    cand.sort(key=lambda r: r["addr"])
+
+    resolved = []
+    for r in cand:
+        display, kind, recovered = resolver.resolve(r["file"], r["line"])
+        if not display:
+            display = r["symbol"]
+            kind = "unknown"
+            recovered = False
+        resolved.append({
+            "address": r["address"],
+            "addr": r["addr"],
+            "screen_symbol": r["symbol"],
+            "display_name": display,
+            "kind": kind,
+            "name_recovered": recovered,
+            "file": r["file"],
+            "line": r["line"],
+            "in_difffuzz": r.get("in_difffuzz", 0),
+            "calls": r.get("calls", 0),
+        })
+
+    # the compiler-generated dynamic initializers are dropped by the predicate
+    rows = [r for r in resolved if not is_dynamic_initializer(r)]
+    dropped_initializers = [r for r in resolved if is_dynamic_initializer(r)]
 
     # the rows the (unapplied) `calls <= 3` clause would drop
     calls3 = {r["address"] for r in screen["functions"] if in_ledger(r, calls_limit=3)}
     dropped_by_calls = [r for r in rows if r["address"] not in calls3]
 
-    if len(rows) != EXPECTED_SET_SIZE:
-        sys.stderr.write(
-            "gen_coverage: FATAL: the ledger set holds %d functions, expected %d.\n"
-            % (len(rows), EXPECTED_SET_SIZE))
-        sys.stderr.write(
-            "gen_coverage: the denominator must not drift silently. Either the src/sdk\n"
-            "gen_coverage: tree moved, the screen changed, or the predicate changed.\n"
-            "gen_coverage: predicate = %s\n" % LEDGER_PREDICATE_TEXT)
+    # ---------------------------------------------------------- assertions
+    problems = []
+    if not rows:
+        problems.append("the ledger set is empty")
+    for r in rows:
+        if r["kind"] != "function":
+            problems.append("%s: not a function (kind=%r, name=%r)"
+                            % (r["address"], r["kind"], r["display_name"]))
+            continue
+        if DYNAMIC_INITIALIZER_MARK in r["display_name"]:
+            problems.append("%s: dynamic initializer" % r["address"])
+        if "(" not in r["display_name"] or ")" not in r["display_name"]:
+            problems.append("%s: no parameter list (%r)"
+                            % (r["address"], r["display_name"]))
+        if not r["name_recovered"] or RE_IDA_STYLE.match(r["display_name"] or ""):
+            problems.append("%s: unresolved name (%r)"
+                            % (r["address"], r["display_name"]))
+        if not os.path.exists(os.path.join(REPO_ROOT, r["file"].replace("/", os.sep))):
+            problems.append("%s: source file %s does not exist"
+                            % (r["address"], r["file"]))
+            continue
+        fname = r["display_name"].split("(")[0].strip()
+        if resolver.has_definition(r["file"], fname) is None:
+            problems.append("%s: no definition found for %s (%s)"
+                            % (r["address"], fname, r["file"]))
+    if problems:
+        for p in problems:
+            sys.stderr.write("gen_coverage: FATAL: %s\n" % p)
+        sys.stderr.write("gen_coverage: predicate = %s\n" % LEDGER_PREDICATE_TEXT)
         return 2
 
     # ---------------------------------------------------------- status file
@@ -482,10 +603,7 @@ def main(argv=None):
         functions = {}
         for r in sorted(rows, key=lambda r: r["addr"]):
             addr = r["address"]
-            if r.get("in_difffuzz"):
-                functions[addr] = {"status": STATUS_NA, "why": DEFAULT_NA_WHY}
-            else:
-                functions[addr] = {"status": STATUS_UNMATCHED, "why": ""}
+            functions[addr] = {"status": STATUS_UNMATCHED, "why": ""}
         data = {"schema": "fafdiff-coverage/1", "functions": functions}
         os.makedirs(os.path.dirname(args.status), exist_ok=True)
         with open(args.status, "w", encoding="utf-8", newline="\n") as fh:
@@ -506,6 +624,32 @@ def main(argv=None):
     set_addrs = {r["address"] for r in rows}
     missing = sorted(set_addrs - set(functions.keys()))
     extra = sorted(set(functions.keys()) - set_addrs)
+
+    if args.sync_status:
+        # keep the entries of the addresses that are still in the set, drop the
+        # ones that left it, and add the new rows with their default status.
+        new_functions = {}
+        for r in sorted(rows, key=lambda r: r["addr"]):
+            addr = r["address"]
+            entry = functions.get(addr)
+            if entry is None:
+                new_functions[addr] = {"status": STATUS_UNMATCHED, "why": ""}
+            else:
+                new_functions[addr] = {"status": entry.get("status", STATUS_UNMATCHED),
+                                       "why": (entry.get("why") or "").strip()}
+        data = {"schema": status_data.get("schema", "fafdiff-coverage/1"),
+                "functions": new_functions}
+        with open(args.status, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(data, fh, indent=1, ensure_ascii=False, sort_keys=False)
+            fh.write("\n")
+        print("gen_coverage: synced %s (%d functions; %d kept, %d dropped, %d added)"
+              % (os.path.relpath(args.status, REPO_ROOT).replace("\\", "/"),
+                 len(new_functions), len(set_addrs & set(functions.keys())),
+                 len(extra), len(missing)))
+        functions = new_functions
+        missing = []
+        extra = []
+
     bad_status = []
     missing_why = []
     for addr, entry in functions.items():
@@ -528,29 +672,14 @@ def main(argv=None):
         return 2
 
     # ------------------------------------------------------- build the rows
-    resolver = NameResolver(REPO_ROOT)
     out_rows = []
     for r in rows:
         addr = r["address"]
         entry = functions[addr]
-        display, kind, recovered = resolver.resolve(r["file"], r["line"])
-        if not display:
-            display = r["symbol"]
-            kind = "unknown"
-            recovered = False
-        out_rows.append({
-            "address": addr,
-            "addr": r["addr"],
-            "screen_symbol": r["symbol"],
-            "display_name": display,
-            "kind": kind,
-            "name_recovered": recovered,
-            "file": r["file"],
-            "line": r["line"],
-            "status": entry["status"],
-            "why": (entry.get("why") or "").strip(),
-            "in_difffuzz": r.get("in_difffuzz", 0),
-        })
+        row = dict(r)
+        row["status"] = entry["status"]
+        row["why"] = (entry.get("why") or "").strip()
+        out_rows.append(row)
 
     md, counts = build_markdown(out_rows, functions, screen.get("src_commit", "unknown"),
                                  args.screen, args.status, dropped_by_calls)
@@ -563,6 +692,12 @@ def main(argv=None):
     for s in STATUSES:
         print("gen_coverage:   %s = %d" % (s, counts[s]))
     print("gen_coverage: total = %d" % sum(counts.values()))
+    print("gen_coverage: dropped %d dynamic initializers" % len(dropped_initializers))
+    from collections import Counter
+    for f, c in sorted(Counter(r["file"] for r in out_rows).items()):
+        print("gen_coverage:   %-48s %d" % (f, c))
+    print("gen_coverage: first = %s %s" % (out_rows[0]["address"], out_rows[0]["display_name"]))
+    print("gen_coverage: last  = %s %s" % (out_rows[-1]["address"], out_rows[-1]["display_name"]))
     return 0
 
 
