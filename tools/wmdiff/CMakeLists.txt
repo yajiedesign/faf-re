@@ -80,6 +80,7 @@ set(WMDIFF_HARNESS_SOURCES
   src/main.cpp
   src/pe_image.cpp
   src/gen.cpp
+  src/engine_scope.cpp
   src/targets_wm3.cpp
   src/wm3_vec_targets.cpp
   src/wm3_geom_targets.cpp

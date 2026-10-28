@@ -14,6 +14,7 @@
 #include "targets_wm3.h"
 
 #include "pe_image.h"
+#include "engine_scope.h"
 
 #include <windows.h>
 
@@ -51,6 +52,8 @@ namespace
   const char* gImage = "C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe";
   bool gStrictNan = false;
   bool gSkipExtreme = false;
+  // Run the double targets the engine never executes (see engine_scope.cpp).
+  bool gIncludeDead = false;
   difffuzz::Rng* gGenRng = nullptr;
 
   // The retail CRT's Windows-version cache. `__get_winmajor` (0x00A83756)
@@ -398,6 +401,7 @@ namespace
       "  --snan     allow signaling NaNs in generated inputs\n"
       "  --strict-nan  count NaN-payload-only differences as mismatches\n"
       "  --skip-extreme  drop inputs that are denormal/inf/NaN or outside 2^-63..2^63\n"
+      "  --include-dead  also run the targets the engine never executes\n"
       "  --list     print the target table and exit\n");
   }
 
@@ -419,6 +423,8 @@ namespace
         gControlWord = static_cast<u32>(std::strtoul(argv[++i], nullptr, 0));
       } else if (std::strcmp(a, "--skip-extreme") == 0) {
         gSkipExtreme = true;
+      } else if (std::strcmp(a, "--include-dead") == 0) {
+        gIncludeDead = true;
       } else if (std::strcmp(a, "--strict-nan") == 0) {
         gStrictNan = true;
       } else if (std::strcmp(a, "--snan") == 0) {
@@ -473,9 +479,10 @@ int main(int argc, char** argv)
     std::printf("%-18s %-10s %-52s %s\n", "name", "retail VA", "our source", "layouts");
     for (int i = 0; i < count; ++i) {
       const difffuzz::Target& t = targets[i];
-      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s\n", t.name, t.va,
+      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s%s\n", t.name, t.va,
         t.source[0] ? t.source : "(none)", t.inLayout, t.outLayout,
-        t.va == 0 ? "   [TODO: retail VA not filled in]" : "");
+        t.va == 0 ? "   [TODO: retail VA not filled in]" : "",
+        wm3scope::IsDeadInEngine(t.name) ? "   [dead: not executed by the engine]" : "");
     }
     return 0;
   }
@@ -632,7 +639,7 @@ int main(int argc, char** argv)
     DebugBreak();
   }
 
-  int passed = 0, failed = 0, ran = 0;
+  int passed = 0, failed = 0, ran = 0, skipped = 0;
   // WMDIFF_INT3_AT=<va>[,<va>...] plants int3s in the retail image once it is
   // mapped, so a debugger attached to this process stops there with the
   // registers live. A breakpoint set from the debugger side cannot do this: the
@@ -666,6 +673,10 @@ int main(int argc, char** argv)
   for (int i = 0; i < count; ++i) {
     const difffuzz::Target& t = targets[i];
     if (!Selected(t.name)) {
+      continue;
+    }
+    if (!gIncludeDead && wm3scope::IsDeadInEngine(t.name)) {
+      ++skipped;
       continue;
     }
     ++ran;
@@ -779,6 +790,10 @@ int main(int argc, char** argv)
     }
   }
 
+  if (skipped != 0) {
+    std::printf("wmdiff: %d targets skipped (double, not executed by the engine; "
+                "--include-dead to run them)\n", skipped);
+  }
   std::printf("wmdiff: %d/%d targets passed\n", passed, ran);
   return failed == 0 ? 0 : 1;
 }

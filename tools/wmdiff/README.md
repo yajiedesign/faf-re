@@ -373,7 +373,13 @@ things were wrong and are now right:
 
 Useful flags: `--list`, `--filter NAME` (comma-separated), `--iters`, `--seed`,
 `--cw` (x87 control word, default `0x007F`), `--snan`, `--strict-nan`,
-`--skip-extreme`, `--max-mismatch`, `--image PATH`.
+`--skip-extreme`, `--include-dead`, `--max-mismatch`, `--image PATH`.
+
+**The suite runs the targets the engine executes.**  47 of the 156 rows are
+`double` instantiations that no `src/` call site reaches - `double-audit.md`
+verifies each one - and they are skipped by default, so a run reports
+`75/109` rather than `75/156`.  They stay in the table and `--include-dead`
+runs them; `--list` marks them `[dead: not executed by the engine]`.
 
 The default image is `C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe` —
 the patch-level build this rebuild actually targets, not the retail 2007 binary
