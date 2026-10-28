@@ -13,7 +13,7 @@ inside this tree and links the real headers, so `*_harness.cpp` only ever
 ## Rules
 
 **Never change compiler options to make a comparison pass.** Not in
-`build.bat`, not in `main.vcxproj`, not for one experiment.
+`tools/wmdiff/CMakeLists.txt`, not in `faf_codegen`, not for one experiment.
 
 The rebuild's job is to be built the way it is built. If retail's bits and ours
 differ because of a compiler option, that is a *result* — the harness's job is to
@@ -1654,7 +1654,7 @@ default column is the old source):
 Read that as four different answers to "which model was this built with", in
 one 300-byte region of the image. A build-flag fix cannot reconcile them, and
 per the rule above it is not the kind of fix that would be allowed anyway.
-`build.bat` stays on the engine's settings (`/fp:precise`, SSE2) because it is
+The harness stays on the engine's settings (`/fp:precise`, SSE2 via `faf_codegen`) because it is
 measuring the engine as the engine is actually compiled. The two x87 leaves are
 matched in source instead: their expressions are evaluated in `double` with the
 significand rounded back to 24 bits after every operation, which reproduces
