@@ -36,6 +36,10 @@ dependencies/*.7z
 
 AGENTS.md
 CLAUDE.md
+# Per-directory harness instructions are part of the repository; only the
+# root AGENTS.md is machine-local (see the note further down).
+!/tools/wmdiff/AGENTS.md
+!/tools/fafdiff/AGENTS.md
 mcp/
 skills/
 
