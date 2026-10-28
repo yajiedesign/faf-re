@@ -114,3 +114,10 @@ add_subdirectory(src)
 # --- Tests ------------------------------------------------------------------------------
 enable_testing()
 add_subdirectory(tests)
+
+# --- Paired comparison harness (tools/wmdiff) --------------------------------------------
+# It maps a 32-bit retail image at 0x00400000, so it exists only for x86
+# configures.  EXCLUDE_FROM_ALL: the engine build does not depend on it.
+if(FAF_TARGET_ARCH STREQUAL "x86")
+  add_subdirectory(tools/wmdiff)
+endif()

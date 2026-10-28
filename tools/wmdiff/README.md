@@ -311,20 +311,30 @@ it is unaffected.
 
 ## Building
 
-    build.bat            -> build\wmdiff_release.exe and build\wmdiff_debug.exe
-    build.bat release    -> release only
+The harness is a target of the engine's own CMake project, compiled by
+**clang-cl x86** with `faf_codegen` and `faf_wm3_build_flags` - the same
+compiler and the same code-generation contract as `src/`, so the Wild Magic
+code under test is built exactly the way the engine builds it.  It is
+`EXCLUDE_FROM_ALL`; the engine build does not depend on it.
 
-This machine's VS 2022 lives on `G:`, while `build.bat` assumes the `C:`
-default, so call it from a prompt that has vcvars loaded:
+    cmake --preset clang-x86-release
+    cmake --build --preset clang-x86-release --target wmdiff
 
-    call "G:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsamd64_x86.bat"
-    build.bat release
+The binary lands at `build/clang-x86-release/tools/wmdiff/wmdiff.exe`.
+The presets need `LLVM_ROOT` pointing at an LLVM install and Ninja on `PATH`
+(both ship with Visual Studio 2022).
 
-`Foundation\Math\Wm3Math.cpp` is the one library `.cpp` compiled rather than
+`Foundation/Math/Wm3Math.cpp` is the one library `.cpp` compiled rather than
 header-reached: it carries the explicit specialisations of the `Math<float>`
 constants (`PI`, `HALF_PI`, `LN_2`, ...), which `ACos`/`ASin` return. **Do not**
-resolve that link error by redefining the constants in this tree — that would
+resolve that link error by redefining the constants in this tree - that would
 take them out of the comparison.
+
+The harness needs `Vector3<float>::CompareArrays` and
+`Quaternion<float>::CompareArrays` to be reachable.  The authoritative tree
+keeps them private, so `dependencies/patches/wildmagic3p8_wmdiff_access.patch`
+makes them public - an access specifier only, with no effect on generated
+code.  Apply it after the FAF patch, from inside the dependency tree.
 
 ### The harness compiles the code under test as the engine does
 

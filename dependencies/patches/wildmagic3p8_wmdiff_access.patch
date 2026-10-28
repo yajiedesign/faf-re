@@ -1,0 +1,33 @@
+--- a/Foundation/Math/Wm3Vector3.h
++++ b/Foundation/Math/Wm3Vector3.h
+@@ -242,8 +242,9 @@
+     void MemberDeserialize (gpg::ReadArchive* archive);
+     void MemberSerialize (gpg::WriteArchive* archive) const;
+ 
+-private:
+-    // support for comparisons
++public:
++    // support for comparisons.  Public so the wmdiff harness can call it;
++    // the access specifier has no effect on generated code.
+     int CompareArrays (const Vector3& rkV) const;
+ 
+ };
+
+--- a/Foundation/Math/Wm3Quaternion.h
++++ b/Foundation/Math/Wm3Quaternion.h
+@@ -287,10 +287,12 @@
+     void MemberDeserialize (gpg::ReadArchive* archive);
+     void MemberSerialize (gpg::WriteArchive* archive) const;
+ 
++public:
++    // support for comparisons.  Public so the wmdiff harness can call it;
++    // the access specifier has no effect on generated code.
++    int CompareArrays (const Quaternion& rkQ) const;
++
+ private:
+-    // support for comparisons
+-    int CompareArrays (const Quaternion& rkQ) const;
+-
+     // support for FromRotationMatrix
+     static int ms_iNext[3];
+ 
