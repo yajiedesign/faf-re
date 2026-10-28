@@ -85,3 +85,35 @@ declared in `src/targets.h`.
 **The table is empty until P1.** There are no targets yet: `--list` prints the
 header and no rows, and a run reports `0/0 targets passed`. P1 adds the first
 translation unit under test and the first rows.
+
+## Coverage ledger
+
+`COVERAGE.md` is the per-function coverage ledger for the x87-tier math
+surface: the **195** functions of `src/sdk/moho/math/**` and
+`src/sdk/legacy/math/**` that the retail image still executes with x87
+arithmetic. Every row carries the function's source-level name, its retail
+address, its source location and one of four statuses (`未匹配`, `已匹配`,
+`失败`, `不适用`). Start there: it says, per function, whether the pair exists
+yet, and -- for the rows marked `不适用` -- why it will never exist
+(difffuzz already covers that function, so fafdiff would add no dimension).
+
+The table is **generated**, not hand-written: `scripts/gen_coverage.py` builds
+it from the screen data (`scripts/screen_math.py` ->
+`.tmp/fafdiff/screen.json`) and the hand-maintained status file
+(`data/coverage_status.json`, one entry per address). To change a status,
+edit `data/coverage_status.json` and re-run:
+
+```bash
+PATH=.tmp/venv/Scripts:$PATH .tmp/venv/Scripts/python.exe \
+    tools/fafdiff/scripts/screen_math.py --out .tmp/fafdiff
+PYTHONUTF8=1 .tmp/venv/Scripts/python.exe \
+    tools/fafdiff/scripts/gen_coverage.py
+```
+
+The generator fails loudly (and writes nothing) if the set no longer holds
+195 functions, if a status is missing, invalid or lacks its `why` sentence, or
+if a status entry points at an address outside the set -- the denominator of
+the ledger must not drift silently. `scripts/gen_coverage.py --init-status`
+writes a fresh status file (everything `未匹配`, difffuzz-covered rows
+`不适用`).
+
