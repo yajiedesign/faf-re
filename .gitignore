@@ -35,7 +35,10 @@ dependencies/*.7z
 *.log
 *.obj
 
-AGENTS.md
+# Only the repository-root AGENTS.md is machine-local (pointers to .memory/).
+# Per-directory AGENTS.md files (tools/fafdiff/, wmdiff/, ...) are harness
+# operating instructions and belong in the repository.
+/AGENTS.md
 CLAUDE.md
 mcp/
 skills/
