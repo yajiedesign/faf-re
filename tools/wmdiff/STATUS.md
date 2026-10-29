@@ -23,62 +23,73 @@ arithmetic with hardware instructions rather than with `double`.
 | | |
 |---|---|
 | entries in `kTargets[]` | **156** |
-| entries passing 1,000,000 draws on each of five seeds | **156 / 156** |
+| entries the harness runs by default | **46** |
+| entries the engine never executes - skipped unless `--include-dead` | **110** |
+| default run: pass / fail | **34 / 12** |
+| whole table (`--include-dead`): pass / fail | **75 / 81** |
 | duplicate entries | **0** |
-| failing entries | **0** |
-| symbol-table records from the Ghidra run | **228** |
-| of which not Wild Magic functions | **9** - eight compiler-generated closures and one mislabelled duplicate of `Vector2<float>::X() const` |
-| **distinct Wild Magic functions** | **219** |
-| of those, paired (`已匹配`) | **75** |
-| of those, with no entry (`未匹配`) | **0** |
-| of those, where no entry is the right answer (`不适用`) | **143** |
-| entries with no counterpart among the 219 | **80** |
+| of the 81 failures: `double` rows | **47** |
+| of the 81 failures: `float` rows | **34** |
+
+**Before this change the split was 75 / 109.**  The harness skipped only the 47
+`double` rows, so a default run exercised 109 rows - 75 passing and 34 failing.
+It now exercises **46** rows, **34** passing and **12** failing: 63 rows the
+engine cannot reach - 59 `float` rows and the 4 `double` rows the old skip list
+had missed - were being compared on every run, and their verdicts said nothing
+about the engine.  The dead rows stay in the table - they were verified bit for
+bit at some point and they cost nothing to keep - but they are skipped by
+default, so the pass/fail line is about the code the engine actually runs.
 
 The seeds are `0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`,
-`0xA5A5A5A5`.  The last full sweep was 156/156 on all five.  A later, text-only
-edit to one entry's description forced a rebuild; the entry and the `0x5EED2007`
-sweep were re-run after it (1,000,000/1,000,000 and 156/156).
+`0xA5A5A5A5`.  The 81 failures are the `double` rows plus the `float` rows that
+`float-analysis-ordinary.md` and `float-analysis-extreme.md` attribute; a
+20,000-draw run reproduces exactly the same **75 / 81** split, and so does the
+default run's **34 / 46**.
 
-Two counting traps worth knowing, because both were real:
+**The 156 entries and the "how many Wild Magic functions are there" question
+are different questions now.**  The old figure - 219 functions, from the Ghidra
+run over the *old* rebuild in `.tmp/WildMagic3p8-re` - described a tree that is
+no longer here: the tree is now the upstream Wild Magic 3.8 submodule and the
+engine is the merged `src/`.  Reachability is now settled **per table row**, and
+`reachable.md` is the ledger: one row per target, with the reachability
+verdict, the evidence, and the harness verdict.
 
-* **228 - 9 = 219, not 220.**  The table used to print "228 entries, 9 not WM3,
-  therefore 220 Wild Magic functions".  The 220th was the mislabelled
-  `ViewOrientFromLook` record, which is a second copy of `Vector2<float>::X()
-  const` at the same source line; counting its canonical name made it look like
-  a WM3 function.
-* **152 entries and 219 functions are different numbers on purpose.**  The 219
-  are what the Ghidra run over the rebuilt **Debug** image found; the 152 entries
-  include every `double` entry the pairing work built plus a few `float`
-  overloads the census records once.  About 80 entries are therefore
-  `linked-but-unreachable` work, kept because they are verified and cost nothing.
-  Mechanically checked: all 72 `wmdiff_row` names resolve to an entry in
-  `--list`, zero missing.
+## What the default run covers
 
-## Nothing is left unpaired
+**A function the main project does not call does not need a comparison
+entry.**  The audit behind `reachable.md` decided all 156 rows:
 
-Every Wild Magic function the engine executes now has a settled answer: **76
-carry a passing entry**, and **143 have a documented reason why no entry can
-exist**:
+| verdict | rows | meaning |
+|---|---:|---|
+| `executed` | **46** | a `src/` call site names the member, or Wild Magic calls it from a member that a `src/` call site reaches - the call site and the chain are quoted |
+| `dead` | **110** | no `src/` call site and no reached Wild Magic caller - the evidence is the `grep` that found nothing |
+| `unsettled` | **0** | - |
 
-| why no entry can exist | count |
-|---|---:|
-| not executed - the engine has no call site | 57 |
-| executed, but the retail inlines it everywhere (no body) | 52 |
-| exists only in the rebuild (no retail counterpart) | 21 |
-| executed with a body, but a row could not discriminate | 13 |
+The 110 dead rows are two islands: **51** `double` rows (`src/` passes no
+`double` argument to a Wild Magic template anywhere - `double-audit.md`) and
+**59** `float` rows (the convex hulls, `Eigen`, `Query2`/`Query3`, the capsule
+intersectors, the swept distance queries, the `Distance` base class's Newton
+driver, and the private helpers of intersectors the engine only enters through
+their unswept entry points).
 
-The queue was declared empty once before, on a census verdict that turned out to
-be wrong.  It is empty **now** on evidence: the last eleven - four base
-destructors, `~Distance<float,Vector2>` (never executed), and seven
-`Matrix3`/`Plane3`/`Sphere3` members the retail inlines - were settled by
-reading the retail's `Distance` and `Intersector` blocks and the `CGeomSolid3`
-plane-array helpers, not by a probe.
+The 12 failures among the 46 rows that run by default are the ones the float
+analysis documents already attribute: the two `Dot` rows, the two
+`LengthSq`/`SquaredLength` rows, `DistVector3Box3f::GetSquared`,
+`DistVector3Segment3f::Get`/`GetSquared`, `IntrLine3Box3f::Test`,
+`IntrSegment3Box3f::Find`/`GetPoint`, `IntrBox3Sphere3f::Test` and the masked
+`ContAlignedBox`.  All of them are **codegen** differences (the retail's x87
+register file against the rebuild's binary32 SSE), not source differences; the
+three that reach the game are the ones `x87math-usage.md` names.
+
+**A new row must be audited before it is added.**  A row that is not in
+`reachable.md` has no reachability verdict, so the harness cannot tell whether
+the engine runs it.
 
 ## The census correction, and why it matters
 
 The reachability census decides "does the engine run this" with three rounds,
 and round 0 is a **withdrawal probe**: remove the library's explicit
-instantiations and see whether `main.vcxproj` still links.  For a **header-inline
+instantiations and see whether the engine still links.  For a **header-inline
 template member**, that probe answers the wrong question.  The engine's own
 translation units instantiate the members they use, so the link succeeds whether
 the class is used or not - "nobody references it" and "everybody references it,
@@ -86,18 +97,23 @@ in a header" are indistinguishable.
 
 `Wm3::Quaternion<float>` is the proof.  The probe said *not applicable*; the
 engine calls the class in its live paths - `Identity()`
-(`src/sdk/moho/ai/CAimManipulator.cpp:1076`), the lane accessors
-(`src/sdk/moho/unit/CUnitMotion.cpp:813-816`), `operator==`
-(`src/sdk/moho/ai/CAiFormationInstance.cpp:3585`) and `Rotate`
-(`src/sdk/moho/entity/CollisionBeamEntity.cpp:71-73`).  **Round 0 may cut
-candidates; it can never close one.**
+(`src/moho/ai/CAimManipulator.cpp`), the lane accessors
+(`src/moho/unit/CUnitMotion.cpp`), `operator==`
+(`src/moho/ai/CAiFormationInstance.cpp`) and `Rotate`
+(`src/moho/entity/CollisionBeamEntity.cpp`).  **Round 0 may cut candidates; it
+can never close one.**
 
 The same round also produced the opposite error: entries were later marked
 *pairable* because their **class** was executed, with notes citing `C6`/`C20` -
 identifiers that exist nowhere in the repository.  A member is pairable only
 when both halves are established: a call site that names **that** member, and a
-retail body with an address.  The 14 `not yet established` entries are exactly
-the members where the second half is missing, and they are honest about it.
+retail body with an address.
+
+The current audit in `reachable.md` replaces the census with a per-row
+evidence-based verdict, and it keeps the lesson: **"the class is executed" is
+not "the member is executed."**  The engine calls `IntrBox2Circle2f::Test()`
+and never the swept `Find`; it calls `IntrSegment3Sphere3f::Find()` and never
+`Test`; it calls `IntrSegment3Box3f::Find()` and never `Test`.
 
 ## What the suite actually fixed
 
@@ -121,7 +137,7 @@ measuring a call the engine never makes.
 and part company where the squares are denormal.  The rebuild had folded the
 second into the first (`Sqrt(SquaredLength())`), wrong for **529 of 200000**
 draws.  The fix is in the shared template, so it reaches the engine at
-`src/sdk/moho/ai/CAiSteeringImpl.cpp:198` and `:1458`; the lockstep game
+`src/moho/ai/CAiSteeringImpl.cpp:198` and `:1458`; the lockstep game
 (`2p-main-x86-vs-x86`) still ends in **PASS** in 5m19s.
 
 Two more changes were verified and cannot move the engine:
@@ -149,6 +165,9 @@ Two more changes were verified and cannot move the engine:
 
 ## Deliberate limits
 
+* **A function the main project does not call does not need a comparison
+  entry.**  The 110 rows the engine cannot reach are skipped by default; they
+  stay in the table, but they do not get work.
 * **`double` is not in scope.**  No `src/` line passes a double argument to a
   Wild Magic template, so every double instantiation is `not executed` however
   many entries it has.
@@ -161,15 +180,13 @@ Two more changes were verified and cannot move the engine:
 
 ## Resuming
 
-* **The queue is empty**, and the four rounds that emptied it are in
-  `reachable.md`.  The three `0x004F08xx` members were the ones that proved the
+* **The reachability queue is empty**, and the audit that emptied it is
+  `reachable.md` - one row per table row, with the verdict and the evidence.
+  The three `0x004F08xx` members were the ones that proved the
   **register-passing thunk**: the quaternion bodies take their argument in
   `EAX`, so the thunk sets `ECX`/`EAX`, pushes nothing, and calls through `EDX`.
   `Sphere3<float>(const Vector3&, float)` is the one constructor row this library
-  can have.  The last eleven were closed as `executed-no-body` or
-  `executed-not-pairable` - four base destructors whose rows would compare only
-  the vtable pointer, `~Distance<float,Vector2>` which the engine never runs, and
-  seven `Matrix3`/`Plane3`/`Sphere3` members the retail inlines.
+  can have.
 * **Constructor rows: one is in the table, the rest cannot be built.**  The
   others fail the rule in the README: the `Dist*`/`Intr*` objects hold
   **references** (the compared bytes are the caller's addresses) and their bases
@@ -180,5 +197,7 @@ Two more changes were verified and cannot move the engine:
   or a member whose "no body" verdict is overturned - which has already happened
   once (`Sphere3`, and before that `Quaternion`'s class verdict).  Re-verifying a
   negative is cheap; treating one as final is not.
-* Regenerating `reachable.md`: it is **generated** - edit
-  `.tmp/wmdiff/regen_reachable.py` and re-run it, never the file.
+* Regenerating `reachable.md`: it is **generated** - the ledger is written from
+  the audit and from `--list`, and a **new row must be audited before it is
+  added**.  The dead set the harness skips is `src/engine_scope.{h,cpp}`; it
+  must be regenerated from the same audit, not edited by hand.

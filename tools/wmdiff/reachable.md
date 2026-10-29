@@ -1,8 +1,17 @@
-# Reachable WildMagic3p8 functions, and what the harness covers
+# The `wmdiff` table, and what the engine reaches of it
 
-`verdict` answers **does the engine execute it** (the three rounds of
-[`reachability-rules.md`](reachability-rules.md)); `wmdiff` answers **what the
-harness has done about it**.  They are independent axes.
+**This file is generated data.**  It is the ledger of the **current** harness
+table - the 156 rows `./build/clang-x86-release/tools/wmdiff/wmdiff.exe --list`
+prints - and it is generated from two things:
+
+* the **reachability audit** of every row (the `executed?` and `evidence`
+  columns), and
+* the **harness result** for every row (the `wmdiff status` column).
+
+A **new row must be audited before it is added.**  A row that is not in this
+ledger has no reachability verdict, so the harness cannot tell whether the
+engine runs it; adding it to the table without an audit would silently widen
+what a default run claims to cover.
 
 **Names are the C++ names**, with the parameter list the declaration has, so
 overloads are told apart by their parameters instead of by a hand-written tag:
@@ -12,525 +21,509 @@ The harness rows carry the same names, so the two documents cross-reference
 exactly.  **The source is the authority for a parameter list** - where the
 decompiled signature and the declaration disagreed, the declaration won.
 
-## The measurement
+## The four values
 
-The Ghidra run over the rebuilt `output/main/Win32/Debug/main.exe`
-(`reachability/README.md`) lists **228 symbol-table entries**, of which **9 are not
-Wild Magic functions** - eight compiler-generated closures and one mislabelled
-address, each read in the source at the recorded line and listed at the bottom of
-this file.  So there are **219 Wild Magic functions**.
+`wmdiff status` uses the four values the harness has always used:
 
-`reachable` in that data means "called from somewhere inside the rebuilt image",
-which counts **the WM3 library calling itself** and is therefore a superset of what
-`src/` runs.  The rules settle it in three rounds: the withdrawal probe as a
-filter, the argument type at the call site (a template instantiation is decided
-there), then the chain up to `src/`.
+| value | meaning | count |
+|---|---|---:|
+| **已匹配** | the row is compared against the retail and passes bit for bit | 75 |
+| **未匹配** | the target has no row - it is a Wild Magic function the table does not cover | 0 |
+| **失败** | the row is compared against the retail and fails | 81 |
+| **不适用** | no row is the right answer for the target | 0 |
+
+Every target in this ledger **is** a table row, so only **已匹配** and **失败**
+occur here; **未匹配** and **不适用** are the values a *function without a row*
+would carry, and they are the two ways a newly reachable Wild Magic member can
+still need work.
+
+## The counts
 
 | | |
-|---|---|
-| symbol-table entries | 228 |
-| of which not WM3 functions | 9 |
-| **Wild Magic functions** | **219** |
-| **`已匹配`** - a row covers it and passes | **76** |
-| **`未匹配`** - a WM3 function with no row | **0** |
-| **`失败`** - a row exists and fails | **0** |
-| **`不适用`** - no row is the right answer | **143** |
-| wmdiff rows in the table | 156 |
+|---|---:|
+| rows in the table | **156** |
+| **executed** - the engine can reach the row | **46** |
+| **dead** - the engine cannot reach the row | **110** |
+| **unsettled** - reachability not decided | **0** |
+| rows the harness runs by default | **46** |
+| rows the harness skips unless `--include-dead` is given | **110** |
+| of the default run: **已匹配** | **34** |
+| of the default run: **失败** | **12** |
+| of the whole table: **已匹配** | **75** |
+| of the whole table: **失败** | **81** |
+
+**A function the main project does not call does not need a comparison entry.**
+That is the rule this ledger applies: the 110 dead rows stay in the table (they
+were verified bit for bit at some point, and they cost nothing to keep), but
+the harness skips them by default, so the pass/fail line is about the code the
+engine actually runs.
+
+## How this was decided
+
+Three rules, in the order they were applied.
+
+1. **A `src/` call site that names the member** decides it - the member is
+   `executed`.  The call site is quoted, with the file and the line.
+2. **Otherwise, a Wild Magic call from a reached member** decides it - the
+   member is `executed` if Wild Magic itself calls it from a member that
+   rule 1 (or rule 2) already reached.  The chain is quoted: the `src/` line,
+   the Wild Magic file and line, and the member it calls.
+3. **Otherwise the row is `dead`.**  The evidence for a `dead` row is the
+   **search that found nothing** - the `grep` over `src/`, and, where the
+   member is reachable only through Wild Magic, the `grep` over
+   `dependencies/WildMagic3p8/Foundation/` that shows the caller is itself
+   unreachable.  "Not found" without the search is not evidence.
+
+Two rules of thumb that came out of the audit:
+
+* **"The class is executed" is not "the member is executed."**  The engine
+  calls `IntrBox2Circle2f::Test()` and never the swept `Find`; it calls
+  `IntrSegment3Sphere3f::Find()` and never `Test`; it calls
+  `IntrSegment3Box3f::Find()` and never `Test`.  Those three families of
+  members are `dead` even though the class is very much alive.
+* **A `double` instantiation is `dead` by default.**  No `src/` line passes a
+  `double` argument to a Wild Magic template
+  (`grep -rn "Vector3d\|Vector2d" src/` -> 0;
+  `grep -rn "\bdouble\b" src/` | grep -i wm3 -> 0), so every `double`
+  instantiation is linked but never executed.  See `double-audit.md`.
+
+No row is **unsettled**: every one of the 156 rows was settled either by a
+quoted `src/` call site or by a quoted search that found nothing.
 
 ## The table
 
-| # | symbol | file | wmdiff |
-|---:|---|---|---|
-| 1 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)` | Wm3ContBox3.cpp | **已匹配** |
-| 2 | `Wm3::InBox<float>(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | Wm3ContBox3.cpp | **已匹配** |
-| 3 | `Wm3::DistSegment3Segment3<float>::DistSegment3Segment3(const Wm3::Segment3<float>&, const Wm3::Segment3<float>&)` | Wm3DistSegment3Segment3.cpp | **不适用** |
-| 4 | `Wm3::DistSegment3Segment3<float>::Get()` | Wm3DistSegment3Segment3.cpp | **已匹配** |
-| 5 | `Wm3::DistSegment3Segment3<float>::GetSquared()` | Wm3DistSegment3Segment3.cpp | **已匹配** |
-| 6 | `Wm3::DistSegment3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistSegment3Segment3.cpp | **已匹配** |
-| 7 | `Wm3::DistSegment3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistSegment3Segment3.cpp | **已匹配** |
-| 8 | `Wm3::DistVector2Box2<float>::DistVector2Box2(const Wm3::Vector2<float>&, const Wm3::Box2<float>&)` | Wm3DistVector2Box2.cpp | **不适用** |
-| 9 | `Wm3::DistVector2Box2<float>::Get()` | Wm3DistVector2Box2.cpp | **已匹配** |
-| 10 | `Wm3::DistVector2Box2<float>::GetSquared()` | Wm3DistVector2Box2.cpp | **已匹配** |
-| 11 | `Wm3::DistVector2Box2<float>::Get(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3DistVector2Box2.cpp | **已匹配** |
-| 12 | `Wm3::DistVector2Box2<float>::GetSquared(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3DistVector2Box2.cpp | **已匹配** |
-| 13 | `Wm3::DistVector3Box3<float>::DistVector3Box3(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | Wm3DistVector3Box3.cpp | **不适用** |
-| 14 | `Wm3::DistVector3Box3<float>::Get()` | Wm3DistVector3Box3.cpp | **已匹配** |
-| 15 | `Wm3::DistVector3Box3<float>::GetSquared()` | Wm3DistVector3Box3.cpp | **已匹配** |
-| 16 | `Wm3::DistVector3Box3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistVector3Box3.cpp | **已匹配** |
-| 17 | `Wm3::DistVector3Box3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistVector3Box3.cpp | **已匹配** |
-| 18 | `Wm3::DistVector3Segment3<float>::DistVector3Segment3(const Wm3::Vector3<float>&, const Wm3::Segment3<float>&)` | Wm3DistVector3Segment3.cpp | **不适用** |
-| 19 | `Wm3::DistVector3Segment3<float>::Get()` | Wm3DistVector3Segment3.cpp | **已匹配** |
-| 20 | `Wm3::DistVector3Segment3<float>::GetSquared()` | Wm3DistVector3Segment3.cpp | **已匹配** |
-| 21 | `Wm3::DistVector3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistVector3Segment3.cpp | **已匹配** |
-| 22 | `Wm3::DistVector3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3DistVector3Segment3.cpp | **已匹配** |
-| 23 | `Wm3::Distance<float, Wm3::Vector2<float>>::Distance()` | Wm3Distance.cpp | **不适用** |
-| 24 | `Wm3::Distance<float, Wm3::Vector3<float>>::Distance()` | Wm3Distance.cpp | **已匹配** |
-| 25 | `Wm3::Distance<float, Wm3::Vector2<float>>::~Distance()` | Wm3Distance.cpp | **不适用** |
-| 26 | `Wm3::Distance<float, Wm3::Vector3<float>>::~Distance()` | Wm3Distance.cpp | **不适用** |
-| 27 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetClosestPoint1() const` | Wm3Distance.cpp | **已匹配** |
-| 28 | `Wm3::Distance<float, Wm3::Vector2<float>>::SetDifferenceStep(float)` | Wm3Distance.cpp | **不适用** |
-| 29 | `Wm3::Distance<float, Wm3::Vector3<float>>::SetDifferenceStep(float)` | Wm3Distance.cpp | **已匹配** |
-| 30 | `Wm3::Distance<float, Wm3::Vector2<float>>::GetDerivative(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | **不适用** |
-| 31 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivative(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Distance.cpp | **已匹配** |
-| 32 | `Wm3::Distance<float, Wm3::Vector2<float>>::GetDerivativeSquared(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | **不适用** |
-| 33 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivativeSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Distance.cpp | **已匹配** |
-| 34 | `Wm3::Distance<float, Wm3::Vector2<float>>::Get(float, float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | **不适用** |
-| 35 | `Wm3::Distance<float, Wm3::Vector3<float>>::Get(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Distance.cpp | **已匹配** |
-| 36 | `Wm3::Distance<float, Wm3::Vector2<float>>::GetSquared(float, float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | **不适用** |
-| 37 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetSquared(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Distance.cpp | **已匹配** |
-| 38 | `Wm3::Intersector<float, Wm3::Vector2<float>>::Intersector()` | Wm3Intersector.cpp | **不适用** |
-| 39 | `Wm3::Intersector<float, Wm3::Vector3<float>>::Intersector()` | Wm3Intersector.cpp | **不适用** |
-| 40 | `Wm3::Intersector<float, Wm3::Vector2<float>>::~Intersector()` | Wm3Intersector.cpp | **不适用** |
-| 41 | `Wm3::Intersector<float, Wm3::Vector3<float>>::~Intersector()` | Wm3Intersector.cpp | **不适用** |
-| 42 | `Wm3::Intersector<float, Wm3::Vector2<float>>::Test()` | Wm3Intersector.cpp | **不适用** |
-| 43 | `Wm3::Intersector<float, Wm3::Vector3<float>>::Test()` | Wm3Intersector.cpp | **不适用** |
-| 44 | `Wm3::Intersector<float, Wm3::Vector2<float>>::Find()` | Wm3Intersector.cpp | **不适用** |
-| 45 | `Wm3::Intersector<float, Wm3::Vector3<float>>::Find()` | Wm3Intersector.cpp | **不适用** |
-| 46 | `Wm3::Intersector<float, Wm3::Vector2<float>>::Test(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Intersector.cpp | **不适用** |
-| 47 | `Wm3::Intersector<float, Wm3::Vector3<float>>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Intersector.cpp | **不适用** |
-| 48 | `Wm3::Intersector<float, Wm3::Vector2<float>>::Find(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Intersector.cpp | **不适用** |
-| 49 | `Wm3::Intersector<float, Wm3::Vector3<float>>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Intersector.cpp | **不适用** |
-| 50 | `Wm3::IntrBox2Box2<float>::IntrBox2Box2(const Wm3::Box2<float>&, const Wm3::Box2<float>&)` | Wm3IntrBox2Box2.cpp | **不适用** |
-| 51 | `Wm3::IntrBox2Box2<float>::Test()` | Wm3IntrBox2Box2.cpp | **已匹配** |
-| 52 | `Wm3::IntrBox2Circle2<float>::IntrBox2Circle2(const Wm3::Box2<float>&, const Wm3::Circle2<float>&)` | Wm3IntrBox2Circle2.cpp | **不适用** |
-| 53 | `Wm3::IntrBox2Circle2<float>::Test()` | Wm3IntrBox2Circle2.cpp | **已匹配** |
-| 54 | `Wm3::IntrBox2Circle2<float>::Find(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3IntrBox2Circle2.cpp | **已匹配** |
-| 55 | `Wm3::IntrBox2Circle2<float>::TestVertexRegion(float, float, float, float, float, float, float&, float&)` | Wm3IntrBox2Circle2.cpp | **已匹配** |
-| 56 | `Wm3::IntrBox2Circle2<float>::TestEdgeRegion(float, float, float, float, float, float, float&, float&)` | Wm3IntrBox2Circle2.cpp | **已匹配** |
-| 57 | `Wm3::IntrBox3Sphere3<float>::IntrBox3Sphere3(const Wm3::Box3<float>&, const Wm3::Sphere3<float>&)` | Wm3IntrBox3Sphere3.cpp | **不适用** |
-| 58 | `Wm3::IntrBox3Sphere3<float>::Test()` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 59 | `Wm3::IntrBox3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 60 | `Wm3::IntrBox3Sphere3<float>::GetContactPoint() const` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 61 | `Wm3::IntrBox3Sphere3<float>::GetVertexIntersection(float, float, float, float, float, float, float)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 62 | `Wm3::IntrBox3Sphere3<float>::GetEdgeIntersection(float, float, float, float, float, float)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 63 | `Wm3::IntrBox3Sphere3<float>::FindFaceRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 64 | `Wm3::IntrBox3Sphere3<float>::FindJustEdgeIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 65 | `Wm3::IntrBox3Sphere3<float>::FindEdgeRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 66 | `Wm3::IntrBox3Sphere3<float>::FindVertexRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | Wm3IntrBox3Sphere3.cpp | **已匹配** |
-| 67 | `Wm3::Dot24x(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | **不适用** |
-| 68 | `Wm3::Cross24(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | **不适用** |
-| 69 | `Wm3::Sub24Vector(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | **不适用** |
-| 70 | `Wm3::IntrLine3Box3<float>::IntrLine3Box3(const Wm3::Line3<float>&, const Wm3::Box3<float>&)` | Wm3IntrLine3Box3.cpp | **不适用** |
-| 71 | `Wm3::IntrLine3Box3<float>::Test()` | Wm3IntrLine3Box3.cpp | **已匹配** |
-| 72 | `Wm3::IntrLine3Box3<float>::Find()` | Wm3IntrLine3Box3.cpp | **已匹配** |
-| 73 | `Wm3::IntrLine3Box3<float>::DoClipping(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Box3<float>&, bool, int&, Wm3::Vector3<float>*, int&)` | Wm3IntrLine3Box3.cpp | **已匹配** |
-| 74 | `Wm3::IntrLine3Box3<float>::Clip(float, float, float&, float&)` | Wm3IntrLine3Box3.cpp | **已匹配** |
-| 75 | `Wm3::IntrLine3Capsule3<float>::Find(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Capsule3<float>&, float*)` | Wm3IntrLine3Capsule3.cpp | **已匹配** |
-| 76 | `Wm3::IntrSegment3Box3<float>::IntrSegment3Box3(const Wm3::Segment3<float>&, const Wm3::Box3<float>&, bool)` | Wm3IntrSegment3Box3.cpp | **不适用** |
-| 77 | `Wm3::IntrSegment3Box3<float>::Test()` | Wm3IntrSegment3Box3.cpp | **已匹配** |
-| 78 | `Wm3::IntrSegment3Box3<float>::Find()` | Wm3IntrSegment3Box3.cpp | **已匹配** |
-| 79 | `Wm3::IntrSegment3Box3<float>::GetPoint(int) const` | Wm3IntrSegment3Box3.cpp | **已匹配** |
-| 80 | `Wm3::IntrSegment3Capsule3<float>::IntrSegment3Capsule3(const Wm3::Segment3<float>&, const Wm3::Capsule3<float>&)` | Wm3IntrSegment3Capsule3.cpp | **不适用** |
-| 81 | `Wm3::IntrSegment3Capsule3<float>::Test()` | Wm3IntrSegment3Capsule3.cpp | **已匹配** |
-| 82 | `Wm3::IntrSegment3Capsule3<float>::Find()` | Wm3IntrSegment3Capsule3.cpp | **已匹配** |
-| 83 | `Wm3::IntrSegment3Capsule3<float>::GetParameter(int) const` | Wm3IntrSegment3Capsule3.cpp | **已匹配** |
-| 84 | `Wm3::IntrSegment3Sphere3<float>::IntrSegment3Sphere3(const Wm3::Segment3<float>&, const Wm3::Sphere3<float>&)` | Wm3IntrSegment3Sphere3.cpp | **不适用** |
-| 85 | `Wm3::IntrSegment3Sphere3<float>::Test()` | Wm3IntrSegment3Sphere3.cpp | **已匹配** |
-| 86 | `Wm3::IntrSegment3Sphere3<float>::Find()` | Wm3IntrSegment3Sphere3.cpp | **已匹配** |
-| 87 | `Wm3::IntrSegment3Sphere3<float>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrSegment3Sphere3.cpp | **已匹配** |
-| 88 | `Wm3::IntrSegment3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrSegment3Sphere3.cpp | **已匹配** |
-| 89 | `Wm3::IntrSegment3Sphere3<float>::GetPoint(int) const` | Wm3IntrSegment3Sphere3.cpp | **已匹配** |
-| 90 | `Wm3::AxisAlignedBox3<float>::AxisAlignedBox3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3AxisAlignedBox3.h | **不适用** |
-| 91 | `Wm3::AxisAlignedBox3<float>::AxisAlignedBox3()` | Wm3AxisAlignedBox3.inl | **不适用** |
-| 92 | `Wm3::AxisAlignedBox3<float>::TestIntersection(const Wm3::AxisAlignedBox3<float>&) const` | Wm3AxisAlignedBox3.inl | **已匹配** |
-| 93 | `Wm3::Box2<float>::Box2()` | Wm3Box2.inl | **不适用** |
-| 94 | `Wm3::Box2<float>::Box2(const Wm3::Vector2<float>&, const Wm3::Vector2<float>*, const float*)` | Wm3Box2.inl | **不适用** |
-| 95 | `Wm3::Box2<float>::Box2(const Wm3::Vector2<float>&, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&, float, float)` | Wm3Box2.inl | **不适用** |
-| 96 | `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Box3.h | **不适用** |
-| 97 | `Wm3::Box3<float>::Box3()` | Wm3Box3.inl | **不适用** |
-| 98 | `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>*, const float*)` | Wm3Box3.inl | **不适用** |
-| 99 | `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, float, float, float)` | Wm3Box3.inl | **不适用** |
-| 100 | `Wm3::Box3<float>::ComputeVertices(Wm3::Vector3<float>*) const` | Wm3Box3.inl | **已匹配** |
-| 101 | `Wm3::Capsule3<float>::Capsule3()` | Wm3Capsule3.inl | **不适用** |
-| 102 | `Wm3::Circle2<float>::Circle2(const Wm3::Vector2<float>&, float)` | Wm3Circle2.inl | **不适用** |
-| 103 | `Wm3::IVector2<int>::IVector2()` | Wm3IVector2.h | **不适用** |
-| 104 | `Wm3::IVector2<int>::IVector2(int, int)` | Wm3IVector2.h | **不适用** |
-| 105 | `Wm3::IVector2<int>::X() const` | Wm3IVector2.h | **不适用** |
-| 106 | `Wm3::IVector2<int>::Y() const` | Wm3IVector2.h | **不适用** |
-| 107 | `Wm3::IVector2<int>::operator<(const Wm3::IVector2<int>&) const` | Wm3IVector2.h | **不适用** |
-| 108 | `Wm3::Line3<float>::Line3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Line3.inl | **不适用** |
-| 109 | `Wm3::Math<float>::Cos(float)` | Wm3Math.inl | **不适用** |
-| 110 | `Wm3::Math<float>::FAbs(float)` | Wm3Math.inl | **已匹配** |
-| 111 | `Wm3::Math<float>::InvSqrt(float)` | Wm3Math.inl | **已匹配** |
-| 112 | `Wm3::Math<float>::Sin(float)` | Wm3Math.inl | **不适用** |
-| 113 | `Wm3::Math<float>::Sqrt(float)` | Wm3Math.inl | **已匹配** |
-| 114 | `Wm3::Matrix3<float>::Matrix3(bool)` | Wm3Matrix3.inl | **不适用** |
-| 115 | `Wm3::Matrix3<float>::operator()(int, int)` | Wm3Matrix3.inl | **不适用** |
-| 116 | `Wm3::Matrix3<float>::I(int, int)` | Wm3Matrix3.inl | **不适用** |
-| 117 | `Wm3::Matrix3<float>::MakeZero()` | Wm3Matrix3.inl | **不适用** |
-| 118 | `Wm3::Matrix3<float>::MakeIdentity()` | Wm3Matrix3.inl | **不适用** |
-| 119 | `Wm3::Matrix3<float>::operator*(const Wm3::Vector3<float>&) const` | Wm3Matrix3.inl | **不适用** |
-| 120 | `Wm3::Plane3<float>::Plane3()` | Wm3Plane3.inl | **不适用** |
-| 121 | `Wm3::Plane3<float>::Plane3(const Wm3::Plane3<float>&)` | Wm3Plane3.inl | **不适用** |
-| 122 | `Wm3::Plane3<float>::Plane3(const Wm3::Vector3<float>&, float)` | Wm3Plane3.inl | **不适用** |
-| 123 | `Wm3::Plane3<float>::operator=(const Wm3::Plane3<float>&)` | Wm3Plane3.inl | **不适用** |
-| 124 | `Wm3::Quaternion<float>::Quaternion(const Wm3::Vector3<float>&, float)` | Wm3Quaternion.h | **不适用** |
-| 125 | `Wm3::Quaternion<float>::Quaternion()` | Wm3Quaternion.h | **不适用** |
-| 126 | `Wm3::Quaternion<float>::Quaternion(float, float, float, float)` | Wm3Quaternion.h | **不适用** |
-| 127 | `Wm3::Quaternion<float>::Identity()` | Wm3Quaternion.h | **不适用** |
-| 128 | `Wm3::Quaternion<float>::LengthSq(const Wm3::Quaternion<float>&)` | Wm3Quaternion.h | **不适用** |
-| 129 | `Wm3::Quaternion<float>::Quaternion(const Wm3::Quaternion<float>&)` | Wm3Quaternion.inl | **不适用** |
-| 130 | `Wm3::Quaternion<float>::operator[](int)` | Wm3Quaternion.inl | **不适用** |
-| 131 | `Wm3::Quaternion<float>::W() const` | Wm3Quaternion.inl | **不适用** |
-| 132 | `Wm3::Quaternion<float>::X() const` | Wm3Quaternion.inl | **不适用** |
-| 133 | `Wm3::Quaternion<float>::Y() const` | Wm3Quaternion.inl | **不适用** |
-| 134 | `Wm3::Quaternion<float>::Z() const` | Wm3Quaternion.inl | **不适用** |
-| 135 | `Wm3::Quaternion<float>::operator=(const Wm3::Quaternion<float>&)` | Wm3Quaternion.inl | **不适用** |
-| 136 | `Wm3::Quaternion<float>::CompareArrays(const Wm3::Quaternion<float>&) const` | Wm3Quaternion.inl | **已匹配** |
-| 137 | `Wm3::Quaternion<float>::operator==(const Wm3::Quaternion<float>&) const` | Wm3Quaternion.inl | **已匹配** |
-| 138 | `Wm3::Quaternion<float>::operator!=(const Wm3::Quaternion<float>&) const` | Wm3Quaternion.inl | **不适用** |
-| 139 | `Wm3::Quaternion<float>::operator*(float) const` | Wm3Quaternion.inl | **不适用** |
-| 140 | `Wm3::Quaternion<float>::ToRotationMatrix(Wm3::Matrix3<float>&) const` | Wm3Quaternion.inl | **不适用** |
-| 141 | `Wm3::Quaternion<float>::FromAxisAngle(const Wm3::Vector3<float>&, float)` | Wm3Quaternion.inl | **不适用** |
-| 142 | `Wm3::Quaternion<float>::Length() const` | Wm3Quaternion.inl | **不适用** |
-| 143 | `Wm3::Quaternion<float>::Normalize()` | Wm3Quaternion.inl | **不适用** |
-| 144 | `Wm3::Quaternion<float>::Rotate(const Wm3::Vector3<float>&)` | Wm3Quaternion.inl | **不适用** |
-| 145 | `Wm3::Segment3<float>::Segment3()` | Wm3Segment3.inl | **不适用** |
-| 146 | `Wm3::Segment3<float>::Segment3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, float)` | Wm3Segment3.inl | **不适用** |
-| 147 | `Wm3::Sphere3<float>::Sphere3()` | Wm3Sphere3.inl | **不适用** |
-| 148 | `Wm3::Sphere3<float>::Sphere3(const Wm3::Vector3<float>&, float)` | Wm3Sphere3.inl | **已匹配** |
-| 149 | `Wm3::Sphere3<float>::operator=(const Wm3::Sphere3<float>&)` | Wm3Sphere3.inl | **不适用** |
-| 150 | `Wm3::Vector2<float>::Vector2()` | Wm3Vector2.h | **不适用** |
-| 151 | `Wm3::Vector2<float>::Vector2(float, float)` | Wm3Vector2.h | **不适用** |
-| 152 | `Wm3::Vector2<float>::Vector2(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | **不适用** |
-| 153 | `Wm3::Vector2<float>::operator[](int) const` | Wm3Vector2.inl | **不适用** |
-| 154 | `Wm3::Vector2<float>::operator[](int)` | Wm3Vector2.inl | **不适用** |
-| 155 | `Wm3::Vector2<float>::X() const` | Wm3Vector2.inl | **不适用** |
-| 156 | `Wm3::Vector2<float>::X()` | Wm3Vector2.inl | **不适用** |
-| 157 | `Wm3::Vector2<float>::Y() const` | Wm3Vector2.inl | **不适用** |
-| 158 | `Wm3::Vector2<float>::Y()` | Wm3Vector2.inl | **不适用** |
-| 159 | `Wm3::Vector2<float>::operator=(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | **不适用** |
-| 160 | `Wm3::Vector2<float>::operator+(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | **不适用** |
-| 161 | `Wm3::Vector2<float>::operator-(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | **不适用** |
-| 162 | `Wm3::operator*(float, const Wm3::Vector2<float>&)` | Wm3Vector2.inl | **不适用** |
-| 163 | `Wm3::Vector2<float>::operator+=(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | **不适用** |
-| 164 | `Wm3::Vector2<float>::Length() const` | Wm3Vector2.inl | **不适用** |
-| 165 | `Wm3::Vector2<float>::Dot(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | **不适用** |
-| 166 | `Wm3::Vector2<float>::Normalize()` | Wm3Vector2.inl | **不适用** |
-| 167 | `Wm3::Wm3Detail::RoundTo24(double)` | Wm3Vector3.h | **不适用** |
-| 168 | `Wm3::Wm3Detail::Mul24(double, double)` | Wm3Vector3.h | **不适用** |
-| 169 | `Wm3::Wm3Detail::Add24(double, double)` | Wm3Vector3.h | **不适用** |
-| 170 | `Wm3::Wm3Detail::Sub24(double, double)` | Wm3Vector3.h | **不适用** |
-| 171 | `Wm3::Wm3Detail::Div24(double, double)` | Wm3Vector3.h | **不适用** |
-| 172 | `Wm3::Vector3<float>::Vector3()` | Wm3Vector3.h | **不适用** |
-| 173 | `Wm3::Vector3<float>::Vector3(float, float, float)` | Wm3Vector3.h | **不适用** |
-| 174 | `Wm3::Vector3<float>::Zero()` | Wm3Vector3.h | **不适用** |
-| 175 | `Wm3::Vector3<float>::NaN()` | Wm3Vector3.h | **不适用** |
-| 176 | `Wm3::Vector3<float>::Add(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 177 | `Wm3::Vector3<float>::Sub(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 178 | `Wm3::Vector3<float>::Scale(const Wm3::Vector3<float>&, float)` | Wm3Vector3.h | **不适用** |
-| 179 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **已匹配** |
-| 180 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **已匹配** |
-| 181 | `Wm3::Vector3<float>::LengthSq(const Wm3::Vector3<float>&)` | Wm3Vector3.h | **已匹配** |
-| 182 | `Wm3::Vector3<float>::Length(const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 183 | `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>&, float)` | Wm3Vector3.h | **已匹配** |
-| 184 | `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>*, float)` | Wm3Vector3.h | **不适用** |
-| 185 | `Wm3::Vector3<float>::DistanceSq3D(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 186 | `Wm3::Vector3<float>::DistanceSqXZ(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 187 | `Wm3::Vector3<float>::IsntNaN(const Wm3::Vector3<float>*)` | Wm3Vector3.h | **不适用** |
-| 188 | `Wm3::Vector3<float>::IsntNaN(const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 189 | `Wm3::Vector3<float>::IsInvalid(const Wm3::Vector3<float>&)` | Wm3Vector3.h | **不适用** |
-| 190 | `Wm3::Vector3fIsntNaN(const Wm3::Vector3<float>*)` | Wm3Vector3.h | **不适用** |
-| 191 | `Wm3::SqrtfBinary(float)` | Wm3Vector3.h | **已匹配** |
-| 192 | `Wm3::Vector3<float>::Vector3(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | **不适用** |
-| 193 | `Wm3::Vector3<float>::operator const float*() const` | Wm3Vector3.inl | **不适用** |
-| 194 | `Wm3::Vector3<float>::operator[](int) const` | Wm3Vector3.inl | **不适用** |
-| 195 | `Wm3::Vector3<float>::operator[](int)` | Wm3Vector3.inl | **不适用** |
-| 196 | `Wm3::Vector3<float>::X() const` | Wm3Vector3.inl | **不适用** |
-| 197 | `Wm3::Vector3<float>::X()` | Wm3Vector3.inl | **不适用** |
-| 198 | `Wm3::Vector3<float>::Y() const` | Wm3Vector3.inl | **不适用** |
-| 199 | `Wm3::Vector3<float>::Y()` | Wm3Vector3.inl | **不适用** |
-| 200 | `Wm3::Vector3<float>::Z() const` | Wm3Vector3.inl | **不适用** |
-| 201 | `Wm3::Vector3<float>::Z()` | Wm3Vector3.inl | **不适用** |
-| 202 | `Wm3::Vector3<float>::operator=(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | **不适用** |
-| 203 | `Wm3::Vector3<float>::CompareArrays(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **已匹配** |
-| 204 | `Wm3::Vector3<float>::operator==(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **已匹配** |
-| 205 | `Wm3::Vector3<float>::operator!=(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **不适用** |
-| 206 | `Wm3::Vector3<float>::operator+(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **不适用** |
-| 207 | `Wm3::Vector3<float>::operator-(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **不适用** |
-| 208 | `Wm3::Vector3<float>::operator*(float) const` | Wm3Vector3.inl | **不适用** |
-| 209 | `Wm3::Vector3<float>::operator/(float) const` | Wm3Vector3.inl | **不适用** |
-| 210 | `Wm3::operator*(float, const Wm3::Vector3<float>&)` | Wm3Vector3.inl | **不适用** |
-| 211 | `Wm3::Vector3<float>::operator+=(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | **不适用** |
-| 212 | `Wm3::Vector3<float>::operator/=(float)` | Wm3Vector3.inl | **不适用** |
-| 213 | `Wm3::Vector3<float>::Length() const` | Wm3Vector3.inl | **已匹配** |
-| 214 | `Wm3::Vector3<float>::SquaredLength() const` | Wm3Vector3.inl | **已匹配** |
-| 215 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **已匹配** |
-| 216 | `Wm3::Vector3<float>::Normalize()` | Wm3Vector3.inl | **已匹配** |
-| 217 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | **已匹配** |
-| 218 | `Wm3::Vector3<float>::GenerateOrthonormalBasis(Wm3::Vector3<float>&, Wm3::Vector3<float>&, Wm3::Vector3<float>&, bool)` | Wm3Vector3.inl | **已匹配** |
-| 219 | `Wm3::Vector3<float>::ComputeExtremes(int, const Wm3::Vector3<float>*, Wm3::Vector3<float>&, Wm3::Vector3<float>&)` | Wm3Vector3.inl | **不适用** |
+### `Wm3::Vector3<float>`
 
-## Notes
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 1 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452AD0` | yes | `src/moho/render/camera/VTransform.h:284` `Wm3::Vec3f::Dot(rotatedNormal, transform.pos_)`; `src/moho/render/CWldTerrainDecal.cpp:65` | 失败 |
+| 2 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&) const` | `0x00452AD0` | yes | one Wild Magic call from row 5: `src/moho/collision/CColPrimitiveBase.cpp:430` -> `DistVector3Box3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Box3.cpp:56` `kDiff.Dot(m_rkBox.Axis[i])` | 失败 |
+| 3 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452BC0` | yes | `src/moho/audio/AudioEngine.cpp:1197,1199`; `src/moho/collision/CColPrimitiveBase.cpp:140,221` | 已匹配 |
+| 4 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&) const` | `0x00452BC0` | yes | one Wild Magic call from row 21: `src/moho/ui/UiRuntimeTypes.cpp:21008` -> `IntrLine3Box3f::Test()` -> `Foundation/Intersection/Wm3IntrLine3Box3.cpp:44` `m_rkLine.Direction.Cross(kDiff)` | 已匹配 |
+| 5 | `Wm3::Vector3<float>::LengthSq(const Wm3::Vector3<float>&)` | `0x004757E0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:165,394,587,620`; `src/moho/audio/AudioEngine.cpp:1134`; `src/moho/ai/CAiSteeringImpl.cpp:603,637` | 失败 |
+| 6 | `Wm3::Vector3<float>::SquaredLength() const` | `0x004757E0` | yes | one Wild Magic call from row 17: `src/moho/projectile/Projectile.cpp:1553` -> `DistVector3Segment3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Segment3.cpp:72` `kDiff.SquaredLength()` | 失败 |
+| 7 | `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>&, float)` | `0x00452AF0` | yes | `src/moho/entity/Entity.cpp:7664,7862,7867,7979` `Wm3::Vector3f::Normalize(&pushedUp)` -> `Foundation/Math/Wm3Vector3.h:177` -> this `Vector3&` overload | 已匹配 |
+| 8 | `Wm3::Vector3<float>::Normalize()` | `0x00452AF0` | no | `grep -rn "\.Normalize()" src/` -> only `Wm3::Vector3f::Normalize(&v)` (the *pointer* overload, row 7). This member's own callers are `Foundation/Math/Wm3Vector3.inl:322` (`UnitCross`), `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:143,176` and `Foundation/Containment/Wm3ContBox3.cpp:288,430,436,447` - none of them reachable. (The retail body `0x00452AF0` stays covered by row 7.) | 已匹配 |
+| 137 | `Wm3::Vector3<float>::GenerateOrthonormalBasis(Wm3::Vector3<float>&, Wm3::Vector3<float>&, Wm3::Vector3<float>&, bool)` | `0x00A3CF80` | no | `grep -rn "GenerateOrthonormalBasis\|Orthonormalize" src/` -> 0 hits. The Wild Magic callers (`Foundation/Containment/Wm3ContBox3.cpp:292,307,369`, `Wm3ContCapsule3.cpp:52`, `Foundation/Intersection/Wm3IntrLine3Capsule3.cpp:99`, ...) are all in classes `src/` never reaches. | 失败 |
+| 151 | `Wm3::Vector3<float>::Length() const` | `0x00452A90` | yes | `src/moho/ai/CAiSteeringImpl.cpp:198` `velocity.Length()` and `:1458` `mOwnerUnit->GetVelocity().Length()` (the argument is `const Wm3::Vector3f&`, `CAiSteeringImpl.cpp:191`) | 已匹配 |
+| 152 | `Wm3::Vector3<float>::CompareArrays(const Wm3::Vector3<float>&) const` | `0x004F0A50` | yes | `src/moho/render/camera/VTransform.cpp:174` `pos_ != rhs.pos_` and `src/moho/entity/CTextureScroller.cpp:553` `pos_ == ...pos_`; `operator!=` / `operator==` both call `CompareArrays` (`Foundation/Math/Wm3Vector3.inl:109,115`) | 已匹配 |
+| 153 | `Wm3::Vector3<float>::operator==(const Wm3::Vector3<float>&) const` | `0x004F08B0` | yes | `src/moho/entity/CTextureScroller.cpp:553` `entityData.mCurTransform.pos_ == entityData.mLastTransform.pos_` (both `Wm3::Vector3f`) | 已匹配 |
 
-### The `未匹配` queue
+### `Wm3`
 
-**0 in all.**  Every Wild Magic function the engine executes now has a settled
-answer - a passing entry (`已匹配`) or a documented reason why no entry can exist
-(`不适用`).  The two tiers stay because a newly reachable member has to land in one
-of them:
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 9 | `Wm3::SqrtfBinary(float)` | `0x00452FC0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:171,394,442,587,620,645` | 已匹配 |
+| 47 | `Wm3::InBox<float>(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | `0x00A3BC10` | yes | `src/moho/collision/CColPrimitiveBase.cpp:457` | 已匹配 |
+| 50 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*)` | `0x00A3AE40` | yes | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26` | 已匹配 |
+| 57 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)` | `0x00A3AE40` | yes | the same C++ function as row 50 (`Foundation/Containment/Wm3ContBox3.h:27`; the mask argument defaults to null) - reached through `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`. | 失败 |
+| 58 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*)` | `0x00A685F0` | no | `grep -rn "ContAlignedBox" src/` -> one call, `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`, whose argument is `Wm3::Vector3f vertices[8]` (same file `:23`) => only the 3D overload is instantiated. The 2D overload (`Foundation/Containment/Wm3ContBox2.cpp:20`) has no caller at all. | 已匹配 |
+| 59 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*, const bool*)` | `0x00A685F0` | no | `grep -rn "ContAlignedBox" src/` -> one call, `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`, whose argument is `Wm3::Vector3f vertices[8]` => only the 3D overload is instantiated. | 失败 |
 
-| tier | count | what it is |
-|---|---:|---|
-| **pairable now** | **0** | **none** |
-| **not yet established** | 0 | **none** - the retail body question was settled for every member |
+### `Wm3::Math<float>`
 
-The first tier is the pairing queue: a `src/` call site that names **that**
-member, and a retail body with an address.  The second tier is the same
-question asked and not yet answered - `unreviewed` is the honest status, and
-these are not work until the retail block has been read.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 10 | `Wm3::Math<float>::FAbs(float)` | `0x0040DAB0` | yes | one Wild Magic call from row 33: `src/moho/ai/CAiSteeringImpl.cpp:273` -> `IntrBox2Box2f::Test()` -> `Foundation/Intersection/Wm3IntrBox2Box2.cpp:53` `Math<Real>::FAbs(...)` | 已匹配 |
+| 11 | `Wm3::Math<float>::InvSqrt(float)` | `0x0050D150` | no | `grep -rn "InvSqrt" src/` -> 4 hits, all the engine's own `moho::CoordsScaleByInvSqrt` (`src/moho/math/QuaternionMath.cpp:972`), never `Wm3::Math<float>::InvSqrt`. The Wild Magic callers are `Foundation/Approximation/Wm3ApprCylinderFit3.cpp:45`, `Foundation/Containment/Wm3ContBox3.cpp:571` (`MergeBoxes`) and `Foundation/Math/Wm3Quaternion.inl:790` - every one of them in a class `src/` never reaches. | 失败 |
+| 12 | `Wm3::Math<float>::Sqrt(float)` | `0x00452FC0` | yes | one Wild Magic call from row 20: `src/moho/vision/VisionDB.cpp:89` -> `IntrBox2Circle2f::Test()` -> `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:42` -> `Foundation/Distance/Wm3DistVector2Box2.cpp:40` `Math<Real>::Sqrt(GetSquared())` | 已匹配 |
 
-### `不适用` - three different reasons behind one word
+### `Wm3::AxisAlignedBox3<float>`
 
-* **not executed** (57): the engine has no call site for the member.  Every
-  `double` instantiation is here - no `src/` line anywhere passes a double
-  argument to a Wild Magic template - and so are the three hull classes in both
-  precisions and `Eigen` in both.  Rows already in the table for those classes
-  are kept: verified, bit-exact, and they cost nothing, but they are not
-  engine-facing and no further work goes into them.
-* **executed, but no retail body** (52): the retail inlines the member at every
-  call site, so there is no address to pair.  This is a finding, not a gap - the
-  evidence is the retail block that was read, and it is recorded in the note.
-  `Quaternion<float>::Rotate` is the clearest case: the engine calls it, and the
-  WM3.8 `Quaternion.cpp` block holds only `CompareArrays` and the two
-  `operator==` wrappers.
-* **executed, but a row could not discriminate** (13): eight constructors
-  whose objects hold **references** - the compared bytes are the caller's
-  addresses, and their bases leave fields uninitialised - and the two
-  `Intersector` constructors, where skipping the vtable pointer leaves only
-  `m_fContactTime = 0.0` and `IT_EMPTY`, constants that could never disagree.
-  The pilot and the reasoning are in the README (`Constructor rows`).
-* **only in the rebuild** (21): the helpers the rebuild adds - `Zero`, `NaN`,
-  `Add`, `Sub`, `Scale`, `DistanceSq3D`, `DistanceSqXZ`, `IsInvalid`, the static
-  `Length`, and the `Wm3Detail::*24` x87 model.  There is nothing on the retail
-  side to compare them with; their correctness is judged by the members that
-  use them.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 13 | `Wm3::AxisAlignedBox3<float>::TestIntersection(const Wm3::AxisAlignedBox3<float>&) const` | `0x00506010` | yes | `src/moho/mesh/Mesh.cpp:508,519,1591` | 已匹配 |
 
-### What the renaming fixed
+### `Wm3::Box3<float>`
 
-Twelve entries in the previous table claimed a row that does not exist - eight
-rebuild-side additions with no retail body, and four real functions
-(`Math<float>::Cos`, `Math<float>::Sin`, `Vector2<float>::Length() const`,
-`Vector2<float>::Dot(...) const`) that are genuinely unmatched.  Thirty-eight
-entries had a row the column did not know about.  All of that came from matching
-names by heuristic; with the parameter lists in the names it is a fact about the
-table.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 14 | `Wm3::Box3<float>::ComputeVertices(Wm3::Vector3<float>*) const` | `0x004FFF00` | yes | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:25`; `src/moho/render/SelectionBracketRenderer.cpp:364` | 已匹配 |
 
-### Two structural findings
+### `Wm3::DistVector3Box3<float>`
 
-1. **The executed-class list had been derived from the classes that have rows,**
-   not from `src/`, and it was missing three: `Quaternion`
-   (`CollisionBeamEntity.cpp:71` `orientation.Rotate(Wm3::Vector3f{1.0f,0.0f,0.0f})`),
-   `Plane3` (`CGeomSolid3.cpp:69` `Wm3::Plane3f`), and `Matrix3` (only through
-   `Quaternion::Rotate` -> `ToRotationMatrix`).  "Has a row" and "is executed" are
-   independent axes.
-2. **The symbol table is noisy**: 9 of the 228 entries are not functions at all.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 15 | `Wm3::DistVector3Box3<float>::GetSquared()` | `0x00A45C00` | yes | `src/moho/collision/CColPrimitiveBase.cpp:430` | 失败 |
+| 16 | `Wm3::DistVector3Box3<float>::Get()` | `0x00A457E0` | no | `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, and it calls `GetSquared()` (row 15). `Get()` has no other caller: `grep -rn "DistVector3Box3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3DistVector3Box3.cpp` itself and `Wm3DistRay3Box3.cpp:62` / `Wm3DistSegment3Box3.cpp:65,73` (classes `src/` never reaches). | 失败 |
+| 62 | `Wm3::DistVector3Box3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A458C0` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 失败 |
+| 63 | `Wm3::DistVector3Box3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A45A60` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 失败 |
 
-## The 9 entries that are not Wild Magic functions
+### `Wm3::DistVector3Segment3<float>`
 
-Each was read in the source at the recorded lines, and each is kept here rather
-than deleted: a function list that quietly loses entries cannot be checked.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 17 | `Wm3::DistVector3Segment3<float>::GetSquared()` | `0x00A484F0` | yes | `src/moho/projectile/Projectile.cpp:1553` | 失败 |
+| 18 | `Wm3::DistVector3Segment3<float>::Get()` | `0x00A480E0` | yes | `src/moho/ui/CUIWorldView.cpp:277` | 失败 |
+| 48 | `Wm3::DistVector3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48190` | no | the swept overload of row 17; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 失败 |
+| 49 | `Wm3::DistVector3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48340` | no | the swept overload of row 15; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 失败 |
 
-| symbol | file:line | what it actually is |
-|---|---|---|
-| `<lambda_1>` | Wm3DistVector3Segment3.cpp:68 | the closure of the `if constexpr` else-branch (the float path) |
-| `void::operator` | Wm3DistVector3Segment3.cpp:69 | that closure's `operator()` |
-| `void::operator` | Wm3DistVector3Segment3.cpp:71 | the same closure's second `operator()` instantiation |
-| `<lambda_1>` | Wm3DistVector3Segment3.cpp:76 | the same closure, second instance |
-| `void::operator` | Wm3IntrLine3Box3.cpp:259 | the closure of the `if constexpr` double branch, `operator()` |
-| `<lambda_2>` | Wm3IntrLine3Box3.cpp:263 | the closure of that `if constexpr` branch |
-| `void::operator` | Wm3IntrLine3Box3.cpp:264 | that closure's `operator()` |
-| `<lambda_3>` | Wm3Box3.inl:23 | the closure of the constructor's `for` loop body |
-| `ViewOrientFromLook` | Wm3Vector2.inl:56 | a symbol-table artifact - the address belongs to `Wm3::Vector2<float>::X() const` |
+### `Wm3::IntrBox2Circle2<float>`
 
-## Why the row count and the function count do not match
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 19 | `Wm3::IntrBox2Circle2<float>::Find(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A4F580` | no | `grep -rn "IntrBox2Circle2f" src/` -> `src/moho/vision/VisionDB.cpp:89` and `src/moho/render/VisionRenderer.cpp:313`, and both call `Test()` (row 20). The swept `Find(fTMax,v0,v1)` has no caller in `src/` and no reached Wild Magic caller. | 已匹配 |
+| 20 | `Wm3::IntrBox2Circle2<float>::Test()` | `0x00A4E620` | yes | `src/moho/vision/VisionDB.cpp:89`; `src/moho/render/VisionRenderer.cpp:313` | 已匹配 |
+| 60 | `Wm3::IntrBox2Circle2<float>::TestVertexRegion(float, float, float, float, float, float, float&, float&)` | `0x00A4E6C0` | no | a private helper of `IntrBox2Circle2`, called only from the swept `Find` (`Foundation/Intersection/Wm3IntrBox2Circle2.cpp:194`); that `Find` is itself unreachable (row 19). | 已匹配 |
+| 61 | `Wm3::IntrBox2Circle2<float>::TestEdgeRegion(float, float, float, float, float, float, float&, float&)` | `0x00A4EB60` | no | a private helper of `IntrBox2Circle2`, called only from the swept `Find` (`Foundation/Intersection/Wm3IntrBox2Circle2.cpp:290`); that `Find` is itself unreachable (row 19). | 已匹配 |
 
-The harness's table holds **156 rows**; this file lists **219 Wild Magic
-functions**.  The two numbers are not supposed to agree, and it is worth saying
-why once so nobody spends an afternoon on it.
+### `Wm3::IntrLine3Box3<float>`
 
-* The 219 are what the Ghidra run found reachable in the **Debug** build of the
-  rebuilt engine, which keeps every template instantiation.  That run sees the
-  float instantiations the engine uses and, through them, the float bodies of the
-  library - but the **double** instantiations are only there because the library
-  instantiates them explicitly, and most of them are not reachable from `src/` at
-  all.
-* The 156 rows include **every double row** the pairing work built
-  (`DistLine3Segment3<double>::Get()` and its siblings, the `Distance<double,
-  ...>` family, the `Intr*<double>` rows, `Eigen`'s two instantiations) plus a few
-  **float overloads the reachability data records only once** (the second
-  `ContAlignedBox` form, the `ConvexHull1/2/3<float>` constructors).  **80 of the 156 rows have no counterpart in the 219**, and that is expected: they are
-  `linked-but-unreachable` work, kept because they are verified and cost nothing
-  to run.
-* So `reachable.md` answers *"what is reachable, and have we paired it"*, and
-  `--list` answers *"what is in the table"*.  Neither is a superset of the
-  other.  The names are the same convention in both, so a row can be found in
-  either direction by name.
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 21 | `Wm3::IntrLine3Box3<float>::Test()` | `0x00A4FE60` | yes | `src/moho/ui/UiRuntimeTypes.cpp:21008` | 失败 |
+| 40 | `Wm3::IntrLine3Box3<float>::Find()` | `0x00A508F0` | no | `grep -rn "IntrLine3Box3f" src/` -> one use, `src/moho/ui/UiRuntimeTypes.cpp:21007`, and it calls `Test()` (row 21). `Find()` is called only from `Foundation/Intersection/Wm3IntrLine3Box3.cpp:77` - itself only from a `Find` that is never reached. | 已匹配 |
+| 68 | `Wm3::IntrLine3Box3<float>::DoClipping(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Box3<float>&, bool, int&, Wm3::Vector3<float>*, int&)` | `0x00A50220` | yes | one Wild Magic call from row 22: `src/moho/collision/CColPrimitiveBase.cpp:385` -> `IntrSegment3Box3f::Find()` -> `Foundation/Intersection/Wm3IntrSegment3Box3.cpp:100` `IntrLine3Box3<Real>::DoClipping(...)` | 已匹配 |
+| 69 | `Wm3::IntrLine3Box3<float>::Clip(float, float, float&, float&)` | `0x00A4FCC0` | yes | two Wild Magic calls from row 22: -> `Foundation/Intersection/Wm3IntrLine3Box3.cpp:150` (called by `DoClipping`) | 已匹配 |
 
-**Checked mechanically**: all **76** `wmdiff_row` names in
-`reachability.json` resolve to a row in `--list` - zero missing.  The cross
-reference is sound; only the coverage differs.
+### `Wm3::IntrSegment3Box3<float>`
 
-## The wmdiff rows in full
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 22 | `Wm3::IntrSegment3Box3<float>::Find()` | `0x00A462A0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:385` | 失败 |
+| 27 | `Wm3::IntrSegment3Box3<float>::GetPoint(int) const` | `0x00A46300` | yes | `src/moho/collision/CColPrimitiveBase.cpp:391,394,395` | 失败 |
+| 46 | `Wm3::IntrSegment3Box3<float>::Test()` | `0x00A46440` | no | `grep -rn "IntrSegment3Box3f" src/` -> one construction, `src/moho/collision/CColPrimitiveBase.cpp:384`, and it calls `Find()` (row 22). `Test()` has no caller: `grep -rn "IntrSegment3Box3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3IntrSegment3Box3.cpp` itself. | 失败 |
 
-Every row passes 1,000,000 on all five seeds; the last full sweep was 156/156.
+### `Wm3::Distance<float, Wm3::Vector3<float>>`
 
-| row | retail | source |
-|---|---|---|
-| `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452AD0` | `Foundation/Math/Wm3Vector3.h:166 (retail thiscall, ST0 extended) in[a[3] b[3]] out[ret]` |
-| `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&) const` | `0x00452AD0` | `Foundation/Math/Wm3Vector3.inl:277 (same retail body) in[a[3] b[3]] out[ret]` |
-| `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452BC0` | `Foundation/Math/Wm3Vector3.h:170 (retail hidden return pointer) in[a[3] b[3]] out[out[3]]` |
-| `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&) const` | `0x00452BC0` | `Foundation/Math/Wm3Vector3.inl:316 (same retail body) in[a[3] b[3]] out[out[3]]` |
-| `Wm3::Vector3<float>::LengthSq(const Wm3::Vector3<float>&)` | `0x004757E0` | `Foundation/Math/Wm3Vector3.h:176 (retail thiscall, ST0 extended) in[v[3]] out[ret]` |
-| `Wm3::Vector3<float>::SquaredLength() const` | `0x004757E0` | `Foundation/Math/Wm3Vector3.inl:268 (same retail body) in[v[3]] out[ret]` |
-| `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>&, float)` | `0x00452AF0` | `Foundation/Math/Wm3Vector3.h:184 (retail void, eps baked in) in[v[3]] out[v[3]]` |
-| `Wm3::Vector3<float>::Normalize()` | `0x00452AF0` | `Foundation/Math/Wm3Vector3.inl:309 (same retail body; the row also compares the length the body leaves in ST(0) at the RET - FSTP ST(1) writes before it pops, so the value FCOMI compared is what survives) in[v[3]] out[v[3] len]` |
-| `Wm3::SqrtfBinary(float)` | `0x00452FC0` | `Foundation/Math/Wm3Vector3.h:303 (free function, FUN_00452FC0) in[x] out[ret]` |
-| `Wm3::Math<float>::FAbs(float)` | `0x0040DAB0` | `Foundation/Math/Wm3Math.inl:82                       in[x] out[ret]` |
-| `Wm3::Math<float>::InvSqrt(float)` | `0x0050D150` | `Foundation/Math/Wm3Math.inl:100                      in[x] out[ret]` |
-| `Wm3::Math<float>::Sqrt(float)` | `0x00452FC0` | `Foundation/Math/Wm3Math.inl:142                      in[x] out[ret]` |
-| `Wm3::AxisAlignedBox3<float>::TestIntersection(const Wm3::AxisAlignedBox3<float>&) const` | `0x00506010` | `Foundation/Math/Wm3AxisAlignedBox3.inl:49 (retail: this in EDX, arg in EDI, bool in AL) in[a[6] b[6]] out[ret]` |
-| `Wm3::Box3<float>::ComputeVertices(Wm3::Vector3<float>*) const` | `0x004FFF00` | `Foundation/Math/Wm3Box3.inl:47 (retail thiscall, void, out array on the stack) in[center[3] axis[9] extent[3]] out[vertex[8][3]]` |
-| `Wm3::DistVector3Box3<float>::GetSquared()` | `0x00A45C00` | `Foundation/Distance/Wm3DistVector3Box3.cpp:45 (retail thiscall, result in ST(0)) in[vec[3] box[15]] out[ret]` |
-| `Wm3::DistVector3Box3<float>::Get()` | `0x00A457E0` | `Foundation/Distance/Wm3DistVector3Box3.cpp:40 (retail thiscall, result in ST(0)) in[vec[3] box[15]] out[ret]` |
-| `Wm3::DistVector3Segment3<float>::GetSquared()` | `0x00A484F0` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:46 (retail thiscall, result in ST(0)) in[vec[3] segment[7]] out[ret]` |
-| `Wm3::DistVector3Segment3<float>::Get()` | `0x00A480E0` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:39 (retail thiscall, result in ST(0)) in[vec[3] segment[7]] out[ret]` |
-| `Wm3::IntrBox2Circle2<float>::Find(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A4F580` | `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:49 (retail thiscall, RET 0xC, bool in AL) -- the retail's CRT runs now, so this row answers in[box[8] circle[3] tmax vel0[2] vel1[2]] out[ret]` |
-| `Wm3::IntrBox2Circle2<float>::Test()` | `0x00A4E620` | `Foundation/Intersection/Wm3IntrBox2Circle2.h (retail thiscall, bool in EAX) in[box[8] circle[3]] out[ret]` |
-| `Wm3::IntrLine3Box3<float>::Test()` | `0x00A4FE60` | `Foundation/Intersection/Wm3IntrLine3Box3.h (retail thiscall, bool in EAX; located via vtable slot +0x08) in[line[6] box[15]] out[ret]` |
-| `Wm3::IntrSegment3Box3<float>::Find()` | `0x00A462A0` | `Foundation/Intersection/Wm3IntrSegment3Box3.h (retail thiscall, bool in AL) in[segment[7] box[15] solid] out[ret]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::GetClosestPoint1() const` | `0x00A39230` | `Foundation/Distance/Wm3Distance.h:72 (retail thiscall, returns &m_kClosestPoint1 in EAX) in[vec[3] segment[7]] out[point[3]]` |
-| `Wm3::IntrBox3Sphere3<float>::Test()` | `0x00A41560` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:39 (retail thiscall, bool in AL) in[box[15] sphere[4]] out[ret]` |
-| `Wm3::IntrBox3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A43420` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:121 (retail thiscall, RET 0xC, bool in AL) in[box[15] sphere[4] tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrBox3Sphere3<float>::GetContactPoint() const` | `0x00A414C0` | `Foundation/Intersection/Wm3IntrBox3Sphere3.h:42 (retail thiscall, returns &m_kContactPoint in EAX) -- the point is compared only on the IT_OTHER path, the only one where the algorithm defines it in[box[15] sphere[4] tmax vel0[3] vel1[3]] out[point[3] time]` |
-| `Wm3::IntrSegment3Box3<float>::GetPoint(int) const` | `0x00A46300` | `Foundation/Intersection/Wm3IntrSegment3Box3.h (retail thiscall, returns &m_akPoint[i] in EAX) in[segment[7] box[15] solid] out[point[3]]` |
-| `Wm3::IntrSegment3Sphere3<float>::Find()` | `0x00A471C0` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:66 (retail thiscall, bool in AL; direct CALL from Moho::CColPrimitive_Sphere::CollideLine at 0x004FEA27) in[segment[7] sphere[4]] out[ret]` |
-| `Wm3::IntrSegment3Sphere3<float>::GetPoint(int) const` | `0x00A46940` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.h (retail thiscall, returns &m_akPoint[i] in EAX) in[segment[7] sphere[4]] out[point[3]]` |
-| `Wm3::IntrSegment3Sphere3<float>::Test()` | `0x00A46C80` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:42 (retail thiscall, bool in AL; the class vtable's +0x08 slot) in[segment[7] sphere[4]] out[ret]` |
-| `Wm3::IntrSegment3Sphere3<float>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46B10` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:149 (retail thiscall, RET 0xC, bool in AL; the class vtable's +0x04 slot, Test(fTMax, velocity0, velocity1)) in[segment[7] sphere[4] tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrSegment3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46DB0` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:176 (retail thiscall, RET 0xC, bool in AL; the class vtable's +0x0C slot, Find(fTMax, velocity0, velocity1)) in[segment[7] sphere[4] tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrBox2Box2<float>::Test()` | `0x00A47D40` | `Foundation/Intersection/Wm3IntrBox2Box2.h (retail thiscall, bool in AL; direct CALL from the AI steering test at 0x00596DC3) in[box0[8] box1[8]] out[ret]` |
-| `Wm3::DistSegment3Segment3<float>::GetSquared()` | `0x00A7E660` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:124 (retail thiscall, no stack arguments, result in ST(0); the class vtable's +0x18 slot) in[seg0[7] seg1[7]] out[ret]` |
-| `Wm3::DistSegment3Segment3<float>::Get()` | `0x00A7E230` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:68 (retail thiscall, no stack arguments, result in ST(0); dispatches GetSquared through the vtable's +0x18 slot and takes the CRT's square root at 0x00A91000) in[seg0[7] seg1[7]] out[ret]` |
-| `Wm3::DistVector2Box2<float>::GetSquared()` | `0x00A6C9D0` | `Foundation/Distance/Wm3DistVector2Box2.cpp:45 (retail thiscall, no stack arguments, result in ST(0); the class vtable's +0x18 slot) in[vec[2] box[8]] out[ret]` |
-| `Wm3::IntrSegment3Capsule3<float>::Test()` | `0x00A6BEB0` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:41 (retail thiscall, no stack arguments, bool in EAX; the class vtable's +0x08 slot) in[segment[7] capsule[8]] out[ret]` |
-| `Wm3::IntrSegment3Capsule3<float>::Find()` | `0x00A6C070` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:56 (retail thiscall, no stack arguments, bool in AL; the class vtable's +0x10 slot, the static Find - the swept Find at +0x0C is the base's stub) -- the intersection set is compared only after a successful Find in[segment[7] capsule[8]] out[ret quantity parameter0 point0[3]]` |
-| `Wm3::IntrLine3Capsule3<float>::Find(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Capsule3<float>&, float*)` | `0x00A7F920` | `Foundation/Intersection/Wm3IntrLine3Capsule3.cpp:86 (retail static, four pointer arguments - origin, direction, capsule, afT - and the number of roots in EAX) in[line[6] capsule[8]] out[ret afT[2]]` |
-| `Wm3::IntrLine3Box3<float>::Find()` | `0x00A508F0` | `Foundation/Intersection/Wm3IntrLine3Box3.cpp:153 (retail thiscall, no stack arguments, bool in AL; the class vtable's +0x10 slot, the static Find - +0x0C is the base's swept stub) -- the intersection set is compared only when the quantity covers it in[line[6] box[15]] out[ret type quantity point0[3] point1[3]]` |
-| `Wm3::DistVector2Box2<float>::Get()` | `0x00A6C680` | `Foundation/Distance/Wm3DistVector2Box2.cpp:39 (retail thiscall, no stack arguments, the float in ST(0); the class vtable's +0x0C slot, which IntrBox2Circle2::Test at 0x00A4E620 dispatches through) in[vec[2] box[8]] out[ret]` |
-| `Wm3::IntrSegment3Capsule3<float>::GetPoint(int) const` | `0x00A6BDF0` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:94 (retail thiscall, the index as a dword stack argument, RET 4, &m_akPoint[index] in EAX) -- the retail's own accessor body, which has no code xref in the retail image because the compiler inlined it; see the README in[segment[7] capsule[8]] out[point0[3]]` |
-| `Wm3::IntrSegment3Capsule3<float>::GetParameter(int) const` | `0x00A6BE00` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:101 (retail thiscall, the index as a dword stack argument, RET 4, the float in ST(0)) -- the retail's own accessor body, which has no code xref in the retail image because the compiler inlined it; see the README in[segment[7] capsule[8]] out[ret]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivative(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39110` | `Foundation/Distance/Wm3Distance.h:87 (the base class's generic body, at the class vtable's +0x1C slot; retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0)) in[vec[3] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivativeSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39180` | `Foundation/Distance/Wm3Distance.h:98 (the base class's generic body, at the class vtable's +0x20 slot; retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0)) in[vec[3] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrSegment3Box3<float>::Test()` | `0x00A46440` | `Foundation/Intersection/Wm3IntrSegment3Box3.h (retail thiscall, bool in AL; the class vtable's +0x08 slot, the same slot the already-wired IntrLine3Box3::Test occupies) in[segment[7] box[15] solid] out[ret]` |
-| `Wm3::InBox<float>(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | `0x00A3BC10` | `Foundation/Containment/Wm3ContBox3.cpp:355 (retail free function, cdecl: the point and the box are two stack pointers, the caller removes them, the bool in AL) in[point[3] box[15]] out[ret]` |
-| `Wm3::DistVector3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48190` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:100 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable's +0x08 slot) in[vec[3] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48340` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:111 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable's +0x14 slot) in[vec[3] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*)` | `0x00A3AE40` | `Foundation/Containment/Wm3ContBox3.cpp:46 (retail free function returning a Box3 by value, so the hidden return pointer is the first stack argument; cdecl, the callee leaves its three arguments; the box is written as the centre, the three axes and the three extents) in[count[1] points[8]] out[center[3] axis[9] extent[3]]` |
-| `Wm3::IntrBox3Sphere3<float>::GetVertexIntersection(float, float, float, float, float, float, float)` | `0x00A41740` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:262 (retail cdecl, seven float arguments - fDx, fDy, fDz, fVx, fVy, fVz, fRSqr - the caller removes them, the result in ST(0); a private static of the WM3 class, called by the retail's Find at 0x00A43831) in[d[3] v[3] r2] out[ret]` |
-| `Wm3::IntrBox3Sphere3<float>::GetEdgeIntersection(float, float, float, float, float, float)` | `0x00A41800` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:306 (retail cdecl, six float arguments - fDx, fDz, fVx, fVz, fVSqr, fRSqr - the result in ST(0); a private static of the WM3 class, called by the retail's Find at 0x00A43868 and at 0x00A438D1) in[d[2] v[2] vsqr r2] out[ret]` |
-| `Wm3::IntrBox3Sphere3<float>::FindFaceRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | `0x00A41880` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:325 (retail thiscall, a private member: ECX is `this`, thirteen stack arguments - fEx, fEy, fEz, fCx, fCy, fCz, fVx, fVy, fVz, &rfIx, &rfIy, &rfIz and the bAboveFace flag - RET 0x34, the callee removes them; the retail calls it from Find at 0x00A420EE and 0x00A421CC) in[box[15] sphere[4] f[9] above] out[ret point[3] time]` |
-| `Wm3::IntrBox3Sphere3<float>::FindJustEdgeIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | `0x00A41CC0` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:464 (retail thiscall, a private member: ECX is `this`, twelve stack arguments - fCy, fEx, fEy, fEz, fDx, fDz, fVx, fVy, fVz, &rfIx, &rfIy, &rfIz - RET 0x30; the retail calls it from FindEdgeRegionIntersection at 0x00A4208A and 0x00A4216A) in[box[15] sphere[4] f[9]] out[ret point[3] time]` |
-| `Wm3::IntrBox3Sphere3<float>::FindEdgeRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | `0x00A41F50` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:532 (retail thiscall, a private member: ECX is `this`, thirteen stack arguments - fEx, fEy, fEz, fCx, fCy, fCz, fVx, fVy, fVz, &rfIx, &rfIy, &rfIz and the bAboveEdge flag - RET 0x34; the retail calls it from Find at 0x00A43C27 and 0x00A43FC7 and from FindVertexRegionIntersection at 0x00A424BA and 0x00A42581) in[box[15] sphere[4] f[9] above] out[ret point[3] time]` |
-| `Wm3::IntrBox3Sphere3<float>::FindVertexRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | `0x00A421E0` | `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:620 (retail thiscall, a private member: ECX is `this`, twelve stack arguments - fEx, fEy, fEz, fCx, fCy, fCz, fVx, fVy, fVz, &rfIx, &rfIy, &rfIz - RET 0x30; the retail calls it from Find at 0x00A44016) in[box[15] sphere[4] f[9]] out[ret point[3] time]` |
-| `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)` | `0x00A3AE40` | `Foundation/Containment/Wm3ContBox3.cpp:62 (retail free function returning a Box3 by value, so the hidden return pointer is the first stack argument; cdecl with FOUR arguments - the fourth is the abValid mask, which the retail tests a byte at a time; the mask is null for the unmasked path) in[count[1] mode[1] points[24] mask[8]] out[center[3] axis[9] extent[3]]` |
-| `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*)` | `0x00A685F0` | `Foundation/Containment/Wm3ContBox2.cpp:24 (retail free function returning a Box2 by value, so the hidden return pointer is the first stack argument; cdecl, the callee leaves its four arguments; the box is written as the centre, the two axes and the two extents. Found by its shape - the body writes the 2D identity and the two unit extents before it computes the extremes - the engine never calls it, so it has no code xref in the retail image) in[count[1] points[16]] out[center[2] axis[4] extent[2]]` |
-| `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*, const bool*)` | `0x00A685F0` | `Foundation/Containment/Wm3ContBox2.cpp:24 (the same retail entry point, but the fourth stack argument - the abValid mask, which the retail tests a byte at a time - is passed through instead of being a literal zero) in[count[1] mode[1] points[16] mask[8]] out[center[2] axis[4] extent[2]]` |
-| `Wm3::IntrBox2Circle2<float>::TestVertexRegion(float, float, float, float, float, float, float&, float&)` | `0x00A4E6C0` | `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:152 (retail thiscall, a private member: ECX is `this`, eight stack arguments - fCx, fCy, fVx, fVy, fEx, fEy, &rfIx, &rfIy - RET 0x20, the callee removes them; the retail calls it out of line from Find at 0x00A4F67D, 0x00A4F815 and 0x00A4F8AF, so the helper has a body of its own) in[box[8] circle[3] f[6]] out[ret point[2] time]` |
-| `Wm3::IntrBox2Circle2<float>::TestEdgeRegion(float, float, float, float, float, float, float&, float&)` | `0x00A4EB60` | `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:283 (retail thiscall, a private member: the same eight stack arguments and the same RET 0x20; the retail calls it out of line from Find at 0x00A4F75E, 0x00A4F7D2 and 0x00A4F866) in[box[8] circle[3] f[6]] out[ret point[2] time]` |
-| `Wm3::DistVector3Box3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A458C0` | `Foundation/Distance/Wm3DistVector3Box3.cpp:96 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D71D8C's +0x08 slot, the derived class's own Get and not the base's) in[vec[3] box[15] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector3Box3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A45A60` | `Foundation/Distance/Wm3DistVector3Box3.cpp:107 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D71D8C's +0x14 slot, the derived class's own GetSquared. The base's +0x10 slot is not a generic three-argument GetSquared - the retail's base declares that one pure virtual - but the base's own window GetSquared(fTMin,fTMax,v0,v1)) in[vec[3] box[15] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector2Box2<float>::Get(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A6C730` | `Foundation/Distance/Wm3DistVector2Box2.cpp:70 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D720C4's +0x08 slot) in[vec[2] box[8] fT vel0[2] vel1[2]] out[ret]` |
-| `Wm3::DistVector2Box2<float>::GetSquared(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A6C880` | `Foundation/Distance/Wm3DistVector2Box2.cpp:81 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D720C4's +0x14 slot) in[vec[2] box[8] fT vel0[2] vel1[2]] out[ret]` |
-| `Wm3::DistSegment3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E2A0` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:334 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D72254's +0x08 slot) in[seg0[7] seg1[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistSegment3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E480` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:345 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D72254's +0x14 slot) in[seg0[7] seg1[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrLine3Box3<float>::DoClipping(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Box3<float>&, bool, int&, Wm3::Vector3<float>*, int&)` | `0x00A50220` | `Foundation/Intersection/Wm3IntrLine3Box3.cpp:174 (retail static member, so there is no `this`: nine stack arguments - fT0, fT1, &origin, &direction, &box, bSolid, &riQuantity, akPoint, &riIntrType - cdecl, the caller removes the thirty-six bytes, the bool in AL. The retail's own Find at 0x00A508F0 calls it and pushes the literal 1 for bSolid) -- the two points are compared only where the helper defines them in[t0 t1 line[6] box[15] solid] out[ret quantity type point0[3] point1[3]]` |
-| `Wm3::IntrLine3Box3<float>::Clip(float, float, float&, float&)` | `0x00A4FCC0` | `Foundation/Intersection/Wm3IntrLine3Box3.cpp:303 (retail static member and a private one: four stack arguments - fDenom, fNumer, &rfT0, &rfT1 - cdecl, the caller removes the sixteen bytes, the bool in AL. The retail's own DoClipping calls it at 0x00A5032D and 0x00A50366) in[denom numer t0 t1] out[ret t0 t1]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::Get(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A38C50` | `Foundation/Distance/Wm3Distance.cpp:150 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1 - RET 0x10, the float in ST(0). The base class's own vftable is 0x00D71C54 - the base constructor at 0x00A38C40 installs it - and this body is its +0x04 slot: the base's window query, not a destructor. The row runs on a DistVector3Segment3f so the body's vtable dispatch reaches the derived class's own swept Get) in[vec[3] segment[7] tmin tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::GetSquared(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A38EB0` | `Foundation/Distance/Wm3Distance.cpp:245 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1 - RET 0x10, the ST(0). The base class's own vftable is 0x00D71C54 - the base constructor at 0x00A38C40 installs it - and this body is its +0x10 slot: the base's window query for the squared distance. The retail's base has no generic three-argument GetSquared at all: the slot is pure virtual, so +0x10 is this window body and not one) in[vec[3] segment[7] tmin tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::SetDifferenceStep(float)` | `0x00A391D0` | `Foundation/Distance/Wm3Distance.cpp:71 (retail thiscall, one float argument on the stack and the callee pops it - RET 4 - the step lands at [this+0x2C] and 0.5/step at [this+0x30]. The base class's own vftable is 0x00D71C54 - the base constructor at 0x00A39F20 installs it - and this body is a member of the base, so the row runs on an object the retail's own base constructor built) in[step] out[step invtwo]` |
-| `Wm3::Distance<float, Wm3::Vector3<float>>::Distance()` | `0x00A39F20` | `Foundation/Distance/Wm3Distance.cpp:22 (retail thiscall, no stack arguments: the base constructor, which inlines the defaults - the step 1e-3 at [this+0x2C] and its reciprocal 500.0f at [this+0x30] - instead of reaching them through the setter. The rebuild's constructor calls the setter, so this row is what says the two agree there) in[step] out[step invtwo]` |
-| `Wm3::DistLine3Segment3<float>::GetSquared()` | `0x00A80DE0` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:51 (retail thiscall, no stack arguments, the result in ST(0); the class vtable 0x00D722D4's +0x18 slot. The Complete Object Locator at 0x00E5BEE0 carries the type descriptor '.?AV?$DistLine3Segment3@M@Wm3@@', and the constructor at 0x00A80900 writes the vtable pointer) in[line[6] segment[7]] out[ret]` |
-| `Wm3::DistLine3Segment3<float>::Get()` | `0x00A809A0` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:39 (retail thiscall, no stack arguments, the float in ST(0); the class vtable 0x00D722D4's +0x0C slot - it dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000) in[line[6] segment[7]] out[ret]` |
-| `Wm3::DistLine3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A80C10` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:126 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D722D4's +0x14 slot) in[line[6] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistLine3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A80A40` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:115 (retail thiscall, three stack arguments - fT, rkVelocity0, rkVelocity1 - RET 0xC, the float in ST(0); the class vtable 0x00D722D4's +0x08 slot) in[line[6] segment[7] fT vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrLine3Capsule3<float>::Test()` | `0x00A7F760` | `Foundation/Intersection/Wm3IntrLine3Capsule3.h (retail thiscall, no stack arguments, the bool in EAX; located via the class vtable 0x00D722A4's +0x08 slot - the constructor at 0x00A7F730 installs that vtable, and the body builds a DistLine3Segment3<float> from the line and the capsule's spine, dispatches its +0x0C slot (the distance, 0x00A809A0) and compares the result with the capsule's radius) in[line[6] capsule[8]] out[ret]` |
-| `Wm3::ConvexHull3<float>::ConvexHull3(int, Wm3::Vector3<float>*, float, bool, int)` | `0x00A67120` | `Foundation/Containment/Wm3ConvexHull3.cpp:22 (retail thiscall, five stack arguments - iVertexQuantity, akVertex, fEpsilon, bOwner, eQueryType - RET 0x14; the class has one virtual slot, the destructor, so the hull construction is reached by address. The argument order is the base ConvexHull<float> constructor's call at 0x00A6BBC0) in[count points[18] eps type] out[dim quantity lineplane[15] tri[24]]` |
-| `Wm3::Query3<float>::ToPlane(const Wm3::Vector3<float>&, int, int, int) const` | `0x00A55CE0` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, four stack arguments - the point's address and the three vertex indices - RET 0x10, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x08 slot, and the Complete Object Locator at 0x00E5B538 names the type descriptor '.?AV?$Query3@M@Wm3@@') in[verts[12] point[3] iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query3<float>::ToPlane(int, int, int, int) const` | `0x00A530A0` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, four stack arguments - the point's index and the three vertex indices - RET 0x10, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x0C slot. The body computes &m_akVertex[i] and forwards to the +0x08 slot, so the retail's table puts the point-taking overload first - the opposite of the rebuild's WM4 order) in[verts[24] point[3] i iV0 iV1 iV2 iV3] out[ret]` |
-| `Wm3::Query3<float>::ToTetrahedron(const Wm3::Vector3<float>&, int, int, int, int) const` | `0x00A530D0` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, five stack arguments - the point's address and the four vertex indices - RET 0x14, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x10 slot. The body calls the +0x08 slot four times and combines the four signs) in[verts[24] point[3] i iV0 iV1 iV2 iV3] out[ret]` |
-| `Wm3::Query3<float>::ToTetrahedron(int, int, int, int, int) const` | `0x00A53180` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, five stack arguments - the point's index and the four vertex indices - RET 0x14, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x14 slot) in[verts[24] point[3] i iV0 iV1 iV2 iV3] out[ret]` |
-| `Wm3::Query3<float>::ToCircumsphere(const Wm3::Vector3<float>&, int, int, int, int) const` | `0x00A55DF0` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, five stack arguments - the point's address and the four vertex indices - RET 0x14, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x18 slot) in[verts[24] point[3] i iV0 iV1 iV2 iV3] out[ret]` |
-| `Wm3::Query3<float>::ToCircumsphere(int, int, int, int, int) const` | `0x00A531B0` | `Foundation/RationalArithmetic/Wm3Query3.inl (retail thiscall, five stack arguments - the point's index and the four vertex indices - RET 0x14, the sign in EAX; the Query3<float> class vtable 0x00D71F38's +0x1C slot) in[verts[24] point[3] i iV0 iV1 iV2 iV3] out[ret]` |
-| `Wm3::Query2<float>::ToLine(const Wm3::Vector2<float>&, int, int) const` | `0x00A75C00` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, three stack arguments - the point's address and the two vertex indices - RET 0x0C, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x08 slot, and the Complete Object Locator at 0x00E5BB38 names the type descriptor '.?AV?$Query2@M@Wm3@@') in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query2<float>::ToLine(int, int, int) const` | `0x00A74E70` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, three stack arguments - the point's index and the two vertex indices - RET 0x0C, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x0C slot) in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query2<float>::ToTriangle(const Wm3::Vector2<float>&, int, int, int) const` | `0x00A74EA0` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, four stack arguments - the point's address and the three vertex indices - RET 0x10, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x10 slot. The body calls the +0x08 slot three times) in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query2<float>::ToTriangle(int, int, int, int) const` | `0x00A74F30` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, four stack arguments - the point's index and the three vertex indices - RET 0x10, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x14 slot) in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query2<float>::ToCircumcircle(const Wm3::Vector2<float>&, int, int, int) const` | `0x00A75C80` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, four stack arguments - the point's address and the three vertex indices - RET 0x10, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x18 slot) in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::Query2<float>::ToCircumcircle(int, int, int, int) const` | `0x00A74F60` | `Foundation/RationalArithmetic/Wm3Query2.inl (retail thiscall, four stack arguments - the point's index and the three vertex indices - RET 0x10, the sign in EAX; the Query2<float> class vtable 0x00D72134's +0x1C slot) in[verts[16] point[2] i iV0 iV1 iV2] out[ret]` |
-| `Wm3::ConvexHull1<float>::ConvexHull1(int, const float*, float, bool, int)` | `0x00A74560` | `Foundation/Containment/Wm3ConvexHull1.cpp:20 (retail thiscall, five stack arguments - iVertexQuantity, afVertex, fEpsilon, bOwner, eQueryType - RET 0x14; the class has one virtual slot, the destructor, so the construction is reached by address. The argument order is the base ConvexHull<float> constructor's call at 0x00A745A5, which takes (iVertexQuantity, fEpsilon, bOwner, eQueryType). The class vtable is 0x00D72114 - the RTTI slot at 0x00D72110 holds the Complete Object Locator of '.?AV?$ConvexHull1@M@Wm3@@') in[count values[8] eps type] out[dim quantity index0 index1]` |
-| `Wm3::ConvexHull2<float>::ConvexHull2(int, Wm3::Vector2<float>*, float, bool, int)` | `0x00A78E30` | `Foundation/Containment/Wm3ConvexHull2.cpp:24 (retail thiscall, five stack arguments - iVertexQuantity, akVertex, fEpsilon, bOwner, eQueryType - RET 0x14; the class has one virtual slot, the destructor, so the construction is reached by address. The argument order is the base ConvexHull<float> constructor's call at 0x00A78E76. The class vtable is 0x00D72124 - the RTTI slot at 0x00D72120 holds the Complete Object Locator of '.?AV?$ConvexHull2@M@Wm3@@') in[count points[16] eps type] out[dim quantity edge0[2] ... edge8[2]]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::SetDifferenceStep(double)` | `0x00A39DB0` | `Foundation/Distance/Wm3Distance.cpp:71 (retail thiscall, one double argument on the stack and the callee pops it - RET 8 - the step lands at [this+0x58] and 0.5/step at [this+0x60]. The base class's own vftable is 0x00D71CA4 - the base constructor at 0x00A39FA0 installs it - and this body is a member of the base, so the row runs on an object the retail's own base constructor built. The retail's body is x87 code and the engine runs under _PC_24, so 0.5/step is a 24-bit significand, which is why the rebuild's double branch emulates it) in[step] out[step invtwo]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::Distance()` | `0x00A39FA0` | `Foundation/Distance/Wm3Distance.cpp:22 (retail thiscall, no stack arguments: the base constructor of the double instantiation, which inlines the defaults - the step 1e-3 at [this+0x58] and its reciprocal 500.0 at [this+0x60]. The rebuild's constructor calls the setter, so this row is what says the two agree there) in[step] out[step invtwo]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::SetDifferenceStep(double)` | `0x00A397C0` | `Foundation/Distance/Wm3Distance.cpp:71 (the Vector2 instantiation of the same base: the class vtable is 0x00D71C7C, the base constructor is 0x00A39F60, the step lands at [this+0x48] and 0.5/step at [this+0x50]) in[step] out[step invtwo]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::Distance()` | `0x00A39F60` | `Foundation/Distance/Wm3Distance.cpp:22 (the Vector2 instantiation of the base constructor, which inlines the defaults - the step 1e-3 at [this+0x48] and its reciprocal 500.0 at [this+0x50]) in[step] out[step invtwo]` |
-| `Wm3::DistVector3Box3<double>::GetSquared()` | `0x00A460D0` | `Foundation/Distance/Wm3DistVector3Box3.cpp:45 (the double instantiation: the class vtable 0x00D71DB4's +0x18 slot, ECX = `this`, no stack arguments, the double in ST(0). The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent - which is why the rebuild's double branch spells its arithmetic out in x87 instructions) in[vec[3] box[15]] out[ret]` |
-| `Wm3::DistVector3Box3<double>::Get()` | `0x00A45800` | `Foundation/Distance/Wm3DistVector3Box3.cpp:40 (the double instantiation: the class vtable 0x00D71DB4's +0x0C slot. It dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000, which normalises the control word to 0x027F before the FSQRT - so the square root itself is a 53-bit significand even though the distance below it is a 24-bit one) in[vec[3] box[15]] out[ret]` |
-| `Wm3::DistVector3Segment3<double>::GetSquared()` | `0x00A48910` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:46 (the double instantiation: the class vtable 0x00D71E94's +0x18 slot, ECX = `this`, no stack arguments, the double in ST(0). The retail's body is x87 code under _PC_24, so the differences, the parameter, the closest point and the squared distance are all 24-bit significands) in[vec[3] segment[7]] out[ret]` |
-| `Wm3::DistVector3Segment3<double>::Get()` | `0x00A48100` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:39 (the double instantiation: the class vtable 0x00D71E94's +0x0C slot; it dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000) in[vec[3] segment[7]] out[ret]` |
-| `Wm3::DistVector3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A487E0` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:57 (the double instantiation's swept form: the class vtable 0x00D71E94's +0x14 slot, ECX = `this`, three stack arguments - the double fT and the two velocity pointers - and `RET 0x10`; the double comes back in ST(0). The body moves the point and the segment's origin by fT times the two velocities on the x87, builds the moved segment and asks the class's own static GetSquared (the +0x18 slot, 0x00A48910) for the distance) in[vec[3] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A486B0` | `Foundation/Distance/Wm3DistVector3Segment3.cpp:39 (the double instantiation's swept form: the class vtable 0x00D71E94's +0x08 slot, same ABI as the swept GetSquared; it dispatches the +0x14 slot and jumps to the CRT's square root at 0x00A91000) in[vec[3] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector3Box3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A45FB0` | `Foundation/Distance/Wm3DistVector3Box3.cpp:50 (the double instantiation's swept form: the class vtable 0x00D71DB4's +0x14 slot, ECX = `this`, three stack arguments - the double fT and the two velocity pointers - and `RET 0x10`; the double comes back in ST(0)) in[vec[3] box[15] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector3Box3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A45E90` | `Foundation/Distance/Wm3DistVector3Box3.cpp:45 (the double instantiation's swept form: the class vtable 0x00D71DB4's +0x08 slot, same ABI as the swept GetSquared; it dispatches the +0x14 slot and jumps to the CRT's square root at 0x00A91000) in[vec[3] box[15] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistVector2Box2<double>::GetSquared()` | `0x00A6CD70` | `Foundation/Distance/Wm3DistVector2Box2.cpp:45 (the double instantiation: the class vtable 0x00D720EC's +0x18 slot, ECX = `this`, no stack arguments, the double in ST(0). The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand - which is why the rebuild's double branch spells the projections and the deltas out in the Wm3Detail::X87 helpers) in[vec[2] box[8]] out[ret]` |
-| `Wm3::DistVector2Box2<double>::Get()` | `0x00A6C6A0` | `Foundation/Distance/Wm3DistVector2Box2.cpp:39 (the double instantiation: the class vtable 0x00D720EC's +0x0C slot; it dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000, which keeps the ambient precision control) in[vec[2] box[8]] out[ret]` |
-| `Wm3::DistVector2Box2<double>::GetSquared(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A6CC60` | `Foundation/Distance/Wm3DistVector2Box2.cpp:50 (the double instantiation's swept form: the class vtable 0x00D720EC's +0x14 slot, ECX = `this`, three stack arguments - the double fT and the two velocity pointers - and `RET 0x10`; the double comes back in ST(0). The body moves the point and the box's centre on the x87 and asks the class's own static GetSquared for the distance) in[vec[2] box[8] t vel0[2] vel1[2]] out[ret]` |
-| `Wm3::DistVector2Box2<double>::Get(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A6CB50` | `Foundation/Distance/Wm3DistVector2Box2.cpp:39 (the double instantiation's swept form: the class vtable 0x00D720EC's +0x08 slot, same ABI as the swept GetSquared; it dispatches the +0x14 slot and jumps to the CRT's square root at 0x00A91000) in[vec[2] box[8] t vel0[2] vel1[2]] out[ret]` |
-| `Wm3::DistLine3Segment3<double>::GetSquared()` | `0x00A81330` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:51 (the double instantiation: the class vtable 0x00D722FC's +0x18 slot, ECX = `this`, no stack arguments, the double in ST(0). The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand - and the instruction sequence gives the same orderings as the float body's, the inline dots included, so the rebuild's double branch runs the same modelled arithmetic) in[line[6] segment[7]] out[ret]` |
-| `Wm3::DistLine3Segment3<double>::Get()` | `0x00A809C0` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:38 (the double instantiation: the class vtable 0x00D722FC's +0x0C slot; it dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000, which keeps the ambient precision control) in[line[6] segment[7]] out[ret]` |
-| `Wm3::DistLine3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A811F0` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:206 (the double instantiation's swept form: the class vtable 0x00D722FC's +0x14 slot, ECX = `this`, three stack arguments - the double fT and the two velocity pointers - and `RET 0x10`; the double comes back in ST(0)) in[line[6] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistLine3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A810B0` | `Foundation/Distance/Wm3DistLine3Segment3.cpp:187 (the double instantiation's swept form: the class vtable 0x00D722FC's +0x08 slot, same ABI as the swept GetSquared; it dispatches the +0x14 slot and jumps to the CRT's square root at 0x00A91000) in[line[6] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrBox2Circle2<double>::Test()` | `0x00A4EE50` | `Foundation/Intersection/Wm3IntrBox2Circle2.h (the double instantiation: the class vtable 0x00D71EDC's +0x08 slot - ECX = `this`, no stack arguments, the bool in EAX. The class's Test delegates to DistVector2Box2<double>::Get(), whose double branch IS the modelled x87 one, so this body inherits the modelling) The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - the box's axes are the identity, its first extent is 2^-32 short of one and the circle's centre is 2^-30 past that face, with the radius 3 * 2^-32 between the two sides' distances (the retail's 2^-32, the binary64 5 * 2^-32).  The mutation check - the double branch put back on the plain binary64 source - fails 99960/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds in[box[8] circle[3]] out[ret]` |
-| `Wm3::IntrSegment3Capsule3<double>::Test()` | `0x00A6BF80` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.h (the double instantiation: the class vtable 0x00D720AC's +0x08 slot, ECX = `this`, no stack arguments, the bool in EAX. The class's Test delegates to DistSegment3Segment3<double>::Get(), whose double branch is now transcribed - the intermediates run on the hardware's x87 and the square root is the x87's as well) The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - both segments degenerate to points, one 1 + 5 * 2^-26 above the other along y, and the capsule's radius is 1 + 6 * 2^-26.  The x87 rounds the difference of the origins to 1 + 2^-23, so the distance is 1 + 2^-23 - above the radius, and the test is false; the binary64 chain keeps the difference exact, so its distance is the gap itself, 1 + 5 * 2^-26, below the radius, and the test is true. The mutation check - the distance class's double branch put back on the plain binary64 source - fails 100088/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[segment[7] capsule[8]] out[ret]` |
-| `Wm3::IntrBox3Sphere3<double>::Test()` | `0x00A425C0` | `Foundation/Intersection/Wm3IntrBox3Sphere3.h (the double instantiation: the class vtable 0x00D71D14's +0x08 slot, ECX = `this`, no stack arguments, the bool in EAX. The retail's double body is x87 code and its inline dot is formed as (y*y' + x*x') + z*z' - the y term first, unlike the shared Vector3::Dot - so the transcription has to spell the difference, the three dots and the sums out in the Wm3Detail::X87 helpers) The rebuild's double branch is transcribed in the Wm3Detail::X87 helpers, with the retail's own groupings.  The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - the box's axes are the identity, the sphere's centre is one 2^-30 past one of the faces and that face is 2^-32 short of the coordinate, and the radius 3 * 2^-32 sits between the two sides' distances to the face (the retail's 2^-32, the binary64 5 * 2^-32).  The mutation check - the double branch put back on the plain binary64 source - fails 100317/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[box[15] sphere[4]] out[ret]` |
-| `Wm3::IntrBox2Box2<double>::Test()` | `0x00A47F00` | `Foundation/Intersection/Wm3IntrBox2Box2.h (the double instantiation: the class vtable's +0x08 slot, ECX = `this`, no stack arguments, the bool in AL. The retail's double body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[box0[8] box1[8]] out[ret]` |
-| `Wm3::IntrLine3Box3<double>::Test()` | `0x00A50090` | `Foundation/Intersection/Wm3IntrLine3Box3.h (the double instantiation: the class vtable's +0x08 slot, ECX = `this`, no stack arguments, the bool in AL. The retail's double body is x87 code; this class's float path is already transcribed, and so is its double path now) The rebuild's double branch is transcribed in the Wm3Detail::X87 helpers, with the retail's own groupings.  The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - the direction is a unit axis, the box's axes are the identity with unit extents, and the line's origin is one 2^-30 off the box's centre along a coordinate that is not the direction's, so the cross product's component is 1.0 on the x87 and 1 + 2^-30 in binary64 against a right-hand side of exactly 1.0.  The mutation check - the double branch put back on the plain binary64 source - fails 100001/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[line[6] box[15]] out[ret]` |
-| `Wm3::IntrSegment3Box3<double>::Test()` | `0x00A46720` | `Foundation/Intersection/Wm3IntrSegment3Box3.h (the double instantiation: the class vtable's +0x08 slot, ECX = `this`, no stack arguments, the bool in AL. The retail's double body is x87 code; this class's float path is already transcribed, and so is its double path now) The rebuild's double branch is transcribed in the Wm3Detail::X87 helpers, with the retail's own groupings.  The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - the direction is a unit axis, the box's axes are the identity with unit extents, and the segment's origin is one 2^-30 off the box's centre along a coordinate that is not the direction's, so the first test compares the retail's 1.0 with a right-hand side of exactly 1.0.  The mutation check - the double branch put back on the plain binary64 source - fails 99619/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[segment[7] box[15] solid] out[ret]` |
-| `Wm3::IntrSegment3Sphere3<double>::Test()` | `0x00A475E0` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.h (the double instantiation: the class vtable's +0x08 slot, ECX = `this`, no stack arguments, the bool in AL. The rebuild's source already has the retail's grouping - the three terms x, y, z - and the double path now has the precision too) The rebuild's double branch is transcribed in the Wm3Detail::X87 helpers, with the retail's own groupings.  The row compares a bool, so it witnesses the precision only through an exact collision: the generator builds one - the sphere's centre is the origin, its radius is one, the segment's direction is a unit axis and its origin is one 2^-30 off the centre along a coordinate that is not the direction's, so the retail's fA0 is 0 (it rounds the squared distance to 1.0) and its discriminant is 0, while the binary64 fA0 is 2^-29 and its discriminant is negative.  The mutation check - the double branch put back on the plain binary64 source - fails 99956/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[segment[7] sphere[4]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::Get(double, double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39860` | `Foundation/Distance/Wm3Distance.cpp:125 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1, the two doubles first - and RET 0x18, so the callee pops all 24 bytes; the double comes back in ST(0). The base class's own vftable is 0x00D71CA4 - the base constructor at 0x00A39FA0 installs it - and this body is its +0x04 slot: the base's window search, not a destructor. The row runs on a DistVector3Segment3<double> so the body's vtable dispatch reaches the derived class's own swept Get. The retail's body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[3] segment[7] tmin tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::GetSquared(double, double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39AB0` | `Foundation/Distance/Wm3Distance.cpp:245 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1 - and RET 0x18, the double in ST(0). The base class's own vftable is 0x00D71CA4 and this body is its +0x10 slot: the base's window search for the squared distance. The retail's base has no generic three-argument GetSquared at all - the slot is pure virtual, so +0x10 is this window body and not one) in[vec[3] segment[7] tmin tmax vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::GetDerivative(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39D00` | `Foundation/Distance/Wm3Distance.cpp:102 (retail thiscall, three stack arguments - the double fT and the two velocity pointers - and RET 0x10, the double in ST(0). The base class's own vftable is 0x00D71CA4 and this body is its +0x1C slot: the base's finite difference default, the one DistVector3Segment3 does not override. The body computes the two sample times on the x87 - `fld m_fDifferenceStep; fadd fT` and `fld fT; fsub m_fDifferenceStep` - so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[3] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector3<double>>::GetDerivativeSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39D60` | `Foundation/Distance/Wm3Distance.cpp:113 (retail thiscall, three stack arguments - the double fT and the two velocity pointers - and RET 0x10, the double in ST(0). The base class's own vftable is 0x00D71CA4 and this body is its +0x20 slot. The body doubles the distance on the x87 (`fadd st(0), st(0)`) and multiplies it by the derivative (`fmulp st(1)`), so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[3] segment[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::Get(double, double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39270` | `Foundation/Distance/Wm3Distance.cpp:125 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1 - and RET 0x18, the double in ST(0). The base class's own vftable is 0x00D71C7C - the RTTI in front of it names the Vector2 instantiation - and this body is its +0x04 slot. The row runs on a DistVector2Box2<double> so the body's vtable dispatch reaches the derived class's own swept Get. The retail's body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[2] box[8] tmin tmax vel0[2] vel1[2]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::GetSquared(double, double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A394C0` | `Foundation/Distance/Wm3Distance.cpp:245 (retail thiscall, four stack arguments - fTMin, fTMax, &rkVelocity0, &rkVelocity1 - and RET 0x18, the double in ST(0). The base class's own vftable is 0x00D71C7C and this body is its +0x10 slot. The retail's body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[2] box[8] tmin tmax vel0[2] vel1[2]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::GetDerivative(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39710` | `Foundation/Distance/Wm3Distance.cpp:102 (retail thiscall, three stack arguments - the double fT and the two velocity pointers - and RET 0x10, the double in ST(0). The base class's own vftable is 0x00D71C7C and this body is its +0x1C slot; the difference step lives at [this+0x48] and its reciprocal at [this+0x50]. The retail's body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[2] box[8] t vel0[2] vel1[2]] out[ret]` |
-| `Wm3::Distance<double, Wm3::Vector2<double>>::GetDerivativeSquared(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39770` | `Foundation/Distance/Wm3Distance.cpp:113 (retail thiscall, three stack arguments - the double fT and the two velocity pointers - and RET 0x10, the double in ST(0). The base class's own vftable is 0x00D71C7C and this body is its +0x20 slot. The retail's body is x87 code, so the rebuild's double branch models the arithmetic in the Wm3Detail::X87 helpers) in[vec[2] box[8] t vel0[2] vel1[2]] out[ret]` |
-| `Wm3::DistSegment3Segment3<double>::GetSquared()` | `0x00A7F100` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:143 (the double instantiation: the class vtable 0x00D7227C's +0x18 slot, ECX = `this`, no stack arguments, the double in ST(0). The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent. The rebuild's double branch therefore carries its intermediates in Wm3Detail::X87Asm, which runs the operations on the hardware's x87: the operands are 53-bit doubles, so a product needs 106 bits and the software model (which rounds the binary64 product and then the significand) would land an ulp of the 24-bit significand away from the retail. The instruction sequence of the retail's double body is the same as its float body's - the two agree bit for bit on every input whose segments are float-representable - so the double branch is the same source with the x87's rounding) in[seg0[7] seg1[7]] out[ret]` |
-| `Wm3::DistSegment3Segment3<double>::Get()` | `0x00A7E250` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:86 (the double instantiation: the class vtable 0x00D7227C's +0x0C slot; it dispatches the +0x18 slot and jumps to the CRT's square root at 0x00A91000, which keeps the ambient precision control - so under the engine's _PC_24 the square root is a 24-bit one and not the correctly rounded binary64 square root Math<double>::Sqrt computes) in[seg0[7] seg1[7]] out[ret]` |
-| `Wm3::DistSegment3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A7EFB0` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:596 (the double instantiation's swept form: the class vtable 0x00D7227C's +0x14 slot, ECX = `this`, three stack arguments - the double fT and the two velocity pointers - and `RET 0x10`; the double comes back in ST(0). The body moves the two shapes on the x87 as well, so the rebuild's double branch moves them on the x87 too) in[seg0[7] seg1[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::DistSegment3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A7EE60` | `Foundation/Distance/Wm3DistSegment3Segment3.cpp:561 (the double instantiation's swept form: the class vtable 0x00D7227C's +0x08 slot, same ABI as the swept GetSquared; it dispatches the +0x14 slot and jumps to the CRT's square root at 0x00A91000) in[seg0[7] seg1[7] t vel0[3] vel1[3]] out[ret]` |
-| `Wm3::IntrLine3Box3<double>::Find()` | `0x00A50940` | `Foundation/Intersection/Wm3IntrLine3Box3.cpp:223 (the double instantiation: the class vtable 0x00D71F0C's +0x0C slot, ECX = `this`, no stack arguments, the bool in AL. The body is a thin wrapper around the shared double DoClipping (0x00A505F0): it passes the parameter range [-MAX_REAL, +MAX_REAL] and the solid flag, so the rebuild's double branch of DoClipping and Clip is the transcription of those two bodies. The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent; the rebuild's double branch carries its intermediates in Wm3Detail::X87Asm, which runs the operations on the hardware's x87) in[line[6] box[15]] out[hit type quantity point0[3] point1[3]]` |
-| `Wm3::IntrSegment3Box3<double>::Find()` | `0x00A46330` | `Foundation/Intersection/Wm3IntrSegment3Box3.cpp:283 (the double instantiation: the class vtable 0x00D71DF4's +0x0C slot, ECX = `this`, no stack arguments, the bool in AL. The body is a thin wrapper around the shared double DoClipping (0x00A505F0): it passes the parameter range [-Extent, +Extent] and the object's own solid flag, so the rebuild's double branch of DoClipping and Clip is the transcription of those two bodies. The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent; the rebuild's double branch carries its intermediates in Wm3Detail::X87Asm, which runs the operations on the hardware's x87) in[segment[7] box[15] solid] out[hit type quantity point0[3] point1[3]]` |
-| `Wm3::IntrSegment3Sphere3<double>::Find()` | `0x00A479B0` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:231 (the double instantiation: the class vtable 0x00D71E24's +0x0C slot - the *static* Find, the dynamic one is 0x00A47690 - ECX = `this`, no stack arguments, the bool in AL. The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent, and the square root is the CRT's (0x00A91000), which under _PC_24 is a 24-bit one; the rebuild's double branch therefore carries its intermediates in Wm3Detail::X87Asm, which runs the operations on the hardware's x87) in[segment[7] sphere[4]] out[hit quantity point0[3] point1[3] t0 t1]` |
-| `Wm3::Vector3<double>::GenerateOrthonormalBasis(Wm3::Vector3<double>&, Wm3::Vector3<double>&, Wm3::Vector3<double>&, bool)` | `0x00A3D150` | `Foundation/Math/Wm3Vector3.inl:618 (the retail's double instantiation: a *static* member, so there is no `this` - four stack arguments, &rkU, &rkV, &rkW and the bUnitLengthW flag - and the body ends in a plain RET, so the caller pops them. The order is settled by the retail's own call site at 0x00A800B4 (the double IntrLine3Capsule3::Find), which pushes the flag first and the three pointers after it and pops all four with `ADD ESP,0x10`. The body is x87 code and the engine runs under _PC_24, so every product, every sum and the square root carry a 24-bit significand; the rebuild's double branch carries its intermediates in Wm3Detail::X87, which runs the operations on the hardware's x87. The algorithm is the two branch one - the same one the WM3.4 copy has - and the row is a value row: it compares U and V, six doubles) in[w[3] unit] out[u[3] v[3]]` |
-| `Wm3::Vector3<float>::GenerateOrthonormalBasis(Wm3::Vector3<float>&, Wm3::Vector3<float>&, Wm3::Vector3<float>&, bool)` | `0x00A3CF80` | `Foundation/Math/Wm3Vector3.inl:618 (the retail's float instantiation: the same cdecl static member, the same four stack arguments, and the same two branch algorithm. The row's magnitudes stay in the range where the rebuild's float path and the retail's x87 body agree: the retail keeps the sum on the x87 with its extended exponent, the rebuild rounds it to binary32, and the two part company once the sum leaves the binary32 normal range. The row is a value row: it compares U and V, six floats) in[w[3] unit] out[u[3] v[3]]` |
-| `Wm3::Vector3<double>::Normalize()` | `0x00A3D0A0` | `Foundation/Math/Wm3Vector3.inl:309 (the retail's double instantiation of the member Normalize: `this` in ECX, no stack arguments, plain RET, and the LENGTH in ST(0) at the ret - the reciprocal is consumed by the three multiplications, and the degenerate branch leaves 0.0. The body is x87 code and the engine runs under _PC_24, so the length, the inverse length and the three products are 24-bit significands with the extended exponent; the rebuild's double branch carries its intermediates in Wm3Detail::X87, which runs the operations on the hardware's x87. The return value is the length and not the inverse length - the WM3.4 copy returns the length as well, so this is the source's own semantics. The row is a value row: it compares the normalised vector and the returned length, four doubles) in[v[3]] out[v[3] len]` |
-| `Wm3::IntrSegment3Capsule3<double>::Find()` | `0x00A6C3C0` | `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:56 (the double instantiation: the class vtable 0x00D720AC's +0x0C slot, ECX = `this`, no stack arguments, the bool in AL. The body calls the static Find (0x00A80080), whose double branch is the transcription in Foundation/Intersection/Wm3IntrLine3Capsule3.cpp, keeps the roots the query segment's extent admits and computes their points. The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent; the rebuild's double branch carries its intermediates in Wm3Detail::X87, which runs the operations on the hardware's x87. The row compares the hit, the intersection type, the quantity and the two points; the parameters are left out because the retail's array holds every root the static Find produced and the rebuild's holds the roots the extent filter kept) in[segment[7] capsule[8]] out[hit type quantity point0[3] point1[3]]` |
-| `Wm3::IntrSegment3Sphere3<double>::Find(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A47690` | `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:443 (the double instantiation: the class vtable 0x00D71E24's +0x0C slot - the *dynamic* Find, Find(fTMax, velocity0, velocity1) - ECX = `this`, three stack arguments (the time limit, a 64-bit double, and the two velocity pointers) and `RET 0x10`, so the callee pops all sixteen bytes, the bool in AL. The body asks the class's own static Find (0x00A479B0) first, then builds the path the sphere's centre travels along - the direction is the difference of the two velocities, the origin is the centre plus half of that difference, the direction is normalised in place and the extent is half the length - and meets the segment grown by the sphere's radius through IntrSegment3Capsule3<double> (0x00A6C3C0). The retail's body is x87 code and the engine runs under _PC_24, so every product and every sum is a 24-bit significand with the extended exponent; the rebuild's double branch carries its intermediates in Wm3Detail::X87Asm, which runs the operations on the hardware's x87. The row compares the hit, the intersection type, the contact time and the contact point; the point is only written on the hit path, so both sides write zero for it when there is no hit) in[segment[7] sphere[4] tmax vel0[3] vel1[3]] out[hit type time point0[3]]` |
-| `Wm3::Eigen<float>::IncrSortEigenStuff3()` | `0x00A70DB0` | `Foundation/Numerics/Wm3Eigen.cpp:613 (retail thiscall, ECX = `this`, no stack arguments, void. The body is Tridiagonal3 (0x00A6D480), QLAlgorithm (0x00A6E7C0), IncreasingSort (0x00A6ED00) and the GuaranteeRotation inlined. The retail's Eigen<float> is reached from the retail's GaussPointsFit3<float> (0x00A509A0), which is what the engine's ContBox3 uses. The row builds the Eigen<float> through the retail's own constructor (0x00A719E0), fills the matrix through the retail's operator() (0x00A6D2D0), runs the solver and compares the three eigenvalues and the nine entries of the eigenvector matrix. The retail's body is x87 code, so its arithmetic is a 24-bit significand with the extended exponent; the generator stays inside the float range the engine's covariance matrices live in, where that is a float's own arithmetic. The mutation check - the rebuild's Tridiagonal3 put back on the ZERO_TOLERANCE test of the WM4 form - fails 23640/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[diag[3] mat[9]]` |
-| `Wm3::Eigen<float>::IncrSortEigenStuff2()` | `0x00A70D70` | `Foundation/Numerics/Wm3Eigen.cpp:604 (retail thiscall, ECX = `this`, no stack arguments, void. The body is Tridiagonal2 (0x00A6D420), QLAlgorithm, IncreasingSort and the GuaranteeRotation inlined; the retail's GaussPointsFit2<float> reaches it the same way GaussPointsFit3 reaches the three-by-three one. The row compares the two eigenvalues and the four entries of the eigenvector matrix. The mutation check - the rebuild's IncreasingSort put back on the decreasing order - fails 142830/200000 (seed 0x5EED2007, 200000 draws); with the rebuild as it is the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[4]] out[diag[2] mat[4]]` |
-| `Wm3::Eigen<float>::GetEigenvalue(int) const` | `0x00A6CE70` | `Foundation/Numerics/Wm3Eigen.cpp:108 (retail thiscall, ECX = `this`, one stack argument - the index - and `RET 4`, so the callee pops it; the float comes back in ST(0), the body ends in FLD/RET) and never writes EAX. The row runs the retail's own solver first and then reads the three eigenvalues through the retail's accessor. The mutation check - the rebuild's Tridiagonal3 put back on the ZERO_TOLERANCE test - fails 12117/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[ret[3]]` |
-| `Wm3::Eigen<float>::GetEigenvector(int, Wm3::Vector3<float>&) const` | `0x00A6D350` | `Foundation/Numerics/Wm3Eigen.cpp:137 (retail thiscall, ECX = `this`, two stack arguments - the index and the address of the Vector3 - and `RET 8`, void. The body compares m_iSize with three and copies the column out of the matrix, or writes the zero vector when the size is not three. The row runs the retail's own solver first and then reads the three columns through the retail's accessor. The mutation check - the rebuild's Tridiagonal3 put back on the ZERO_TOLERANCE test - fails 23744/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[vec[9]]` |
-| `Wm3::Eigen<float>::GetEigenvector(int, Wm3::Vector2<float>&) const` | `0x00A6D3A0` | `Foundation/Numerics/Wm3Eigen.cpp:120 (retail thiscall, ECX = `this`, two stack arguments - the index and the address of the Vector2 - and `RET 8`, void. The body compares m_iSize with two and copies the column out of the matrix, or writes the zero vector when the size is not two. This is the accessor the retail's GaussPointsFit2<float> uses, the path the engine's ContBox2 reaches. The row runs the retail's own two-by-two solver first and then reads the two columns through the retail's accessor. The mutation check - the rebuild's IncreasingSort put back on the decreasing order - fails 143236/200000 (seed 0x5EED2007, 200000 draws); with the rebuild as it is the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[4]] out[vec[4]]` |
-| `Wm3::Eigen<double>::IncrSortEigenStuff3()` | `0x00A71460` | `Foundation/Numerics/Wm3Eigen.cpp:819 (the double instantiation: retail thiscall, ECX = `this`, no stack arguments, void. The body is Tridiagonal3 (0x00A6EF70), QLAlgorithm (0x00A6FF60), IncreasingSort (0x00A70370) and the GuaranteeRotation inlined. The retail's double body is x87 code and the engine runs under _PC_24, so every product, every sum, every division and the square root carry a 24-bit significand with the extended exponent - a binary64 expression cannot reproduce that, so the rebuild's double branch carries its intermediates in Wm3Detail::X87Asm and takes its square root from Wm3Detail::X87Sqrt (the CRT's routine at 0x00A91000 re-sets the control word to (CW & 0x300) | 0x7F, which under _PC_24 leaves the precision control at 24 bits). The row builds the Eigen<double> through the retail's own constructor (0x00A71DC0), fills the matrix through the retail's operator() (0x00A6EDC0), runs the solver and compares the three eigenvalues and the nine entries of the eigenvector matrix. The mutation check - the double branch put back on the plain binary64 source - fails 114495/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[diag[3] mat[9]]` |
-| `Wm3::Eigen<double>::IncrSortEigenStuff2()` | `0x00A71420` | `Foundation/Numerics/Wm3Eigen.cpp:810 (the double instantiation: retail thiscall, ECX = `this`, no stack arguments, void. The body is Tridiagonal2 (0x00A6EF10), QLAlgorithm, IncreasingSort and the GuaranteeRotation inlined; the retail's GaussPointsFit2<double> reaches it the same way GaussPointsFit3 reaches the three-by-three one. The row compares the two eigenvalues and the four entries of the eigenvector matrix. The mutation check - the double branch put back on the plain binary64 source - fails 114434/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[4]] out[diag[2] mat[4]]` |
-| `Wm3::Eigen<double>::GetEigenvalue(int) const` | `0x00A6CEA0` | `Foundation/Numerics/Wm3Eigen.cpp:295 (the double instantiation: retail thiscall, ECX = `this`, one stack argument - the index - and `RET 4`, so the callee pops it; the double comes back in ST(0), the body ends in FLD/RET) and never writes EAX. The row runs the retail's own solver first and then reads the three eigenvalues through the retail's accessor. The mutation check - the double branch put back on the plain binary64 source - fails 114544/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[ret[3]]` |
-| `Wm3::Eigen<double>::GetEigenvector(int, Wm3::Vector3<double>&) const` | `0x00A6EE40` | `Foundation/Numerics/Wm3Eigen.cpp:324 (the double instantiation: retail thiscall, ECX = `this`, two stack arguments - the index and the address of the Vector3 - and `RET 8`, void. The body compares m_iSize with three and copies the column out of the matrix, or writes the zero vector when the size is not three. The row runs the retail's own solver first and then reads the three columns through the retail's accessor. The mutation check - the double branch put back on the plain binary64 source - fails 114290/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[9]] out[vec[9]]` |
-| `Wm3::Eigen<double>::GetEigenvector(int, Wm3::Vector2<double>&) const` | `0x00A6EE90` | `Foundation/Numerics/Wm3Eigen.cpp:307 (the double instantiation: retail thiscall, ECX = `this`, two stack arguments - the index and the address of the Vector2 - and `RET 8`, void. This is the accessor the retail's GaussPointsFit2<double> uses. The row runs the retail's own two-by-two solver first and then reads the two columns through the retail's accessor. The mutation check - the double branch put back on the plain binary64 source - fails 114177/200000 (seed 0x5EED2007, 200000 draws); with the transcription in place the row passes 200000/200000 and 1000000/1000000 on all five seeds) in[m[4]] out[vec[4]]` |
-| `Wm3::Vector3<float>::Length() const` | `0x00452A90` | `Foundation/Math/Wm3Vector3.inl:259 (retail thiscall, ECX = `this`, no stack arguments, a plain RET, and the length comes back in ST(0). The body computes the three squares with SSE (MOVSS/MULSS) and calls the CRT's square root at 0x00452FC0, so the sum behaves as binary32 in the denormal range - where this body and the x87 SquaredLength body at 0x004757E0 differ. The engine calls the instance method (CAiSteeringImpl.cpp:198 and :1458), so the row pins the value the engine's own inlined copy depends on) in[v[3]] out[ret]` |
-| `Wm3::Vector3<float>::CompareArrays(const Wm3::Vector3<float>&) const` | `0x004F0A50` | `Foundation/Math/Wm3Vector3.inl:103 (retail thiscall, ECX = `this`, one stack argument - the address of the other vector - and `RET 4`, so the callee pops it; the result is an int in EAX. The body is the compiler's inlined memcmp over the twelve bytes of the two vectors, and the inlined memcmp answers -1, 0 or +1. MSVC's memcmp answers the same three values - measured with this toolchain, and at /O2 it is the same inlined shape - so what this row settles is not the normalisation but what precedes it: the comparison is bitwise over the lanes in the object's little-endian order, so the x lane is compared first. The retail's own engine calls the member - named at `src/sdk/moho/entity/intel/CIntel.cpp:62` and `src/sdk/moho/render/camera/VTransform.cpp:178`, which both give the address 0x004F0A50 - and in the WM3.8 retail the member is public, so the rebuild's is public too; the body is unchanged. The WM3.4 copy has it private and spells it `memcmp(...)`; both answer -1/0/+1, so a component-wise comparison is what this row would catch, and it does - the mutation fails 72% of the draws) in[a[3] b[3]] out[ret]` |
-| `Wm3::Vector3<float>::operator==(const Wm3::Vector3<float>&) const` | `0x004F08B0` | `Foundation/Math/Wm3Vector3.inl:109 (retail thiscall, ECX = `this`, the other vector's address on the stack - the body loads it with `mov eax,[esp+4]` - and `RET 4`, so the callee pops it. The body pushes that address for the memcmp at 0x004F0A50 and folds the result into a bool (`neg eax; sbb eax,eax; add eax,1`), so EAX comes back 0 or 1. The body has no caller in the image - the compiler inlined the member at every use site - so this row compares a body nothing calls, the way the `Vector3<float>::Length` row does. The comparison is bitwise over the twelve bytes, so the generator's cases are the ones a component-wise `==` would get wrong: the same bits with a NaN in a lane, +0.0f against -0.0f, and one bit of one lane changed) in[a[3] b[3]] out[ret]` |
-| `Wm3::Quaternion<float>::CompareArrays(const Wm3::Quaternion<float>&) const` | `0x004F0B40` | `Foundation/Math/Wm3Quaternion.inl:143 (the retail's body takes **ECX = `this` and EAX = the other quaternion** - it reads `mov esi,[ecx]` and `cmp esi,[eax]` and never touches the stack - and ends in a plain RET, so a thunk that pushed the argument would change the stack the body returns to. The body is the compiler's out-of-line memcmp over the sixteen bytes and answers -1, 0 or +1, so it says which byte differed first and not merely that one did. It has 24 callers in the image, all of them the compiler's inlined uses) in[a[4] b[4]] out[ret]` |
-| `Wm3::Quaternion<float>::operator==(const Wm3::Quaternion<float>&) const` | `0x004F08E0` | `Foundation/Math/Wm3Quaternion.inl:150 (the same register convention as CompareArrays - ECX = `this`, EAX = the other quaternion, a plain RET - and the body starts with a bare `call 0x004F0B40`, so it assumes both registers are already set. The result is that memcmp result folded into a bool (`neg eax; sbb eax,eax; add eax,1`). The body has no caller in the image: the compiler inlined the member at every use site) in[a[4] b[4]] out[ret]` |
-| `Wm3::Sphere3<float>::Sphere3(const Wm3::Vector3<float>&, float)` | `0x004740C0` | `Foundation/Math/Wm3Sphere3.inl:23 (the retail's body takes **ECX as the hidden return pointer** - the object the constructor writes - the centre's address at [esp+4] and the radius at [esp+8], and ends in `RET 8`, so the callee pops the two arguments. It writes all sixteen bytes of the object: the three centre lanes through the x87 (so a quiet NaN keeps its payload) at +0, +4 and +8, and the radius with a plain `movss` at +0xC. The object is a Vector3 and a float - no padding, no references, and no byte either side leaves unwritten - which makes this the one constructor in the library whose compared bytes are all values. The generator uses quiet NaNs only: a signalling one would be quieted by the retail's x87 and copied unchanged by the rebuild, which is the harness's known divergence class for pure copies) in[center[3] radius] out[obj[4]]` |
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 23 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetClosestPoint1() const` | `0x00A39230` | no | `grep -rn "Wm3::Distance\|Distance<" src/` -> 0 hits; no `Distance` object exists on the engine side. The Wild Magic callers of `GetClosestPoint1` are all in unreachable classes (`Foundation/Distance/Wm3DistLine3Circle3.cpp:99`, `Wm3DistRay3Box3.cpp:58,65`, `Wm3DistSegment3Box3.cpp:61,68,76`, `Wm3DistSegment3Rectangle3.cpp:67,80,90`, ...). | 失败 |
+| 44 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivative(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39110` | no | virtual default of the `Distance` base; its only caller is the base's own Newton driver `Foundation/Distance/Wm3Distance.cpp:150` (`Get(fTMin,fTMax,...)`, row 70), and `src/` never enters it (`grep -rn "Wm3::Distance\|Distance<" src/` -> 0). | 已匹配 |
+| 45 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivativeSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39180` | no | virtual default of the `Distance` base; only the base's own Newton driver `Foundation/Distance/Wm3Distance.cpp:150` calls it, and `src/` never enters that. | 已匹配 |
+| 70 | `Wm3::Distance<float, Wm3::Vector3<float>>::Get(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A38C50` | no | the base class's Newton driver; `src/` holds no `Distance` object (`grep -rn "Wm3::Distance\|Distance<" src/` -> 0), so nothing reaches it. | 已匹配 |
+| 71 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetSquared(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A38EB0` | no | the base class's Newton driver; `src/` holds no `Distance` object (`grep -rn "Wm3::Distance\|Distance<" src/` -> 0), so nothing reaches it. | 已匹配 |
+| 72 | `Wm3::Distance<float, Wm3::Vector3<float>>::SetDifferenceStep(float)` | `0x00A391D0` | yes | `Foundation/Distance/Wm3Distance.cpp:22` - called by the `Distance3f` constructor, which runs for the `DistVector3Box3f` object built at `src/moho/collision/CColPrimitiveBase.cpp:429`. | 已匹配 |
+| 73 | `Wm3::Distance<float, Wm3::Vector3<float>>::Distance()` | `0x00A39F20` | yes | the base constructor of every `Distance3f`; reached through `src/moho/collision/CColPrimitiveBase.cpp:429` (`Wm3::DistVector3Box3f distance(sphere->Center, mShape)`) and `src/moho/projectile/Projectile.cpp:1552`. | 已匹配 |
+
+### `Wm3::IntrBox3Sphere3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 24 | `Wm3::IntrBox3Sphere3<float>::Test()` | `0x00A41560` | yes | `src/moho/collision/CColPrimitiveBase.cpp:608` | 失败 |
+| 25 | `Wm3::IntrBox3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A43420` | yes | `src/moho/collision/CColPrimitiveBase.cpp:618` | 已匹配 |
+| 26 | `Wm3::IntrBox3Sphere3<float>::GetContactPoint() const` | `0x00A414C0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:619` | 已匹配 |
+| 51 | `Wm3::IntrBox3Sphere3<float>::GetVertexIntersection(float, float, float, float, float, float, float)` | `0x00A41740` | yes | two Wild Magic calls from row 25: `src/moho/collision/CColPrimitiveBase.cpp:618` -> `IntrBox3Sphere3f::Find(fTMax,v0,v1)` -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:384` (and `:480,:657`) | 已匹配 |
+| 52 | `Wm3::IntrBox3Sphere3<float>::GetEdgeIntersection(float, float, float, float, float, float)` | `0x00A41800` | yes | two Wild Magic calls from row 25: -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:392` (and `:411,:489`) | 已匹配 |
+| 53 | `Wm3::IntrBox3Sphere3<float>::FindFaceRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | `0x00A41880` | yes | two Wild Magic calls from row 25: -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:181,191,211` | 已匹配 |
+| 54 | `Wm3::IntrBox3Sphere3<float>::FindJustEdgeIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | `0x00A41CC0` | yes | two Wild Magic calls from row 25: -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:553,575` | 已匹配 |
+| 55 | `Wm3::IntrBox3Sphere3<float>::FindEdgeRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&, bool)` | `0x00A41F50` | yes | two Wild Magic calls from row 25: -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:198,218,228` | 已匹配 |
+| 56 | `Wm3::IntrBox3Sphere3<float>::FindVertexRegionIntersection(float, float, float, float, float, float, float, float, float, float&, float&, float&)` | `0x00A421E0` | yes | two Wild Magic calls from row 25: -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:235` | 已匹配 |
+
+### `Wm3::IntrSegment3Sphere3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 28 | `Wm3::IntrSegment3Sphere3<float>::Find()` | `0x00A471C0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:578` | 已匹配 |
+| 29 | `Wm3::IntrSegment3Sphere3<float>::GetPoint(int) const` | `0x00A46940` | yes | `src/moho/collision/CColPrimitiveBase.cpp:584,587,588` | 已匹配 |
+| 30 | `Wm3::IntrSegment3Sphere3<float>::Test()` | `0x00A46C80` | no | `grep -rn "IntrSegment3Sphere3" src/` -> one construction, `src/moho/collision/CColPrimitiveBase.cpp:577`, and it calls the unswept `Find()` (row 28). `Test()` has no caller: `grep -rn "IntrSegment3Sphere3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3IntrSegment3Sphere3.cpp` itself. | 已匹配 |
+| 31 | `Wm3::IntrSegment3Sphere3<float>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46B10` | no | the swept overload of row 30; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. Its only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp` itself (the virtual slot), never reached. | 已匹配 |
+| 32 | `Wm3::IntrSegment3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46DB0` | no | the swept overload of row 28; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. | 已匹配 |
+
+### `Wm3::IntrBox2Box2<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 33 | `Wm3::IntrBox2Box2<float>::Test()` | `0x00A47D40` | yes | `src/moho/ai/CAiSteeringImpl.cpp:273` | 已匹配 |
+
+### `Wm3::DistSegment3Segment3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 34 | `Wm3::DistSegment3Segment3<float>::GetSquared()` | `0x00A7E660` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits (the class is named only in the comment `src/moho/math/Wm3Segment3FafExtras.h:8`). The Wild Magic caller `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` belongs to `DistSegment3Rectangle3`, which `src/` never reaches. | 已匹配 |
+| 35 | `Wm3::DistSegment3Segment3<float>::Get()` | `0x00A7E230` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` (unreachable class). | 已匹配 |
+| 66 | `Wm3::DistSegment3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E2A0` | no | the swept overload of row 35; `grep -rn "DistSegment3Segment3" src/` -> 0 hits and the only Wild Magic caller is unreachable. | 失败 |
+| 67 | `Wm3::DistSegment3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E480` | no | the swept overload of row 34; `grep -rn "DistSegment3Segment3" src/` -> 0 hits and the only Wild Magic caller is unreachable. | 失败 |
+
+### `Wm3::DistVector2Box2<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 36 | `Wm3::DistVector2Box2<float>::GetSquared()` | `0x00A6C9D0` | yes | two Wild Magic calls from row 20: `src/moho/vision/VisionDB.cpp:89` -> `IntrBox2Circle2f::Test()` -> `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:42` -> `Foundation/Distance/Wm3DistVector2Box2.cpp:40` `Get()` -> `GetSquared()` | 已匹配 |
+| 41 | `Wm3::DistVector2Box2<float>::Get()` | `0x00A6C680` | yes | one Wild Magic call from row 20: `src/moho/vision/VisionDB.cpp:89` -> `IntrBox2Circle2f::Test()` -> `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:42` `DistVector2Box2<Real>(...).Get()` | 已匹配 |
+| 64 | `Wm3::DistVector2Box2<float>::Get(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A6C730` | no | the swept overload of row 41; the swept `Find` of `IntrBox2Circle2` is the only caller and it is unreachable (row 19). | 失败 |
+| 65 | `Wm3::DistVector2Box2<float>::GetSquared(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | `0x00A6C880` | no | the swept overload of row 36; the swept `Find` of `IntrBox2Circle2` is the only caller and it is unreachable (row 19). | 失败 |
+
+### `Wm3::IntrSegment3Capsule3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 37 | `Wm3::IntrSegment3Capsule3<float>::Test()` | `0x00A6BEB0` | no | `grep -rn "IntrSegment3Capsule3\|Capsule3" src/` -> 0 hits. The Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:145,177` - the swept sphere queries, which are themselves unreachable. | 已匹配 |
+| 38 | `Wm3::IntrSegment3Capsule3<float>::Find()` | `0x00A6C070` | no | `grep -rn "IntrSegment3Capsule3\|Capsule3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:177` (unreachable). | 已匹配 |
+| 42 | `Wm3::IntrSegment3Capsule3<float>::GetPoint(int) const` | `0x00A6BDF0` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:185` (unreachable). | 已匹配 |
+| 43 | `Wm3::IntrSegment3Capsule3<float>::GetParameter(int) const` | `0x00A6BE00` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:183` (unreachable). | 已匹配 |
+
+### `Wm3::IntrLine3Capsule3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 39 | `Wm3::IntrLine3Capsule3<float>::Find(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Capsule3<float>&, float*)` | `0x00A7F920` | no | `grep -rn "IntrLine3Capsule3\|Capsule3" src/` -> 0 hits. The Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:51` and `Wm3IntrRay3Capsule3.cpp:51`, both in unreachable classes. | 已匹配 |
+| 78 | `Wm3::IntrLine3Capsule3<float>::Test()` | `0x00A7F760` | no | `grep -rn "IntrLine3Capsule3\|Capsule3" src/` -> 0 hits; the only Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:51` and `Wm3IntrRay3Capsule3.cpp:51`, both unreachable. | 已匹配 |
+
+### `Wm3::DistLine3Segment3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 74 | `Wm3::DistLine3Segment3<float>::GetSquared()` | `0x00A80DE0` | no | `grep -rn "DistLine3Segment3" src/` -> 0 hits. The Wild Magic caller `Foundation/Distance/Wm3DistLine3Rectangle3.cpp:61` belongs to `DistLine3Rectangle3`, which `src/` never reaches. | 失败 |
+| 75 | `Wm3::DistLine3Segment3<float>::Get()` | `0x00A809A0` | no | `grep -rn "DistLine3Segment3" src/` -> 0 hits; the only Wild Magic caller is unreachable. | 失败 |
+| 76 | `Wm3::DistLine3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A80C10` | no | `grep -rn "DistLine3Segment3" src/` -> 0 hits; the only Wild Magic caller is unreachable. | 失败 |
+| 77 | `Wm3::DistLine3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A80A40` | no | `grep -rn "DistLine3Segment3" src/` -> 0 hits; the only Wild Magic caller is unreachable. | 失败 |
+
+### `Wm3::ConvexHull3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 79 | `Wm3::ConvexHull3<float>::ConvexHull3(int, Wm3::Vector3<float>*, float, bool, int)` | `0x00A67120` | no | `grep -rn "ConvexHull3" src/` -> 5 hits, all comments (`src/legacy/containers/RbTree.h:4365-4368,4701`). The Wild Magic caller is `Foundation/Containment/Wm3ContBox3.cpp:266`, inside `ContMinBox`, whose only caller is its own recursion (`Wm3ContBox3.cpp:319,402`). | 已匹配 |
+
+### `Wm3::Query3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 80 | `Wm3::Query3<float>::ToPlane(const Wm3::Vector3<float>&, int, int, int) const` | `0x00A55CE0` | no | `grep -rn "Query3" src/` -> 0 hits. The Wild Magic users are `Foundation/Containment/Wm3ConvexHull3.cpp:112,481` and `Wm3HullTriangle3.cpp:32` - the hull classes, unreachable (row 79). | 已匹配 |
+| 81 | `Wm3::Query3<float>::ToPlane(int, int, int, int) const` | `0x00A530A0` | no | `grep -rn "Query3" src/` -> 0 hits; the only Wild Magic users are the unreachable hull classes. | 已匹配 |
+| 82 | `Wm3::Query3<float>::ToTetrahedron(const Wm3::Vector3<float>&, int, int, int, int) const` | `0x00A530D0` | no | `grep -rn "Query3" src/` -> 0 hits; the only Wild Magic users are the unreachable hull classes. | 失败 |
+| 83 | `Wm3::Query3<float>::ToTetrahedron(int, int, int, int, int) const` | `0x00A53180` | no | `grep -rn "Query3" src/` -> 0 hits; the only Wild Magic users are the unreachable hull classes. | 失败 |
+| 84 | `Wm3::Query3<float>::ToCircumsphere(const Wm3::Vector3<float>&, int, int, int, int) const` | `0x00A55DF0` | no | `grep -rn "Query3" src/` -> 0 hits; the only Wild Magic users are the unreachable hull classes. | 已匹配 |
+| 85 | `Wm3::Query3<float>::ToCircumsphere(int, int, int, int, int) const` | `0x00A531B0` | no | `grep -rn "Query3" src/` -> 0 hits; the only Wild Magic users are the unreachable hull classes. | 已匹配 |
+
+### `Wm3::Query2<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 86 | `Wm3::Query2<float>::ToLine(const Wm3::Vector2<float>&, int, int) const` | `0x00A75C00` | no | `grep -rn "Query2" src/` -> 0 hits. The Wild Magic users are `Foundation/Containment/Wm3ConvexHull2.cpp:94,344`, `Wm3HullEdge2.cpp:29` and the tessellation classes - all unreachable. | 已匹配 |
+| 87 | `Wm3::Query2<float>::ToLine(int, int, int) const` | `0x00A74E70` | no | `grep -rn "Query2" src/` -> 0 hits; the only Wild Magic users are the unreachable hull and tessellation classes. | 已匹配 |
+| 88 | `Wm3::Query2<float>::ToTriangle(const Wm3::Vector2<float>&, int, int, int) const` | `0x00A74EA0` | no | `grep -rn "Query2" src/` -> 0 hits; the only Wild Magic users are the unreachable hull and tessellation classes. | 失败 |
+| 89 | `Wm3::Query2<float>::ToTriangle(int, int, int, int) const` | `0x00A74F30` | no | `grep -rn "Query2" src/` -> 0 hits; the only Wild Magic users are the unreachable hull and tessellation classes. | 失败 |
+| 90 | `Wm3::Query2<float>::ToCircumcircle(const Wm3::Vector2<float>&, int, int, int) const` | `0x00A75C80` | no | `grep -rn "Query2" src/` -> 0 hits; the only Wild Magic users are the unreachable hull and tessellation classes. | 已匹配 |
+| 91 | `Wm3::Query2<float>::ToCircumcircle(int, int, int, int) const` | `0x00A74F60` | no | `grep -rn "Query2" src/` -> 0 hits; the only Wild Magic users are the unreachable hull and tessellation classes. | 已匹配 |
+
+### `Wm3::ConvexHull1<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 92 | `Wm3::ConvexHull1<float>::ConvexHull1(int, const float*, float, bool, int)` | `0x00A74560` | no | `grep -rn "ConvexHull1" src/` -> 0 hits. The Wild Magic caller is `Foundation/Containment/Wm3ConvexHull2.cpp:195` and `Wm3ConvexHull3.cpp:238` (`GetConvexHull1`), both unreachable. | 已匹配 |
+
+### `Wm3::ConvexHull2<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 93 | `Wm3::ConvexHull2<float>::ConvexHull2(int, Wm3::Vector2<float>*, float, bool, int)` | `0x00A78E30` | no | `grep -rn "ConvexHull2" src/` -> 0 hits. The Wild Magic caller is `Foundation/Containment/Wm3ContBox2.cpp:248` (`ContMinBox` for 2D), whose only caller is its own recursion. | 已匹配 |
+
+### `Wm3::Distance<double, Wm3::Vector3<double>>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 94 | `Wm3::Distance<double, Wm3::Vector3<double>>::SetDifferenceStep(double)` | `0x00A39DB0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 95 | `Wm3::Distance<double, Wm3::Vector3<double>>::Distance()` | `0x00A39FA0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 已匹配 |
+| 121 | `Wm3::Distance<double, Wm3::Vector3<double>>::Get(double, double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39860` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 122 | `Wm3::Distance<double, Wm3::Vector3<double>>::GetSquared(double, double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39AB0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 123 | `Wm3::Distance<double, Wm3::Vector3<double>>::GetDerivative(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39D00` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 124 | `Wm3::Distance<double, Wm3::Vector3<double>>::GetDerivativeSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A39D60` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::Distance<double, Wm3::Vector2<double>>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 96 | `Wm3::Distance<double, Wm3::Vector2<double>>::SetDifferenceStep(double)` | `0x00A397C0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 97 | `Wm3::Distance<double, Wm3::Vector2<double>>::Distance()` | `0x00A39F60` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 已匹配 |
+| 125 | `Wm3::Distance<double, Wm3::Vector2<double>>::Get(double, double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39270` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 126 | `Wm3::Distance<double, Wm3::Vector2<double>>::GetSquared(double, double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A394C0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 127 | `Wm3::Distance<double, Wm3::Vector2<double>>::GetDerivative(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39710` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 128 | `Wm3::Distance<double, Wm3::Vector2<double>>::GetDerivativeSquared(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A39770` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::DistVector3Box3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 98 | `Wm3::DistVector3Box3<double>::GetSquared()` | `0x00A460D0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 99 | `Wm3::DistVector3Box3<double>::Get()` | `0x00A45800` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 104 | `Wm3::DistVector3Box3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A45FB0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 105 | `Wm3::DistVector3Box3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A45E90` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::DistVector3Segment3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 100 | `Wm3::DistVector3Segment3<double>::GetSquared()` | `0x00A48910` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 101 | `Wm3::DistVector3Segment3<double>::Get()` | `0x00A48100` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 102 | `Wm3::DistVector3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A487E0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 103 | `Wm3::DistVector3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A486B0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::DistVector2Box2<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 106 | `Wm3::DistVector2Box2<double>::GetSquared()` | `0x00A6CD70` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 107 | `Wm3::DistVector2Box2<double>::Get()` | `0x00A6C6A0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 108 | `Wm3::DistVector2Box2<double>::GetSquared(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A6CC60` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 109 | `Wm3::DistVector2Box2<double>::Get(double, const Wm3::Vector2<double>&, const Wm3::Vector2<double>&)` | `0x00A6CB50` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::DistLine3Segment3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 110 | `Wm3::DistLine3Segment3<double>::GetSquared()` | `0x00A81330` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 111 | `Wm3::DistLine3Segment3<double>::Get()` | `0x00A809C0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 112 | `Wm3::DistLine3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A811F0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 113 | `Wm3::DistLine3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A810B0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrBox2Circle2<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 114 | `Wm3::IntrBox2Circle2<double>::Test()` | `0x00A4EE50` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrSegment3Capsule3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 115 | `Wm3::IntrSegment3Capsule3<double>::Test()` | `0x00A6BF80` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 已匹配 |
+| 139 | `Wm3::IntrSegment3Capsule3<double>::Find()` | `0x00A6C3C0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrBox3Sphere3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 116 | `Wm3::IntrBox3Sphere3<double>::Test()` | `0x00A425C0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrBox2Box2<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 117 | `Wm3::IntrBox2Box2<double>::Test()` | `0x00A47F00` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 已匹配 |
+
+### `Wm3::IntrLine3Box3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 118 | `Wm3::IntrLine3Box3<double>::Test()` | `0x00A50090` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 133 | `Wm3::IntrLine3Box3<double>::Find()` | `0x00A50940` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrSegment3Box3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 119 | `Wm3::IntrSegment3Box3<double>::Test()` | `0x00A46720` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 134 | `Wm3::IntrSegment3Box3<double>::Find()` | `0x00A46330` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::IntrSegment3Sphere3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 120 | `Wm3::IntrSegment3Sphere3<double>::Test()` | `0x00A475E0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 135 | `Wm3::IntrSegment3Sphere3<double>::Find()` | `0x00A479B0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 140 | `Wm3::IntrSegment3Sphere3<double>::Find(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A47690` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::DistSegment3Segment3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 129 | `Wm3::DistSegment3Segment3<double>::GetSquared()` | `0x00A7F100` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 130 | `Wm3::DistSegment3Segment3<double>::Get()` | `0x00A7E250` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 131 | `Wm3::DistSegment3Segment3<double>::GetSquared(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A7EFB0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 132 | `Wm3::DistSegment3Segment3<double>::Get(double, const Wm3::Vector3<double>&, const Wm3::Vector3<double>&)` | `0x00A7EE60` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::Vector3<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 136 | `Wm3::Vector3<double>::GenerateOrthonormalBasis(Wm3::Vector3<double>&, Wm3::Vector3<double>&, Wm3::Vector3<double>&, bool)` | `0x00A3D150` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 138 | `Wm3::Vector3<double>::Normalize()` | `0x00A3D0A0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::Eigen<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 141 | `Wm3::Eigen<float>::IncrSortEigenStuff3()` | `0x00A70DB0` | no | `grep -rn "Eigen" src/` -> 0 hits. The Wild Magic users are the approximation classes (`Foundation/Approximation/Wm3ApprGaussPointsFit2.cpp:92`, `Wm3ApprLineFit3.cpp:98`, `Wm3ApprQuadraticFit2.cpp:22,106`, ...), reachable only through `ContOrientedBox` / `ContEllipse` / `ContEllipsoid` / `ContLozenge`, none of which `src/` calls. | 已匹配 |
+| 142 | `Wm3::Eigen<float>::IncrSortEigenStuff2()` | `0x00A70D70` | no | `grep -rn "Eigen" src/` -> 0 hits; the approximation classes that use it are unreachable. | 已匹配 |
+| 143 | `Wm3::Eigen<float>::GetEigenvalue(int) const` | `0x00A6CE70` | no | `grep -rn "Eigen" src/` -> 0 hits; the approximation classes that use it are unreachable. | 已匹配 |
+| 144 | `Wm3::Eigen<float>::GetEigenvector(int, Wm3::Vector3<float>&) const` | `0x00A6D350` | no | `grep -rn "Eigen" src/` -> 0 hits; the approximation classes that use it are unreachable. | 已匹配 |
+| 145 | `Wm3::Eigen<float>::GetEigenvector(int, Wm3::Vector2<float>&) const` | `0x00A6D3A0` | no | `grep -rn "Eigen" src/` -> 0 hits; the approximation classes that use it are unreachable. | 已匹配 |
+
+### `Wm3::Eigen<double>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 146 | `Wm3::Eigen<double>::IncrSortEigenStuff3()` | `0x00A71460` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 147 | `Wm3::Eigen<double>::IncrSortEigenStuff2()` | `0x00A71420` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 148 | `Wm3::Eigen<double>::GetEigenvalue(int) const` | `0x00A6CEA0` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 149 | `Wm3::Eigen<double>::GetEigenvector(int, Wm3::Vector3<double>&) const` | `0x00A6EE40` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+| 150 | `Wm3::Eigen<double>::GetEigenvector(int, Wm3::Vector2<double>&) const` | `0x00A6EE90` | no | `src/` never passes a `double` to a Wild Magic template: `grep -rn "Vector3d\|Vector2d" src/` -> 0, `grep -rn "\bdouble\b" src/` \| grep -i wm3 -> 0. The float instantiation of the same class is the one the engine reaches (`double-audit.md`). | 失败 |
+
+### `Wm3::Quaternion<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 154 | `Wm3::Quaternion<float>::CompareArrays(const Wm3::Quaternion<float>&) const` | `0x004F0B40` | yes | one Wild Magic call from row 155: `src/moho/ai/CAiFormationInstance.cpp:3590` `mOrientation == kZeroQuaternion` -> `Foundation/Math/Wm3Quaternion.inl:109` `return CompareArrays(rkV) == 0;` | 已匹配 |
+| 155 | `Wm3::Quaternion<float>::operator==(const Wm3::Quaternion<float>&) const` | `0x004F08E0` | yes | `src/moho/ai/CAiFormationInstance.cpp:3590` `mOrientation == kZeroQuaternion` | 已匹配 |
+
+### `Wm3::Sphere3<float>`
+
+| # | target | retail address | executed? | evidence | wmdiff status |
+|---:|---|---|---|---|---|
+| 156 | `Wm3::Sphere3<float>::Sphere3(const Wm3::Vector3<float>&, float)` | `0x004740C0` | yes | `src/moho/ai/CAiSteeringImpl.cpp:537` `const Wm3::Sphere3f querySphere{owner->GetPosition(), queryRadius}`; `src/moho/collision/CColPrimitiveBase.cpp:468` `mShape(localCenter, radius)` | 已匹配 |
+
+## Notes on the audit
+
+### The 110 dead rows come in two islands
+
+* **the `double` island** (51 rows): every `double` instantiation in the table.
+  They are linked into the binary because the library instantiates them
+  explicitly, and never executed.  `double-audit.md` has the per-target
+  evidence; the audit above re-verified the rule against the current `src/`.
+* **the `float` island** (59 rows): the float rows whose classes and members
+  the engine never calls - the convex hulls and `Eigen`, `Query2`/`Query3`,
+  the capsule intersectors, the swept distance queries, the `Distance` base
+  class's Newton driver, and the private helpers of intersectors the engine
+  only enters through their unswept entry points.
+
+### What the audit changed
+
+Before this ledger the harness skipped only the 47 `double` rows, so a default
+run exercised 109 rows.  It now exercises **46**: 63 rows the engine cannot
+reach were being compared on every run - the 59 `float` rows of the float
+island, plus the 4 `double` rows the old skip list had missed - and their
+results said nothing about the engine.
+
+The 12 rows that run by default and fail are exactly the ones the float
+analysis documents (`float-analysis-ordinary.md`,
+`float-analysis-extreme.md`) already attributed: the two `Dot` rows, the two
+`LengthSq`/`SquaredLength` rows, `DistVector3Box3f::GetSquared`, `DistVector3Segment3f::Get`/`GetSquared`,
+`IntrLine3Box3f::Test`, `IntrSegment3Box3f::Find`/`GetPoint`,
+`IntrBox3Sphere3f::Test` and the masked `ContAlignedBox`.  All of them are
+**codegen** differences (the retail's x87 register file against the rebuild's
+binary32 SSE), not source differences - and the three that reach the game
+(`Dot`, `LengthSq`/`SquaredLength`, `DistVector3Segment3`) are the ones
+`x87math-usage.md` names.
+
+### The rows that were hardest to classify
+
+* **`Wm3::Vector3<float>::Normalize()`** - the row's retail address
+  (`0x00452AF0`) is the same one the *static* `Normalize(Vector3&, float)`
+  uses, so the two rows look like one function.  They are two C++ functions:
+  the engine calls the static one (`Wm3::Vector3f::Normalize(&v)`), and the
+  member has no caller at all - its own callers are `UnitCross` and the
+  swept sphere queries.  `dead`, with no loss of coverage: the shared retail
+  body is still compared by row 7.
+* **`Wm3::DistVector2Box2<float>::Get()`** - `src/` never names it
+  (`VisionShader.h:46` is a comment about a hand-written HLSL copy), but
+  `IntrBox2Circle2f::Test()` calls it, and the engine calls that `Test`.  So
+  it is `executed`, and with it `GetSquared()` and `Math<float>::Sqrt`.  The
+  old census said "not executed" because it only looked at `src/`.
+* **`Wm3::IntrLine3Capsule3<float>::Find(...)` and the whole
+  `IntrSegment3Capsule3<float>` family** - these look engine-facing because
+  the *swept* `IntrSegment3Sphere3f` queries use them.  But the engine calls
+  the **unswept** `IntrSegment3Sphere3f::Find()`, so the swept path is never
+  entered and the capsule intersector is never built.  `dead`.
+* **`Wm3::Distance<float, Wm3::Vector3<float>>::SetDifferenceStep(float)`** -
+  no `src/` line names it, and it is not virtual.  It is `executed` because
+  the `Distance` base constructor calls it (`Wm3Distance.cpp:22`), and the
+  base constructor runs for every `DistVector3Box3f` / `DistVector3Segment3f`
+  the engine builds.  The same chain makes the base constructor `executed`.
+* **`Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*)` and
+  `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)`** -
+  in WM3.8 there is only **one** function here; the mask argument has a
+  default.  The two rows are the harness's two call shapes, so both are
+  `executed`.  The 2D overloads are a different function and are `dead`:
+  `src/`'s only `ContAlignedBox` call passes `Wm3::Vector3f vertices[8]`.
 

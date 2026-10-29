@@ -791,7 +791,7 @@ int main(int argc, char** argv)
   }
 
   if (skipped != 0) {
-    std::printf("wmdiff: %d targets skipped (double, not executed by the engine; "
+    std::printf("wmdiff: %d targets skipped (not executed by the engine; "
                 "--include-dead to run them)\n", skipped);
   }
   std::printf("wmdiff: %d/%d targets passed\n", passed, ran);
