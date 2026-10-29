@@ -82,6 +82,11 @@ work.
 | of the default run: **已匹配** | **46** |
 | of the default run: **失败** | **0** |
 
+The 143 functions that have **no row and should not have one** are listed
+further down ("Functions with no row, and why"): they are the carried-forward
+verdicts from the 2026-10-28 ledger, so the question "is anything reachable
+but unmatched?" is answered by reading this file, not by a new census.
+
 **A function the main project does not call does not need a comparison entry.**
 That is the rule this ledger applies, and since 2026-10-29 it is enforced by
 deletion rather than by a skip flag: the 110 dead rows were removed, so the
@@ -336,3 +341,186 @@ executes it - so those failures said nothing about the engine either.
   `executed`.  The 2D overloads are a different function and are `dead`:
   `src/`'s only `ContAlignedBox` call passes `Wm3::Vector3f vertices[8]`.
 
+## Functions with no row, and why (carried forward)
+
+These are the entries of the 2026-10-28 ledger whose verdict was `不适用` -
+no row is the right answer.  They are carried forward **verbatim** from
+`bd18d01^:wmdiff/reachable.md` (the ledger as it stood before wmdiff moved
+out of the dependency tree), because the deletion of 2026-10-29 removed them
+from view: the file then listed only the rows that still exist.
+
+They were not re-derived.  The 46 rows above were re-audited on 2026-10-29;
+these were not touched by that round.  If a question turns on one of them,
+check that one entry and record the result here - do not start a new census.
+
+| function | source | verdict |
+|---|---|---|
+| `Wm3::DistSegment3Segment3<float>::DistSegment3Segment3(const Wm3::Segment3<float>&, const Wm3::Segment3<float>&)` | Wm3DistSegment3Segment3.cpp | `不适用` |
+| `Wm3::DistVector2Box2<float>::DistVector2Box2(const Wm3::Vector2<float>&, const Wm3::Box2<float>&)` | Wm3DistVector2Box2.cpp | `不适用` |
+| `Wm3::DistVector3Box3<float>::DistVector3Box3(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | Wm3DistVector3Box3.cpp | `不适用` |
+| `Wm3::DistVector3Segment3<float>::DistVector3Segment3(const Wm3::Vector3<float>&, const Wm3::Segment3<float>&)` | Wm3DistVector3Segment3.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::Distance()` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::~Distance()` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector3<float>>::~Distance()` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::SetDifferenceStep(float)` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::GetDerivative(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::GetDerivativeSquared(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::Get(float, float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Distance<float, Wm3::Vector2<float>>::GetSquared(float, float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Distance.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::Intersector()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::Intersector()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::~Intersector()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::~Intersector()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::Test()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::Test()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::Find()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::Find()` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::Test(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector2<float>>::Find(float, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&)` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::Intersector<float, Wm3::Vector3<float>>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Intersector.cpp | `不适用` |
+| `Wm3::IntrBox2Box2<float>::IntrBox2Box2(const Wm3::Box2<float>&, const Wm3::Box2<float>&)` | Wm3IntrBox2Box2.cpp | `不适用` |
+| `Wm3::IntrBox2Circle2<float>::IntrBox2Circle2(const Wm3::Box2<float>&, const Wm3::Circle2<float>&)` | Wm3IntrBox2Circle2.cpp | `不适用` |
+| `Wm3::IntrBox3Sphere3<float>::IntrBox3Sphere3(const Wm3::Box3<float>&, const Wm3::Sphere3<float>&)` | Wm3IntrBox3Sphere3.cpp | `不适用` |
+| `Wm3::Dot24x(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | `不适用` |
+| `Wm3::Cross24(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | `不适用` |
+| `Wm3::Sub24Vector(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3IntrLine3Box3.cpp | `不适用` |
+| `Wm3::IntrLine3Box3<float>::IntrLine3Box3(const Wm3::Line3<float>&, const Wm3::Box3<float>&)` | Wm3IntrLine3Box3.cpp | `不适用` |
+| `Wm3::IntrSegment3Box3<float>::IntrSegment3Box3(const Wm3::Segment3<float>&, const Wm3::Box3<float>&, bool)` | Wm3IntrSegment3Box3.cpp | `不适用` |
+| `Wm3::IntrSegment3Capsule3<float>::IntrSegment3Capsule3(const Wm3::Segment3<float>&, const Wm3::Capsule3<float>&)` | Wm3IntrSegment3Capsule3.cpp | `不适用` |
+| `Wm3::IntrSegment3Sphere3<float>::IntrSegment3Sphere3(const Wm3::Segment3<float>&, const Wm3::Sphere3<float>&)` | Wm3IntrSegment3Sphere3.cpp | `不适用` |
+| `Wm3::AxisAlignedBox3<float>::AxisAlignedBox3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3AxisAlignedBox3.h | `不适用` |
+| `Wm3::AxisAlignedBox3<float>::AxisAlignedBox3()` | Wm3AxisAlignedBox3.inl | `不适用` |
+| `Wm3::Box2<float>::Box2()` | Wm3Box2.inl | `不适用` |
+| `Wm3::Box2<float>::Box2(const Wm3::Vector2<float>&, const Wm3::Vector2<float>*, const float*)` | Wm3Box2.inl | `不适用` |
+| `Wm3::Box2<float>::Box2(const Wm3::Vector2<float>&, const Wm3::Vector2<float>&, const Wm3::Vector2<float>&, float, float)` | Wm3Box2.inl | `不适用` |
+| `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Box3.h | `不适用` |
+| `Wm3::Box3<float>::Box3()` | Wm3Box3.inl | `不适用` |
+| `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>*, const float*)` | Wm3Box3.inl | `不适用` |
+| `Wm3::Box3<float>::Box3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, float, float, float)` | Wm3Box3.inl | `不适用` |
+| `Wm3::Capsule3<float>::Capsule3()` | Wm3Capsule3.inl | `不适用` |
+| `Wm3::Circle2<float>::Circle2(const Wm3::Vector2<float>&, float)` | Wm3Circle2.inl | `不适用` |
+| `Wm3::IVector2<int>::IVector2()` | Wm3IVector2.h | `不适用` |
+| `Wm3::IVector2<int>::IVector2(int, int)` | Wm3IVector2.h | `不适用` |
+| `Wm3::IVector2<int>::X() const` | Wm3IVector2.h | `不适用` |
+| `Wm3::IVector2<int>::Y() const` | Wm3IVector2.h | `不适用` |
+| `Wm3::IVector2<int>::operator<(const Wm3::IVector2<int>&) const` | Wm3IVector2.h | `不适用` |
+| `Wm3::Line3<float>::Line3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Line3.inl | `不适用` |
+| `Wm3::Math<float>::Cos(float)` | Wm3Math.inl | `不适用` |
+| `Wm3::Math<float>::Sin(float)` | Wm3Math.inl | `不适用` |
+| `Wm3::Matrix3<float>::Matrix3(bool)` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Matrix3<float>::operator()(int, int)` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Matrix3<float>::I(int, int)` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Matrix3<float>::MakeZero()` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Matrix3<float>::MakeIdentity()` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Matrix3<float>::operator*(const Wm3::Vector3<float>&) const` | Wm3Matrix3.inl | `不适用` |
+| `Wm3::Plane3<float>::Plane3()` | Wm3Plane3.inl | `不适用` |
+| `Wm3::Plane3<float>::Plane3(const Wm3::Plane3<float>&)` | Wm3Plane3.inl | `不适用` |
+| `Wm3::Plane3<float>::Plane3(const Wm3::Vector3<float>&, float)` | Wm3Plane3.inl | `不适用` |
+| `Wm3::Plane3<float>::operator=(const Wm3::Plane3<float>&)` | Wm3Plane3.inl | `不适用` |
+| `Wm3::Quaternion<float>::Quaternion(const Wm3::Vector3<float>&, float)` | Wm3Quaternion.h | `不适用` |
+| `Wm3::Quaternion<float>::Quaternion()` | Wm3Quaternion.h | `不适用` |
+| `Wm3::Quaternion<float>::Quaternion(float, float, float, float)` | Wm3Quaternion.h | `不适用` |
+| `Wm3::Quaternion<float>::Identity()` | Wm3Quaternion.h | `不适用` |
+| `Wm3::Quaternion<float>::LengthSq(const Wm3::Quaternion<float>&)` | Wm3Quaternion.h | `不适用` |
+| `Wm3::Quaternion<float>::Quaternion(const Wm3::Quaternion<float>&)` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::operator[](int)` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::W() const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::X() const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::Y() const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::Z() const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::operator=(const Wm3::Quaternion<float>&)` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::operator!=(const Wm3::Quaternion<float>&) const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::operator*(float) const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::ToRotationMatrix(Wm3::Matrix3<float>&) const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::FromAxisAngle(const Wm3::Vector3<float>&, float)` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::Length() const` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::Normalize()` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Quaternion<float>::Rotate(const Wm3::Vector3<float>&)` | Wm3Quaternion.inl | `不适用` |
+| `Wm3::Segment3<float>::Segment3()` | Wm3Segment3.inl | `不适用` |
+| `Wm3::Segment3<float>::Segment3(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, float)` | Wm3Segment3.inl | `不适用` |
+| `Wm3::Sphere3<float>::Sphere3()` | Wm3Sphere3.inl | `不适用` |
+| `Wm3::Sphere3<float>::operator=(const Wm3::Sphere3<float>&)` | Wm3Sphere3.inl | `不适用` |
+| `Wm3::Vector2<float>::Vector2()` | Wm3Vector2.h | `不适用` |
+| `Wm3::Vector2<float>::Vector2(float, float)` | Wm3Vector2.h | `不适用` |
+| `Wm3::Vector2<float>::Vector2(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator[](int) const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator[](int)` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::X() const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::X()` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::Y() const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::Y()` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator=(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator+(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator-(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::operator*(float, const Wm3::Vector2<float>&)` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::operator+=(const Wm3::Vector2<float>&)` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::Length() const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::Dot(const Wm3::Vector2<float>&) const` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Vector2<float>::Normalize()` | Wm3Vector2.inl | `不适用` |
+| `Wm3::Wm3Detail::RoundTo24(double)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Wm3Detail::Mul24(double, double)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Wm3Detail::Add24(double, double)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Wm3Detail::Sub24(double, double)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Wm3Detail::Div24(double, double)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Vector3()` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Vector3(float, float, float)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Zero()` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::NaN()` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Add(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Sub(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Scale(const Wm3::Vector3<float>&, float)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Length(const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>*, float)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::DistanceSq3D(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::DistanceSqXZ(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::IsntNaN(const Wm3::Vector3<float>*)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::IsntNaN(const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::IsInvalid(const Wm3::Vector3<float>&)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3fIsntNaN(const Wm3::Vector3<float>*)` | Wm3Vector3.h | `不适用` |
+| `Wm3::Vector3<float>::Vector3(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator const float*() const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator[](int) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator[](int)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::X() const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::X()` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::Y() const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::Y()` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::Z() const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::Z()` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator=(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator!=(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator+(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator-(const Wm3::Vector3<float>&) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator*(float) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator/(float) const` | Wm3Vector3.inl | `不适用` |
+| `Wm3::operator*(float, const Wm3::Vector3<float>&)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator+=(const Wm3::Vector3<float>&)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::operator/=(float)` | Wm3Vector3.inl | `不适用` |
+| `Wm3::Vector3<float>::ComputeExtremes(int, const Wm3::Vector3<float>*, Wm3::Vector3<float>&, Wm3::Vector3<float>&)` | Wm3Vector3.inl | `不适用` |
+
+### The three reasons behind `不适用`
+
+* **not executed** (57): the engine has no call site for the member.  Every
+  `double` instantiation is here - no `src/` line anywhere passes a double
+  argument to a Wild Magic template - and so are the three hull classes in both
+  precisions and `Eigen` in both.  Rows already in the table for those classes
+  are kept: verified, bit-exact, and they cost nothing, but they are not
+  engine-facing and no further work goes into them.
+* **executed, but no retail body** (52): the retail inlines the member at every
+  call site, so there is no address to pair.  This is a finding, not a gap - the
+  evidence is the retail block that was read, and it is recorded in the note.
+  `Quaternion<float>::Rotate` is the clearest case: the engine calls it, and the
+  WM3.8 `Quaternion.cpp` block holds only `CompareArrays` and the two
+  `operator==` wrappers.
+* **executed, but a row could not discriminate** (13): eight constructors
+  whose objects hold **references** - the compared bytes are the caller's
+  addresses, and their bases leave fields uninitialised - and the two
+  `Intersector` constructors, where skipping the vtable pointer leaves only
+  `m_fContactTime = 0.0` and `IT_EMPTY`, constants that could never disagree.
+  The pilot and the reasoning are in the README (`Constructor rows`).
+* **only in the rebuild** (21): the helpers the rebuild adds - `Zero`, `NaN`,
+  `Add`, `Sub`, `Scale`, `DistanceSq3D`, `DistanceSqXZ`, `IsInvalid`, the static
+  `Length`, and the `Wm3Detail::*24` x87 model.  There is nothing on the retail
+  side to compare them with; their correctness is judged by the members that
+  use them.
