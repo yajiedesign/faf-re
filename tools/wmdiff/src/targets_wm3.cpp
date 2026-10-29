@@ -2,10 +2,14 @@
 //
 // The rows themselves live in four per-class slices, one per header family:
 //
-//   wm3vec::Targets()             Wm3Vector3 / Wm3Vector2        (9 rows)
-//   wm3math::Targets()            Wm3Math                        (3 rows)
+//   wm3vec::Targets()             Wm3Vector3 / Wm3Vector2        (8 rows)
+//   wm3math::Targets()            Wm3Math                        (2 rows)
 //   wm3geom::Targets()            Wm3Box3 / Wm3AxisAlignedBox3    (2 rows)
-//   wm3coll::Targets()            Wm3 Intersection / Distance    (16 rows)
+//   wm3coll::Targets()            Wm3 Intersection / Distance    (34 rows)
+//
+// Every row in every slice is on the typed path: the row carries its own
+// input and output structs, and the harness only ever sees the byte buffers
+// behind them.
 //
 // Splitting them keeps each class's harness, retail stubs and generators
 // together and lets them be extended independently. This file only chains the

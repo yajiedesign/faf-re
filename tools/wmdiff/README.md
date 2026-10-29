@@ -375,13 +375,13 @@ Useful flags: `--list`, `--filter NAME` (comma-separated), `--iters`, `--seed`,
 `--cw` (x87 control word, default `0x007F`), `--snan`, `--strict-nan`,
 `--skip-extreme`, `--max-mismatch`, `--image PATH`.
 
-`--skip-extreme` drops draws whose input words look like NaN, denormals or
-values beyond 2^63 **when read as floats**, so it measures ordinary-value
-behaviour only.  A row whose input block also carries counts, indices, bools
-or mask bytes never produces an ordinary draw: it is reported as
-`[SKIP] ... 0/N run: every draw had an extreme word (not a pass)` and counted
-separately, never as a pass.  A partly skipped row says how many draws went
-(`(+N extreme inputs skipped)`).
+`--skip-extreme` makes every row draw **ordinary inputs only**: every lane of
+the row's typed input is finite, in range and normal - no NaN, no infinity, no
+subnormal.  The rows decide for themselves how to draw them (`DrawKind::Ordinary`
+in the generator), so no row can be left without a comparable input: there is
+no `[SKIP]` any more, and every row runs every draw.  The default run, without
+the flag, is the extreme mixture (`DrawKind::WithExtremes`), the same draws the
+word path made.
 
 **The suite runs the targets the engine executes.**  The table carries
 **46 rows**, and every one of them is a target a `src/` call site reaches -
@@ -6949,7 +6949,7 @@ arguments, plain `ret`.  Each writes three words: the **vtable pointer** at `+0`
 (a link-time constant, different in the retail and the rebuild), `m_fContactTime
 = 0.0` at `+4` and `m_iIntersectionType = IT_EMPTY` at `+8`.
 
-The harness compares exactly `outWords` words, and an entry narrows that by
+The harness compares exactly the words the row writes, and an entry narrows that by
 writing only the words it wants - so the vtable pointer **is** skippable.  But
 what is left is `0.0f` and `0` on both sides of every draw.  **Skipping the noise
 is not the same as having something left to compare**, and an entry that can
@@ -6965,8 +6965,9 @@ it as floats, the harness read it as floats, and the driver compared
 but it is a poor fit for a row whose input is a *class* - the row has to know
 the layout, and the harness has to guess it.
 
-`wmdiff::Target` now carries a second path.  A row that sets `genT` is a
-**typed row**:
+**2026-10-29, phase 2 (final): the word path is gone.**  The thirty-four
+collision rows in `wm3_coll_targets.cpp` are typed now, and so is every row
+in the table - the untyped buffer is gone with them:
 
 ```cpp
 struct Target
@@ -6974,29 +6975,52 @@ struct Target
   const char* name;
   std::uint32_t va;
   const char* source;
-  int inWords;  int outWords;                       // word path
-  const char* inLayout;  const char* outLayout;
-  void (*gen)(Rng&, std::uint32_t*);
-  void (*retail)(const std::uint32_t*, std::uint32_t*);
-  void (*ours)(const std::uint32_t*, std::uint32_t*);
-  std::uint32_t inBytes = 0;  std::uint32_t outBytes = 0;   // typed path
-  void (*genT)(Rng&, void*, DrawKind) = nullptr;
-  void (*retailT)(const void*, void*) = nullptr;
-  void (*oursT)(const void*, void*) = nullptr;
+  std::uint32_t inBytes;  std::uint32_t outBytes;
+  void (*genT)(Rng&, void* in, DrawKind);
+  void (*retailT)(const void* in, void* out);
+  void (*oursT)(const void* in, void* out);
 };
 ```
 
-The typed members come **last** on purpose: the rows that are still on the
-word path keep their initializers exactly as they were, and the default
-initializers leave the typed members null and zero.  A row is typed when
-`genT != nullptr`.
+`inWords` / `outWords` / `inLayout` / `outLayout` and the three word-path
+function pointers are gone, and with them the driver's word branch, the
+input-word scan for extreme values, the `[SKIP]` guard (a row could be left
+with nothing to compare) and the layout printing in `--list`.  The row's own
+file owns the input and output struct definitions; the driver only ever sees
+byte buffers (`inBytes` / `outBytes` long) and hands the same input buffer to
+both sides.  The structs hold **plain float lanes**, not `Wm3::Vector3<float>`:
+the retail thunk takes the *address* of the lanes (`const float*`), and so does
+the harness forward - which is where the `Wm3::Vector3<float>` is built and the
+real member called.
 
-The typed row's own file owns the input and output struct definitions; the
-driver only ever sees byte buffers (`inBytes` / `outBytes` long) and hands the
-same input buffer to both sides.  The structs hold **plain float lanes**, not
-`Wm3::Vector3<float>`: the retail thunk takes the *address* of the lanes
-(`const float*`), and so does the harness forward - which is where the
-`Wm3::Vector3<float>` is built and the real member called.
+### The thirty-four collision rows' shapes
+
+| shape | rows |
+|---|---|
+| `vec[3] + box[15]` | `DistVector3Box3::GetSquared` |
+| `vec[3] + segment[7]` | `DistVector3Segment3::GetSquared`, `::Get` |
+| `vec[2] + box[8]` | `DistVector2Box2::GetSquared`, `::Get` |
+| `box[8] + circle[3]` | `IntrBox2Circle2::Test` |
+| `line[6] + box[15]` | `IntrLine3Box3::Test` |
+| `segment[7] + box[15] + solid` | `IntrSegment3Box3::Find`, `::GetPoint` |
+| `box[15] + sphere[4]` | `IntrBox3Sphere3::Test` |
+| `box[15] + sphere[4] + tmax + vel0[3] + vel1[3]` | `IntrBox3Sphere3::Find`, `::GetContactPoint` |
+| `segment[7] + sphere[4]` | `IntrSegment3Sphere3::Find`, `::GetPoint` |
+| `box0[8] + box1[8]` | `IntrBox2Box2::Test` |
+| `point[3] + box[15]` | `InBox` |
+| `count + points[24]` | `ContAlignedBox` |
+| `count + mode + points[24] + mask[8 bytes]` | `ContAlignedBox` (masked) |
+| `d[3] + v[3] + r2` | `GetVertexIntersection` |
+| `d[2] + v[2] + vsqr + r2` | `GetEdgeIntersection` |
+| `box[15] + sphere[4] + args[9] (+ above)` | the four region helpers |
+| `t0 + t1 + line[6] + box[15] + solid` | `IntrLine3Box3::DoClipping` |
+| `denom + numer + t0 + t1` | `IntrLine3Box3::Clip` |
+| `step` | `Distance::SetDifferenceStep`, `Distance::Distance` |
+| `v[3]`, `a[3]+b[3]`, `a[4]+b[4]`, `center[3]+radius` | `Vector3::Length`, `::CompareArrays`, `::operator==`, `Quaternion::CompareArrays`, `::operator==`, `Sphere3::Sphere3` |
+
+A shape several rows share is written once (`DistVector3Segment3In` serves two
+rows, `RegionIn` / `RegionFlagIn` serve the four region helpers, and so on),
+and each row's generator forwards to the shared generating helpers.
 
 ### `DrawKind`: the two kinds of draw
 
@@ -7011,30 +7035,43 @@ enum class DrawKind { Ordinary, WithExtremes };
   harmless instead of merely plausible, and it is checkable: the
   `[nan-payload]` notes land on the **same iteration numbers** as before
   (Dot 8795, Dot-const 3583, Cross 14750, Cross-const 9636, LengthSq 9310,
-  SquaredLength 1453, Box3::ComputeVertices 136 at 20000 iterations on seed
-  0x5EED2007), and the whole 46-row report at 1000000 iterations is
-  **byte-identical** to the word-path build's, line for line.
+  SquaredLength 1453, Box3::ComputeVertices 136, `DistVector3Segment3::GetSquared`
+  549, `IntrSegment3Box3::GetPoint` 54464, `Vector3::Length` 10665 at 1000000
+  iterations on seed 0x5EED2007), and the whole 46-row report at 1000000
+  iterations is **byte-identical** to the word-path build's, line for line.
 * **`Ordinary`** is the `--skip-extreme` draw: every lane is finite, in range
   and normal - no NaN, no infinity, no subnormal - so a typed row always has a
-  comparable input and can never be `[SKIP]`ed.  It consumes a different number
+  comparable input and can never be skipped.  It consumes a different number
   of draws; the two kinds are never mixed in one run.
 
-The driver branches once per row: a typed row allocates the byte buffers,
-fills them with the canary, calls `genT(rng, in, gSkipExtreme ? Ordinary :
-WithExtremes)`, then `retailT` / `oursT`, and compares `outBytes` bytes.  The
-word path keeps its behaviour **including the word scan and the `[SKIP]`
-guard** - but the scan now runs only for word-path rows; a typed row is never
-scanned, because it draws ordinary inputs itself when `--skip-extreme` is on.
+The driver branches once per row: it allocates the byte buffers, fills them
+with the canary, calls `genT(rng, in, gSkipExtreme ? Ordinary : WithExtremes)`,
+then `retailT` / `oursT`, and compares `outBytes` bytes.
 
-### Which rows are on the typed path now
+### The rows whose `Ordinary` draw needed a rule of its own
 
-Every row outside `wm3_coll_targets.cpp`: the eight `Wm3Vector3` rows, the
-two `Wm3Math` rows and the two geometry rows - twelve.  The thirty-four
-collision rows stay on the word path for now; a later phase converts them and
-then the word path itself goes away.
+* **`ContAlignedBox` (the masked row)** - the extreme kind has a fifth mode
+  whose mask bytes are `0x80`: the retail tests the byte against zero, so they
+  count as "valid", but our side reads the same bytes as the `const bool*` the
+  Wild Magic 3.4 signature takes, and `0x80` is not a `bool` representation.
+  The ordinary kind keeps to `0` and `1`.
+* **`ContAlignedBox` (both rows)** - the count stays in `1..8`: it is the
+  number of points the retail reads, and a count outside that range would have
+  it read past the eight the input carries.
+* **`IntrLine3Box3::DoClipping`** - the "whole line" clip interval is
+  `-FLT_MAX .. +FLT_MAX` in the extreme kind (that is what the retail's own
+  `bSolid` path reports) and `-1e6 .. +1e6` in the ordinary kind, because a
+  value beyond 2^63 is an extreme by the old word path's definition too.
+* **`DistVector3Segment3`** - the denormal draw (a point 1e-20 off the
+  segment's line, so the squared distance lives on the denormal grid) is an
+  extreme kind only; the ordinary kind has no subnormal lane at all.
+* **`Distance::SetDifferenceStep`** - the ordinary draw avoids both `0` (whose
+  reciprocal is an infinity) and the 1e38 tail (whose reciprocal is a float
+  denormal).
 
-The typed rows keep the same NaN-payload rule as the word path: a lane that
-differs but is a NaN on both sides is tallied, not failed (unless
+### The typed rows keep the NaN-payload rule
+
+A lane that differs but is a NaN on both sides is tallied, not failed (unless
 `--strict-nan`).
 
 **The typed path has discriminating power.**  A one-ulp perturbation of the

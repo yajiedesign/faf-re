@@ -219,12 +219,10 @@ namespace wm3geom
   const wmdiff::Target kTargets[] = {
     { "Wm3::AxisAlignedBox3<float>::TestIntersection(const Wm3::AxisAlignedBox3<float>&) const", 0x00506010,
       "Foundation/Math/Wm3AxisAlignedBox3.inl:49 (retail: this in EDX, arg in EDI, bool in AL)",
-      0, 0, "a[6] b[6]", "ret", nullptr, nullptr, nullptr,
       static_cast<std::uint32_t>(sizeof(Aabb3PairIn)), static_cast<std::uint32_t>(sizeof(BoolOut)),
       GenAabb3PairT, Aabb3TestIntersectionRetailT, Aabb3TestIntersectionOursT },
     { "Wm3::Box3<float>::ComputeVertices(Wm3::Vector3<float>*) const", 0x004FFF00,
       "Foundation/Math/Wm3Box3.inl:47 (retail thiscall, void, out array on the stack)",
-      0, 0, "center[3] axis[9] extent[3]", "vertex[8][3]", nullptr, nullptr, nullptr,
       static_cast<std::uint32_t>(sizeof(Box3In)), static_cast<std::uint32_t>(sizeof(VerticesOut)),
       GenBox3T, Box3ComputeVerticesRetailT, Box3ComputeVerticesOursT },
   };

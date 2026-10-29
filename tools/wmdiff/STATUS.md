@@ -39,6 +39,17 @@ default run was **34 / 46**: the 12 failures were the two `Dot` rows, the two
 `ContAlignedBox` - all of them codegen differences, closed by the submodule
 commits `59f1614` and `9af34dc`.
 
+**All 46 rows are on the typed path** (2026-10-29, phase 2 of the typed-row
+refactor): the row carries its own input and output structs, and the harness
+passes opaque byte buffers.  The untyped word path - `inWords` / `outWords` /
+`inLayout` / `outLayout`, the `gen` / `retail` / `ours` pointers, the driver's
+word branch, the input-word scan and the `[SKIP]` guard - is **gone**.  The
+report at 1,000,000 draws on seed `0x5EED2007` is **byte-identical** to the
+word-path build's, line for line, and the `[nan-payload]` notes fall on the
+same iteration numbers, so the conversion changed no verdict.  Under
+`--skip-extreme` there is **no `[SKIP]` anywhere**: every row draws ordinary
+inputs of its own and runs every draw.
+
 **Before the reachability work the split was 75 / 109.**  The harness skipped
 only the 47 `double` rows, so a default run exercised 109 rows - 75 passing and
 34 failing.  It then exercised **46** rows: 63 rows the engine cannot reach -
@@ -239,18 +250,18 @@ Their per-row verdicts are in the deletion commit's parent:
 
 Two other items are open, and neither is a rebuild defect:
 
-* **`--skip-extreme` classifies the wrong words.**  It tests every word of the
-  input block as a float, so any row whose block also carries counts, indices,
-  bools or mask bytes runs no ordinary inputs at all.  Since 2026-10-29 the
-  harness reports those rows as `[SKIP] ... 0/N run: every draw had an extreme
-  word (not a pass)` and counts them separately, so the vacuous pass is gone;
-  what remains is the coarse classification - a float-word mask per row would
-  let those rows run their ordinary inputs instead of being skipped.  Measured
-  under `--include-dead`: **21 rows** skip every draw (4 `ContAlignedBox`, six
-  `Query2`/`Query3` pairs, three `ConvexHull` constructors, both
-  `GenerateOrthonormalBasis`).  After the 2026-10-29 deletion the same
-  measurement over the remaining table is **2 rows** - the two
-  `ContAlignedBox<float>` rows.
+* **`--skip-extreme` used to classify the wrong words.**  It tested every word
+  of the input block as a float, so any row whose block also carried counts,
+  indices, bools or mask bytes ran no ordinary inputs at all: the harness
+  reported those rows as `[SKIP] ... 0/N run: every draw had an extreme word
+  (not a pass)` and counted them separately.  **That is gone with the word
+  path (2026-10-29, phase 2 of the typed-row refactor):** every row now draws
+  its own ordinary inputs (`DrawKind::Ordinary`), so every lane is finite, in
+  range and normal by construction, and **no row is ever skipped**.  The two
+  `ContAlignedBox<float>` rows that used to skip every draw now run all of
+  their draws - the masked one keeps its mask bytes to `0` and `1` in the
+  ordinary kind, because our side reads them as the `const bool*` the Wild
+  Magic 3.4 signature takes.
 * **The `Query2`/`Query3` OR-vs-AND source divergence.**  The retail combines
   the simplex signs with OR where the rebuild uses AND.  `src/` never names
   `Wm3::Query2` or `Wm3::Query3`, so it is recorded rather than scheduled.

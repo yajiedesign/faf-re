@@ -115,11 +115,11 @@ namespace wm3math
   } // namespace
 
   const wmdiff::Target kMathTargets[] = {
-    //  name                 va          our source                                  inW outW inLayout  outLayout  gen retail ours
-    { "Wm3::Math<float>::FAbs(float)", 0x0040DAB0, "Foundation/Math/Wm3Math.inl:82",           0, 0, "x",       "ret",      nullptr, nullptr, nullptr,
+    //  name                 va          our source                                  typed in/out
+    { "Wm3::Math<float>::FAbs(float)", 0x0040DAB0, "Foundation/Math/Wm3Math.inl:82",
       static_cast<std::uint32_t>(sizeof(ScalarIn)), static_cast<std::uint32_t>(sizeof(ScalarOut)),
       GenAbsT, FAbsRetailT, FAbsOursT },
-    { "Wm3::Math<float>::Sqrt(float)", 0x00452FC0, "Foundation/Math/Wm3Math.inl:142",          0, 0, "x",       "ret",      nullptr, nullptr, nullptr,
+    { "Wm3::Math<float>::Sqrt(float)", 0x00452FC0, "Foundation/Math/Wm3Math.inl:142",
       static_cast<std::uint32_t>(sizeof(ScalarIn)), static_cast<std::uint32_t>(sizeof(ScalarOut)),
       GenSqrtT, SqrtRetailT, SqrtOursT },
   };
