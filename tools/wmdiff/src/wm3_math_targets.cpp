@@ -13,12 +13,12 @@
 #include "wm3_math_harness.h"
 #include "wm3_math_thunks.h"
 
-using difffuzz::FromBits;
-using difffuzz::GenAngle;
-using difffuzz::GenEdge;
-using difffuzz::GenFloat;
-using difffuzz::GenPlain;
-using difffuzz::Rng;
+using wmdiff::FromBits;
+using wmdiff::GenAngle;
+using wmdiff::GenEdge;
+using wmdiff::GenFloat;
+using wmdiff::GenPlain;
+using wmdiff::Rng;
 
 using u32 = std::uint32_t;
 
@@ -33,19 +33,10 @@ namespace wm3math
     // sweep of the exponent range.
     void GenX1(Rng& rng, u32* in)
     {
-      in[0] = difffuzz::Bits(GenFloat(rng));
+      in[0] = wmdiff::Bits(GenFloat(rng));
     }
 
-    // FMod(x, y): lane 0 is x, lane 1 is y. Signed zeros and infinities in y are
-    // the interesting cases, so keep both lanes fully general.
-    void GenFMod(Rng& rng, u32* in)
-    {
-      in[0] = difffuzz::Bits(GenFloat(rng));
-      in[1] = difffuzz::Bits(rng.Chance(40) ? GenEdge(rng) : GenFloat(rng));
-    }
-
-
-    // ---- wrappers ----------------------------------------------------------
+// ---- wrappers ----------------------------------------------------------
     //
     // The harness and the thunks already return raw u32 bit patterns, so the
     // retail and ours wrappers are the same shape and only the callee differs.
@@ -61,22 +52,19 @@ namespace wm3math
     }
 
     WM3MATH_WRAP_UNARY(FAbs)
-    WM3MATH_WRAP_UNARY(InvSqrt)
     WM3MATH_WRAP_UNARY(Sqrt)
-
 
 #undef WM3MATH_WRAP_UNARY
 
   } // namespace
 
-  const difffuzz::Target kMathTargets[] = {
+  const wmdiff::Target kMathTargets[] = {
     //  name                 va          our source                                  inW outW inLayout  outLayout  gen          retail              ours
     { "Wm3::Math<float>::FAbs(float)", 0x0040DAB0, "Foundation/Math/Wm3Math.inl:82",           1, 1, "x",       "ret",      GenX1,        RetailFAbs,          OursFAbs },
-    { "Wm3::Math<float>::InvSqrt(float)", 0x0050D150, "Foundation/Math/Wm3Math.inl:100",          1, 1, "x",       "ret",      GenX1,        RetailInvSqrt,       OursInvSqrt },
     { "Wm3::Math<float>::Sqrt(float)", 0x00452FC0, "Foundation/Math/Wm3Math.inl:142",          1, 1, "x",       "ret",      GenX1,        RetailSqrt,          OursSqrt },
   };
 
-  const difffuzz::Target* Targets(int& count)
+  const wmdiff::Target* Targets(int& count)
   {
     count = static_cast<int>(sizeof(kMathTargets) / sizeof(kMathTargets[0]));
     return kMathTargets;

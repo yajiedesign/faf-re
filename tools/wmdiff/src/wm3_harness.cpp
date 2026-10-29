@@ -30,22 +30,13 @@ namespace wm3harness
       p[2] = v.z;
     }
 
-    Wm3::Vector2<float> Load2(const float* p)
-    {
-      return Wm3::Vector2<float>(p[0], p[1]);
-    }
-    void Store2(const Wm3::Vector2<float>& v, float* p)
-    {
-      p[0] = v.x;
-      p[1] = v.y;
-    }
   } // namespace
 
   // ---- Wm3::Vector3<float> -------------------------------------------------
 
   u32 Dot(const float* a, const float* b)
   {
-    return difffuzz::Bits(Wm3::Vector3<float>::Dot(Load3(a), Load3(b)));
+    return wmdiff::Bits(Wm3::Vector3<float>::Dot(Load3(a), Load3(b)));
   }
 
   void Cross(const float* a, const float* b, float* out)
@@ -56,35 +47,20 @@ namespace wm3harness
   u32 LengthSquared(const float* v)
   {
     const Wm3::Vector3<float> t = Load3(v);
-    return difffuzz::Bits(Wm3::Vector3<float>::LengthSq(t));
+    return wmdiff::Bits(Wm3::Vector3<float>::LengthSq(t));
   }
 
   u32 InstanceDot(const float* a, const float* b)
   {
-    return difffuzz::Bits(Load3(a).Dot(Load3(b)));
+    return wmdiff::Bits(Load3(a).Dot(Load3(b)));
   }
 
   u32 InstanceSquaredLength(const float* v)
   {
-    return difffuzz::Bits(Load3(v).SquaredLength());
+    return wmdiff::Bits(Load3(v).SquaredLength());
   }
 
-  void InstanceNormalize(const float* v, float* out)
-  {
-    Wm3::Vector3<float> t = Load3(v);
-    (void)t.Normalize();
-    Store3(t, out);
-  }
-
-  float InstanceNormalizeRet(const float* v, float* out)
-  {
-    Wm3::Vector3<float> t = Load3(v);
-    const float fLength = t.Normalize();
-    Store3(t, out);
-    return fLength;
-  }
-
-  void InstanceCross(const float* a, const float* b, float* out)
+void InstanceCross(const float* a, const float* b, float* out)
   {
     Store3(Load3(a).Cross(Load3(b)), out);
   }
@@ -102,7 +78,7 @@ namespace wm3harness
 
   u32 SqrtfBinary(float x)
   {
-    return difffuzz::Bits(Wm3::SqrtfBinary(x));
+    return wmdiff::Bits(Wm3::SqrtfBinary(x));
   }
 
   // ---- Wm3::Vector2<float> -------------------------------------------------

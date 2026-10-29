@@ -25,8 +25,8 @@
 #include "wm3_geom_harness.h"
 #include "wm3_geom_thunks.h"
 
-using difffuzz::GenEdge;
-using difffuzz::GenPlain;
+using wmdiff::GenEdge;
+using wmdiff::GenPlain;
 
 namespace wm3geom
 {
@@ -40,13 +40,13 @@ namespace wm3geom
     // comparison `Max[i] < rkBox.Min[i]` either clearly true or clearly false;
     // the interesting cases are the near-touching and inverted ones, where the
     // answer flips on the last bit of a lane.
-    void GenAabb3Pair(difffuzz::Rng& rng, std::uint32_t* in)
+    void GenAabb3Pair(wmdiff::Rng& rng, std::uint32_t* in)
     {
       float* f = reinterpret_cast<float*>(in);
       if (rng.Chance(50)) {
         for (int box = 0; box < 2; ++box) {
           float centre[3];
-          difffuzz::GenVec3(rng, centre);
+          wmdiff::GenVec3(rng, centre);
           for (int axis = 0; axis < 3; ++axis) {
             const float half = GenPlain(rng, 100.0f);
             f[box * 6 + axis] = centre[axis] - half;
@@ -55,7 +55,7 @@ namespace wm3geom
         }
       } else {
         for (int i = 0; i < 12; ++i) {
-          f[i] = rng.Chance(70) ? GenPlain(rng, 1000.0f) : difffuzz::GenFloat(rng);
+          f[i] = rng.Chance(70) ? GenPlain(rng, 1000.0f) : wmdiff::GenFloat(rng);
         }
       }
     }
@@ -67,10 +67,10 @@ namespace wm3geom
     // actually carries and it keeps the vertex arithmetic in a sane range; one
     // third arbitrary axes and extents, including degenerate and edge values,
     // to reach the overflow and subnormal paths the chained adds can hit.
-    void GenBox3(difffuzz::Rng& rng, std::uint32_t* in)
+    void GenBox3(wmdiff::Rng& rng, std::uint32_t* in)
     {
       float* f = reinterpret_cast<float*>(in);
-      difffuzz::GenVec3(rng, f);
+      wmdiff::GenVec3(rng, f);
 
       if (rng.Chance(66)) {
         // A signed permutation matrix: orthonormal, and cheap to keep exact.
@@ -82,7 +82,7 @@ namespace wm3geom
         }
       } else {
         for (int i = 0; i < 9; ++i) {
-          f[3 + i] = rng.Chance(70) ? GenPlain(rng, 10.0f) : difffuzz::GenFloat(rng);
+          f[3 + i] = rng.Chance(70) ? GenPlain(rng, 10.0f) : wmdiff::GenFloat(rng);
         }
       }
 
@@ -116,7 +116,7 @@ namespace wm3geom
     }
   } // namespace
 
-  const difffuzz::Target kTargets[] = {
+  const wmdiff::Target kTargets[] = {
     { "Wm3::AxisAlignedBox3<float>::TestIntersection(const Wm3::AxisAlignedBox3<float>&) const", 0x00506010,
       "Foundation/Math/Wm3AxisAlignedBox3.inl:49 (retail: this in EDX, arg in EDI, bool in AL)",
       12, 1, "a[6] b[6]", "ret", GenAabb3Pair,
@@ -127,7 +127,7 @@ namespace wm3geom
       Box3ComputeVerticesRetail, Box3ComputeVerticesOurs },
   };
 
-  const difffuzz::Target* Targets(int& count)
+  const wmdiff::Target* Targets(int& count)
   {
     count = static_cast<int>(sizeof(kTargets) / sizeof(kTargets[0]));
     return kTargets;

@@ -1,9 +1,9 @@
 // wmdiff - differential test of the rebuilt Wild Magic 3.8 against the retail
 // engine's copy.
 //
-// Same shape as tools/difffuzz: map the retail PE at its preferred base, call
+// Same shape as tools/wmdiff: map the retail PE at its preferred base, call
 // the retail function and our rebuilt one with identical random inputs, and
-// compare every output word bit for bit. The difference is scope - difffuzz
+// compare every output word bit for bit. The difference is scope - wmdiff
 // covers recovered engine sources that its build cannot include directly, so it
 // mirrors them by hand; wmdiff lives inside WildMagic3p8 and links the real
 // headers, so wm3_harness.cpp only forwards and nothing is copied.
@@ -14,7 +14,6 @@
 #include "targets_wm3.h"
 
 #include "pe_image.h"
-#include "engine_scope.h"
 
 #include <windows.h>
 
@@ -28,10 +27,10 @@
 
 #include "wm3_coll_targets.h"
 
-using difffuzz::FromBits;
-using difffuzz::kCanary;
-using difffuzz::kMaxWords;
-using difffuzz::Rng;
+using wmdiff::FromBits;
+using wmdiff::kCanary;
+using wmdiff::kMaxWords;
+using wmdiff::Rng;
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
@@ -52,9 +51,7 @@ namespace
   const char* gImage = "C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe";
   bool gStrictNan = false;
   bool gSkipExtreme = false;
-  // Run the double targets the engine never executes (see engine_scope.cpp).
-  bool gIncludeDead = false;
-  difffuzz::Rng* gGenRng = nullptr;
+  wmdiff::Rng* gGenRng = nullptr;
 
   // The retail CRT's Windows-version cache. `__get_winmajor` (0x00A83756)
   // checks the flag at 0x00FB7D50 and, when it is clear, works the version out
@@ -112,7 +109,7 @@ namespace
   // from `global_compat_flag` during CRT startup, which never runs here. The
   // CRT math dispatch bodies read it directly: at 0 the retail ceil/floor (and
   // friends) take the x87 fallback, whose NaN/errno path calls imports the
-  // mapped image cannot service. difffuzz seeds the same word to 1 before any
+  // mapped image cannot service. wmdiff seeds the same word to 1 before any
   // target runs.
   constexpr u32 kRetailGlobalModeSse2 = 0x01107030u;
 
@@ -328,7 +325,7 @@ namespace
     return 0;
   }
 
-  // A retail void(void) C-init entry. difffuzz runs the two entries whose BSS
+  // A retail void(void) C-init entry. wmdiff runs the two entries whose BSS
   // results the targets read (0x00BEDC30 computes float pi at 0x00FB78FC,
   // 0x00BEDC60 computes pi/2 at 0x00FB7914); the retail CRT would have run
   // them before main. Without them 0x006C1070's w <= -1 arm returns 0 instead
@@ -377,7 +374,7 @@ namespace
     std::printf("\n");
   }
 
-  void PrintMismatch(const difffuzz::Target& t, int iter, bool extreme, const u32* in,
+  void PrintMismatch(const wmdiff::Target& t, int iter, bool extreme, const u32* in,
     const u32* outR, const u32* outO)
   {
     std::printf(
@@ -401,7 +398,6 @@ namespace
       "  --snan     allow signaling NaNs in generated inputs\n"
       "  --strict-nan  count NaN-payload-only differences as mismatches\n"
       "  --skip-extreme  drop inputs that are denormal/inf/NaN or outside 2^-63..2^63\n"
-      "  --include-dead  also run the targets the engine never executes\n"
       "  --list     print the target table and exit\n");
   }
 
@@ -423,12 +419,10 @@ namespace
         gControlWord = static_cast<u32>(std::strtoul(argv[++i], nullptr, 0));
       } else if (std::strcmp(a, "--skip-extreme") == 0) {
         gSkipExtreme = true;
-      } else if (std::strcmp(a, "--include-dead") == 0) {
-        gIncludeDead = true;
       } else if (std::strcmp(a, "--strict-nan") == 0) {
         gStrictNan = true;
       } else if (std::strcmp(a, "--snan") == 0) {
-        difffuzz::gAllowSnan = true;
+        wmdiff::gAllowSnan = true;
       } else if (std::strcmp(a, "--list") == 0) {
         gList = true;
       } else if (std::strcmp(a, "--help") == 0 || std::strcmp(a, "-h") == 0) {
@@ -473,16 +467,15 @@ int main(int argc, char** argv)
   }
 
   int count = 0;
-  const difffuzz::Target* const targets = wm3targets::Targets(count);
+  const wmdiff::Target* const targets = wm3targets::Targets(count);
 
   if (gList) {
     std::printf("%-18s %-10s %-52s %s\n", "name", "retail VA", "our source", "layouts");
     for (int i = 0; i < count; ++i) {
-      const difffuzz::Target& t = targets[i];
-      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s%s\n", t.name, t.va,
+      const wmdiff::Target& t = targets[i];
+      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s\n", t.name, t.va,
         t.source[0] ? t.source : "(none)", t.inLayout, t.outLayout,
-        t.va == 0 ? "   [TODO: retail VA not filled in]" : "",
-        wm3scope::IsDeadInEngine(t.name) ? "   [dead: not executed by the engine]" : "");
+        t.va == 0 ? "   [TODO: retail VA not filled in]" : "");
     }
     return 0;
   }
@@ -493,15 +486,15 @@ int main(int argc, char** argv)
   if (GetEnvironmentVariableA("WMDIFF_CHILD", nullptr, 0) == 0) {
     u32 base = 0;
     u32 size = 0;
-    if (!difffuzz::ReadImageExtent(gImage, base, size)) {
+    if (!wmdiff::ReadImageExtent(gImage, base, size)) {
       std::fprintf(stderr, "wmdiff: cannot read PE header of %s\n", gImage);
       return 3;
     }
     std::fflush(stdout);
-    return difffuzz::RelaunchWithPreclaimedImage(base, size);
+    return wmdiff::RelaunchWithPreclaimedImage(base, size);
   }
 
-  difffuzz::RetailImage image;
+  wmdiff::RetailImage image;
   std::string error;
   if (!image.Load(gImage, error)) {
     std::printf("wmdiff: cannot map %s: %s\n", gImage, error.c_str());
@@ -607,7 +600,7 @@ int main(int argc, char** argv)
     }
   }
   {
-    const difffuzz::ImageEnvironment env = difffuzz::DescribeEnvironment();
+    const wmdiff::ImageEnvironment env = wmdiff::DescribeEnvironment();
     std::printf("wmdiff: mapped %s at 0x%08X (0x%X bytes, %u imports resolved, %u trapped)",
       gImage, image.Base(), image.SizeOfImage(), env.resolved_imports, env.trapped_imports);
     if (env.tls_bytes != 0) {
@@ -639,7 +632,7 @@ int main(int argc, char** argv)
     DebugBreak();
   }
 
-  int passed = 0, failed = 0, ran = 0, skipped = 0, vacuous = 0;
+  int passed = 0, failed = 0, ran = 0, vacuous = 0;
   // WMDIFF_INT3_AT=<va>[,<va>...] plants int3s in the retail image once it is
   // mapped, so a debugger attached to this process stops there with the
   // registers live. A breakpoint set from the debugger side cannot do this: the
@@ -671,12 +664,8 @@ int main(int argc, char** argv)
   }
 
   for (int i = 0; i < count; ++i) {
-    const difffuzz::Target& t = targets[i];
+    const wmdiff::Target& t = targets[i];
     if (!Selected(t.name)) {
-      continue;
-    }
-    if (!gIncludeDead && wm3scope::IsDeadInEngine(t.name)) {
-      ++skipped;
       continue;
     }
     ++ran;
@@ -687,16 +676,16 @@ int main(int argc, char** argv)
     bool crashed = false;
 
     for (int iter = 0; iter < gIters; ++iter) {
-      u32 in[difffuzz::kMaxWords];
-      u32 outR[difffuzz::kMaxWords];
-      u32 outO[difffuzz::kMaxWords];
+      u32 in[wmdiff::kMaxWords];
+      u32 outR[wmdiff::kMaxWords];
+      u32 outO[wmdiff::kMaxWords];
 
       for (int k = 0; k < t.inWords; ++k) {
-        in[k] = difffuzz::kCanary;
+        in[k] = wmdiff::kCanary;
       }
       for (int k = 0; k < t.outWords; ++k) {
-        outR[k] = difffuzz::kCanary;
-        outO[k] = difffuzz::kCanary;
+        outR[k] = wmdiff::kCanary;
+        outO[k] = wmdiff::kCanary;
       }
 
       t.gen(gen, in);
@@ -800,10 +789,6 @@ int main(int argc, char** argv)
     }
   }
 
-  if (skipped != 0) {
-    std::printf("wmdiff: %d targets skipped (not executed by the engine; "
-                "--include-dead to run them)\n", skipped);
-  }
   if (vacuous != 0) {
     std::printf("wmdiff: %d targets skipped with no non-extreme input; a --skip-extreme "
                 "run says nothing about them\n", vacuous);

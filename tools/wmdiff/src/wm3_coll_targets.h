@@ -6,12 +6,12 @@
 // Split out of targets_wm3.cpp so a class family can grow on its own;
 // targets_wm3.cpp chains to this via wm3coll::Targets().
 
-namespace difffuzz
+namespace wmdiff
 {
   struct Target;
 }
 
 namespace wm3coll
 {
-  const difffuzz::Target* Targets(int& count);
+  const wmdiff::Target* Targets(int& count);
 } // namespace wm3coll

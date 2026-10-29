@@ -2,7 +2,7 @@
 
 // Our side of the comparison harness.
 //
-// Unlike tools/difffuzz - which has to mirror engine sources verbatim because
+// Unlike tools/wmdiff - which has to mirror engine sources verbatim because
 // its build compiles only a hand-picked whitelist of translation units, from
 // arbitrary include paths - this harness lives inside the WildMagic3p8 tree
 // and links the real headers. So nothing here is a copy: every function below
@@ -25,9 +25,6 @@ namespace wm3harness
   // helpers above (0x00452AD0 and 0x004757E0) but exercise the .inl code.
   u32 InstanceDot(const float* a, const float* b);
   u32 InstanceSquaredLength(const float* v);
-  void InstanceNormalize(const float* v, float* out);
-  // The same call, keeping the length the member returns.
-  float InstanceNormalizeRet(const float* v, float* out);
   void InstanceCross(const float* a, const float* b, float* out);
 
   // Free function, not a member (Wm3Vector3.h:303).

@@ -3,7 +3,7 @@
 // Retail side of the Wild Magic 3.8 comparison harness.
 //
 // A thunk is here only once its retail virtual address is known, and then its
-// body is a live call into the retail image rather than a stub: difffuzz
+// body is a live call into the retail image rather than a stub: wmdiff
 // reached these addresses through the IDA export under decomp/, which this
 // machine does not have, so the mapping is established separately (Ghidra) and
 // each thunk is then written one at a time.
@@ -29,28 +29,10 @@ namespace wm3retail
   // rather than a parameter - hence no eps in the signature either. Retail
   // semantics match the 3.4 source exactly (len > eps ? v *= 1/len : v = 0).
   // __declspec(naked) goes on the definition only: MSVC rejects it on a
-  // declaration that has no body (C2488), same as difffuzz's headers.
+  // declaration that has no body (C2488), same as wmdiff's headers.
   void __cdecl Normalize(float* v);
 
-  // Retail 0x00452AF0 again, this time keeping what the body leaves in ST(0).
-  //
-  // The body ends with
-  //
-  //   FLD  dword ptr [0x00d71bfc]   ; the 1e-6 threshold
-  //   FXCH ST(1)
-  //   FCOMI ST(1)
-  //   FSTP ST(1)                    ; writes ST(0) into ST(1) and pops
-  //
-  // so the *length* - the value FCOMI compared - is what survives in ST(0) at
-  // the RET: FSTP ST(1) writes before it pops, and the pop brings the copy in
-  // ST(1) back to the top.  The degenerate branch (length <= the threshold)
-  // pops the length and leaves 0.0f instead.
-  //
-  // That is the WM member's own return value (the 3.4 source returns the
-  // length, and so does the rebuild), so the row below compares it.
-  float NormalizeRet(float* v);
-
-  // Retail 0x004757E0 (SquaredLength / static LengthSq - the retail image has
+// Retail 0x004757E0 (SquaredLength / static LengthSq - the retail image has
   // only the instance form). ECX = `this`, no stack arguments, plain RET.
   // Returns ST(0) in x87 extended precision and never rounds it to float; the
   // declared `float` return is where the rounding happens.

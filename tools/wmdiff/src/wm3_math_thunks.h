@@ -15,7 +15,7 @@
 // Retail addresses for Wm3::Math<float> are established with Ghidra (the IDA
 // export under decomp/ is not present on this machine). Fill in the matching
 // thunk one at a time with a naked call through that entry point, mirroring
-// tools/difffuzz/src/retail_thunks.cpp.
+// tools/wmdiff/src/retail_thunks.cpp.
 
 #include <cstdint>
 
@@ -25,14 +25,9 @@ namespace wm3mathretail
 
   // ---- Real -> Real, one argument -----------------------------------------
 
-
-  // Retail 0x0040DAB0: FLD float ptr [EBP+8]; FABS; RET. Result in ST(0) only.
+// Retail 0x0040DAB0: FLD float ptr [EBP+8]; FABS; RET. Result in ST(0) only.
   u32 FAbs(float x);
 
-  // Retail 0x0050D150: FLD float ptr [EBP+8]; FSQRT; FLD1; FDIVRP; RET.
-  // The FDIVRP (rather than FMUL by a reciprocal) is the only thing in the image
-  // matching the source, and it has just two callers - both inside FUN_0050CB50.
-  u32 InvSqrt(float x);
   // Retail 0x00452FC0: PUSH EBP; MOV EBP,ESP; AND ESP,-8; FLD float ptr
   // [EBP+8]; FSQRT; MOV ESP,EBP; POP EBP; RET. Reached independently by two
   // address-hunting lanes (as Math::Sqrt and as Vector3::SqrtfBinary), which

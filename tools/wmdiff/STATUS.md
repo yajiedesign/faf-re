@@ -22,15 +22,12 @@ arithmetic with hardware instructions rather than with `double`.
 
 | | |
 |---|---|
-| entries in `kTargets[]` | **156** |
+| entries in `kTargets[]` | **46** |
 | entries the harness runs by default | **46** |
-| entries the engine never executes - skipped unless `--include-dead` | **110** |
+| entries the engine never executes - **deleted 2026-10-29** | **0** |
 | default run: pass / fail | **46 / 0** |
-| whole table (`--include-dead`): pass / fail | **85 / 71** |
 | duplicate entries | **0** |
-| of the 71 whole-table failures: `double` rows | **47** |
-| of the 71 whole-table failures: `float` rows | **24** |
-| of the 71 whole-table failures: rows the engine executes | **0** |
+| entries deleted on 2026-10-29 (recoverable from git history) | **110** |
 
 **The live surface is clean.**  A default run is **46/46**, and it stays 46/46
 at 1,000,000 draws on each of the five seeds `0x5EED2007`, `0xDEADBEEF`,
@@ -44,19 +41,25 @@ commits `59f1614` and `9af34dc`.
 
 **Before the reachability work the split was 75 / 109.**  The harness skipped
 only the 47 `double` rows, so a default run exercised 109 rows - 75 passing and
-34 failing.  It now exercises **46** rows: 63 rows the engine cannot reach -
+34 failing.  It then exercised **46** rows: 63 rows the engine cannot reach -
 59 `float` rows and the 4 `double` rows the old skip list had missed - were
 being compared on every run, and their verdicts said nothing about the engine.
-The dead rows stay in the table - they were verified bit for bit at some point
-and they cost nothing to keep - but they are skipped by default, so the
-pass/fail line is about the code the engine actually runs.
 
-The whole table (`--include-dead`, 20,000 draws) is **85 / 156**.  Every one of
-the 71 failures is a **dead** row: the engine never executes it.  They are
-listed with the `失败` status in `reachable.md` because that is what the
-`--include-dead` run says, not because anything the game runs is wrong.
+**On 2026-10-29 those 110 rows were deleted**, along with the code that
+existed only for them - the generators, the retail thunks, the "ours"
+wrappers and the file-local helpers that no remaining row named.  The dead
+rows do not stay in the table: there is no compatibility layer, and the
+harness has no `--include-dead` flag any more, because with the dead rows
+gone there is nothing to skip.  **They are recoverable from git history** -
+`git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_targets.cpp` (and
+`wm3_coll_thunks.cpp`, `wm3_coll_harness.cpp`, `wm3_vec_targets.cpp`,
+`wm3_math_targets.cpp`, `engine_scope.cpp`, `reachable.md`) brings all of it
+back.  Before the deletion the whole table (`--include-dead`, 20,000 draws)
+was **85 / 156**, and every one of the 71 failures was a **dead** row: the
+engine never executes it, so those failures never said anything about the
+game either.
 
-**The 156 entries and the "how many Wild Magic functions are there" question
+**The 46 entries and the "how many Wild Magic functions are there" question
 are different questions now.**  The old figure - 219 functions, from the Ghidra
 run over the *old* rebuild in `.tmp/WildMagic3p8-re` - described a tree that is
 no longer here: the tree is now the upstream Wild Magic 3.8 submodule and the
@@ -67,15 +70,17 @@ verdict, the evidence, and the harness verdict.
 ## What the default run covers
 
 **A function the main project does not call does not need a comparison
-entry.**  The audit behind `reachable.md` decided all 156 rows:
+entry.**  The audit behind `reachable.md` decided all 156 rows the table used
+to carry; 110 of them came out `dead` and were **deleted on 2026-10-29**
+(recoverable from git history - see the numbers section above):
 
 | verdict | rows | meaning |
 |---|---:|---|
 | `executed` | **46** | a `src/` call site names the member, or Wild Magic calls it from a member that a `src/` call site reaches - the call site and the chain are quoted |
-| `dead` | **110** | no `src/` call site and no reached Wild Magic caller - the evidence is the `grep` that found nothing |
+| `dead` | **0** (110 deleted) | no `src/` call site and no reached Wild Magic caller - the evidence is the `grep` that found nothing |
 | `unsettled` | **0** | - |
 
-The 110 dead rows are two islands: **51** `double` rows (`src/` passes no
+The 110 deleted rows were two islands: **51** `double` rows (`src/` passes no
 `double` argument to a Wild Magic template anywhere - `double-audit.md`) and
 **59** `float` rows (the convex hulls, `Eigen`, `Query2`/`Query3`, the capsule
 intersectors, the swept distance queries, the `Distance` base class's Newton
@@ -201,8 +206,9 @@ Two more changes were verified and cannot move the engine:
 ## Deliberate limits
 
 * **A function the main project does not call does not need a comparison
-  entry.**  The 110 rows the engine cannot reach are skipped by default; they
-  stay in the table, but they do not get work.
+  entry.**  The 110 rows the engine cannot reach were **deleted** on
+  2026-10-29; the table now carries only the 46 rows the engine executes, and
+  they are the only rows that get work.
 * **`double` is not in scope.**  No `src/` line passes a double argument to a
   Wild Magic template, so every double instantiation is `not executed` however
   many entries it has.
@@ -218,17 +224,18 @@ Two more changes were verified and cannot move the engine:
 **Nothing on the engine-facing surface.**  All 46 rows the engine executes are
 bit-identical to the retail, at 1,000,000 draws on all five seeds.
 
-What remains are the **whole-table failures under `--include-dead`** - 71 rows,
-every one of them `dead`:
-
-* **47 `double` rows.**  `src/` passes no `double` argument to a Wild Magic
-  template anywhere (`double-audit.md`).
-* **24 `float` rows.**  The `DistLine3Segment3` and `DistSegment3Segment3`
-  families (the retail's association of the long `fSqrDist` sum was never
-  pinned down), the swept `DistVector2Box2` rows, the capsule and swept-sphere
-  intersectors, `Math<float>::InvSqrt`, `GenerateOrthonormalBasis`, the masked
-  2D `ContAlignedBox`, and the four `Query2`/`Query3` rows with the known
-  **OR-vs-AND** source divergence - which is real but unreachable.
+**Nothing on the engine-facing surface is left** - and nothing on the other
+surface either, because it no longer exists.  The 71 rows that failed under
+`--include-dead` before the 2026-10-29 deletion - **47 `double` rows**
+(`src/` passes no `double` argument to a Wild Magic template anywhere -
+`double-audit.md`) and **24 `float` rows** (the `DistLine3Segment3` and
+`DistSegment3Segment3` families, the swept `DistVector2Box2` rows, the capsule
+and swept-sphere intersectors, `Math<float>::InvSqrt`,
+`GenerateOrthonormalBasis`, the masked 2D `ContAlignedBox`, and the four
+`Query2`/`Query3` rows with the known **OR-vs-AND** source divergence) - were
+every one of them `dead`, so every one of them was **deleted with the rest**.
+Their per-row verdicts are in the deletion commit's parent:
+`git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/reachable.md`.
 
 Two other items are open, and neither is a rebuild defect:
 
@@ -241,7 +248,9 @@ Two other items are open, and neither is a rebuild defect:
   let those rows run their ordinary inputs instead of being skipped.  Measured
   under `--include-dead`: **21 rows** skip every draw (4 `ContAlignedBox`, six
   `Query2`/`Query3` pairs, three `ConvexHull` constructors, both
-  `GenerateOrthonormalBasis`).
+  `GenerateOrthonormalBasis`).  After the 2026-10-29 deletion the same
+  measurement over the remaining table is **2 rows** - the two
+  `ContAlignedBox<float>` rows.
 * **The `Query2`/`Query3` OR-vs-AND source divergence.**  The retail combines
   the simplex signs with OR where the rebuild uses AND.  `src/` never names
   `Wm3::Query2` or `Wm3::Query3`, so it is recorded rather than scheduled.

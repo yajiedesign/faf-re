@@ -373,7 +373,7 @@ things were wrong and are now right:
 
 Useful flags: `--list`, `--filter NAME` (comma-separated), `--iters`, `--seed`,
 `--cw` (x87 control word, default `0x007F`), `--snan`, `--strict-nan`,
-`--skip-extreme`, `--include-dead`, `--max-mismatch`, `--image PATH`.
+`--skip-extreme`, `--max-mismatch`, `--image PATH`.
 
 `--skip-extreme` drops draws whose input words look like NaN, denormals or
 values beyond 2^63 **when read as floats**, so it measures ordinary-value
@@ -383,11 +383,28 @@ or mask bytes never produces an ordinary draw: it is reported as
 separately, never as a pass.  A partly skipped row says how many draws went
 (`(+N extreme inputs skipped)`).
 
-**The suite runs the targets the engine executes.**  47 of the 156 rows are
-`double` instantiations that no `src/` call site reaches - `double-audit.md`
-verifies each one - and they are skipped by default, so a run reports
-`75/109` rather than `75/156`.  They stay in the table and `--include-dead`
-runs them; `--list` marks them `[dead: not executed by the engine]`.
+**The suite runs the targets the engine executes.**  The table carries
+**46 rows**, and every one of them is a target a `src/` call site reaches -
+the reachability audit behind `reachable.md` decided all of them, and the
+audit's evidence is quoted there.
+
+**The 110 rows the engine never reaches were deleted on 2026-10-29.**  They
+used to stay in the table and be skipped by default (there was a
+`--include-dead` flag that ran them, and `--list` marked them
+`[dead: not executed by the engine]`).  The rows are gone, and so is the
+code that existed only for them - their generators, their retail thunks,
+their "ours" wrappers and the file-local helpers no remaining row named.
+There is no compatibility layer: **they are recoverable from git history**
+with
+
+```bash
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_targets.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_thunks.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_harness.cpp
+```
+
+so a default run is now `46/46` over the whole table - there is nothing
+left to skip.
 
 The default image is `C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe` —
 the patch-level build this rebuild actually targets, not the retail 2007 binary

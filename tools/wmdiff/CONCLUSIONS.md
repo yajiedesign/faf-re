@@ -95,26 +95,39 @@ Measured on 2026-10-29 with the two submodule commits of §6 landed:
 
 | quantity | count | evidence |
 |---|---:|---|
-| rows in the comparison table | **156** | `wmdiff.exe --list` |
+| rows in the comparison table | **46** | `wmdiff.exe --list` |
 | rows the engine executes | **46** | `reachable.md` — one row per target, with the quoted `src/` call site |
-| rows the engine never executes (`dead`) | **110** | `reachable.md`; the harness skips them unless `--include-dead` is given |
+| rows the engine never executes (`dead`) | **0** | the 110 such rows were **deleted on 2026-10-29**; there is no `--include-dead` flag any more |
 | default run: **pass / fail** | **46 / 0** | `--iters 1000000` on each of the five seeds |
-| whole table (`--include-dead`, 20 000 draws): **pass / fail** | **85 / 71** | `--include-dead` |
-| of the 71 whole-table failures: rows the engine executes | **0** | every one is a `dead` row |
-| of the 71: `double` rows | **47** | `double-audit.md` |
-| of the 71: `float` rows | **24** | the `float` dead rows listed in `reachable.md` |
+| rows deleted on 2026-10-29 | **110** | 47 `double` rows (`double-audit.md`) + 63 `float` rows |
+| of the deleted rows, the whole-table verdict before the deletion | **85 / 71** | `--include-dead` on the 156-row table, 20 000 draws |
+| of the 71 failures: rows the engine executes | **0** | every one was a `dead` row |
 
 Command lines that produce those numbers:
 
 ```
 ./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 1000000 --seed 0x5EED2007
-./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 20000 --include-dead
 ```
 
 **The engine-facing surface is clean.**  The default run is 46/46 on all five
 seeds (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`) at
-1 000 000 draws.  The 71 remaining failures are all rows the engine never
-executes.
+1 000 000 draws.
+
+**On 2026-10-29 the 110 dead rows were deleted**, together with the code that
+existed only for them - the generators, the retail thunks, the "ours" wrappers
+and the file-local helpers no remaining row named.  There is no compatibility
+layer: **the deleted code is recoverable from git history**, e.g.
+
+```
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_targets.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_thunks.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_harness.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/engine_scope.cpp
+git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/reachable.md
+```
+
+So the 71 failures the old whole-table run reported are gone with the rows
+they belonged to; they never concerned anything the game runs.
 
 ## 3. The mechanisms
 
@@ -399,8 +412,10 @@ each of the five seeds, and the engine still builds
 executes are 46/46 at 1 000 000 draws on all five seeds.  What remains open is
 below the live surface.
 
-1. **The 71 `--include-dead` failures.**  Every one of them is a row the engine
-   never executes, so none of them can move the game:
+1. **The 71 whole-table failures - now deleted.**  Every one of them was a row
+   the engine never executes, so none of them could move the game.  They were
+   **deleted on 2026-10-29** with the other 39 dead rows; see §2.2 for the
+   recovery command.  For the record, what they were:
 
    * **47 `double` rows** — `double-audit.md`; `src/` passes no `double`
      argument to a Wild Magic template anywhere.

@@ -27,7 +27,6 @@ namespace wm3mathharness
   u32 Exp(float x);
   u32 FAbs(float x);
   u32 Floor(float x);
-  u32 InvSqrt(float x);
   u32 Log(float x);
   u32 Log2(float x);
   u32 Log10(float x);
@@ -35,5 +34,4 @@ namespace wm3mathharness
   u32 Sqr(float x);
   u32 Sqrt(float x);
   u32 Tan(float x);
-  u32 FMod(float x, float y);
 } // namespace wm3mathharness

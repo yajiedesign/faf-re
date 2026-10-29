@@ -5,12 +5,12 @@
 // Split out of targets_wm3.cpp so the vector leaf set can grow without growing
 // the aggregate table. targets_wm3.cpp chains to this via wm3vec::Targets().
 
-namespace difffuzz
+namespace wmdiff
 {
   struct Target;
 }
 
 namespace wm3vec
 {
-  const difffuzz::Target* Targets(int& count);
+  const wmdiff::Target* Targets(int& count);
 } // namespace wm3vec

@@ -4,5 +4,5 @@
 
 namespace wm3targets
 {
-  const difffuzz::Target* Targets(int& count);
+  const wmdiff::Target* Targets(int& count);
 } // namespace wm3targets

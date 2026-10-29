@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace difffuzz
+namespace wmdiff
 {
   // The row model counts words, and a double is two of them, so the double
   // rows need more room than the float ones: the widest is the swept
@@ -117,4 +117,4 @@ namespace difffuzz
   };
 
   const Target* MathTargets(int& count);
-} // namespace difffuzz
+} // namespace wmdiff

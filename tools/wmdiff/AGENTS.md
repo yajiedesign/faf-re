@@ -16,9 +16,17 @@
 
 ## 结论文档（先读这一份）
 
-`CONCLUSIONS.md` 是本 harness 到目前为止的**合并结论**：156 行里 47 个 `double` 全死、109 个在跑、
-75 过 34 败，34 个失配里 17 个普通输入（全 C）、17 个极端输入（10 C-denormal / 4 S / 2 H /
-1 C-order）—— 以及这些差异**该在哪里收敛**。其余四份文档是它的证据。
+`CONCLUSIONS.md` 是本 harness 到目前为止的**合并结论**：它记的是**删除之前**的表 —— 156 行里
+47 个 `double` 全死、109 个在跑、75 过 34 败，34 个失配里 17 个普通输入（全 C）、17 个极端
+输入（10 C-denormal / 4 S / 2 H / 1 C-order）—— 以及这些差异**该在哪里收敛**。其余四份文档是
+它的证据。
+
+**表已经变了：2026-10-29 把 110 个引擎到不了的行删掉了**（连同只为它们存在的生成器、零售
+thunk、"ours" 包装与文件内 helper）。现在的表是 **46 行，全部 `executed`，默认全跑**，没有
+`--include-dead` 这个选项了 —— 死行没了就没有可跳过的。**删掉的东西从 git 历史取回**：
+`git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_targets.cpp`（以及 `wm3_coll_thunks.cpp`、
+`wm3_coll_harness.cpp`、`wm3_vec_targets.cpp`、`wm3_math_targets.cpp`、`engine_scope.cpp`、
+`reachable.md`）。`reachable.md` 也重写成 46 行。
 
 ## 配对工作的第一步：可达性判定（三轮 + 三态）
 
@@ -62,8 +70,10 @@
 ## 只有引擎真的会执行的实例化才值得配对
 
 **`double` 一律默认可疑**：`src/` 里没有任何一行给 Wild Magic 模板传 `double`，因此本表里
-47 个 double 比对项全部 `dead`（逐项证据在 `double-audit.md`）。harness 默认跳过它们，
-`--include-dead` 才跑；删行会丢掉已验证的数据，所以行保留、默认不参与判定。
+47 个 double 比对项全部 `dead`（逐项证据在 `double-audit.md`）。**2026-10-29 这 47 行连同另外
+63 个 `float` 死行一起删掉了**（共 110 行），删除前它们是"保留、默认不参与判定"，现在是
+**不在表里** ⇒ ⇒ 删行确实会丢掉已验证的数据，所以**它们从 git 历史取回**（见上一节），
+而不是留在表里占位。
 
 
 **这是本 harness 的范围规则，先读它再读别处。** 库里 `float`/`double` 各写了 **140 个**

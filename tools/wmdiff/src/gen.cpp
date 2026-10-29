@@ -3,7 +3,7 @@
 #include <cfloat>
 #include <cmath>
 
-namespace difffuzz
+namespace wmdiff
 {
   bool gAllowSnan = false;
 
@@ -376,4 +376,4 @@ namespace difffuzz
     }
     return GenFloat(rng);
   }
-} // namespace difffuzz
+} // namespace wmdiff

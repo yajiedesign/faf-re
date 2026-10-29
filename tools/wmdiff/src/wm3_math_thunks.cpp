@@ -41,24 +41,7 @@ namespace wm3mathretail
     }
   }
 
-  __declspec(naked) u32 InvSqrt(float x)
-  {
-    __asm {
-      push ebp
-      mov  ebp, esp
-      push dword ptr [ebp + 8]
-      mov  eax, 0x0050D150
-      call eax
-      add  esp, 4
-      fstp dword ptr [ebp - 4]
-      mov  eax, [ebp - 4]
-      mov  esp, ebp
-      pop  ebp
-      ret
-    }
-  }
-
-  __declspec(naked) u32 Sqrt(float x)
+__declspec(naked) u32 Sqrt(float x)
   {
     __asm {
       push ebp

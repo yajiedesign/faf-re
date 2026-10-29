@@ -22,7 +22,7 @@
 // Retail addresses are established with Ghidra (the IDA export under decomp/ is
 // not present on this machine). When one is known, put it in that row's `va` and
 // give the matching thunk in the class's *_thunks.cpp a naked call through that
-// entry point, mirroring tools/difffuzz/src/retail_thunks.cpp.
+// entry point, mirroring tools/wmdiff/src/retail_thunks.cpp.
 
 #include "targets_wm3.h"
 
@@ -39,13 +39,13 @@ namespace wm3targets
 {
   namespace
   {
-    // Held by value, not by pointer: difffuzz::Target is a plain aggregate of
+    // Held by value, not by pointer: wmdiff::Target is a plain aggregate of
     // scalars and function pointers, and this keeps Targets() free of casts -
     // a vector of pointers would hand back `const Target**`, which does not
     // implicitly decay to the `const Target*` this function returns.
-    using Slice = std::vector<difffuzz::Target>;
+    using Slice = std::vector<wmdiff::Target>;
 
-    void Append(Slice& merged, const difffuzz::Target* rows, const int n)
+    void Append(Slice& merged, const wmdiff::Target* rows, const int n)
     {
       for (int i = 0; i < n; ++i) {
         merged.push_back(rows[i]);
@@ -53,7 +53,7 @@ namespace wm3targets
     }
   } // namespace
 
-  const difffuzz::Target* Targets(int& count)
+  const wmdiff::Target* Targets(int& count)
   {
     // Assembled once, then handed out as one contiguous block. main.cpp treats
     // the table as read-only for the whole run.
@@ -66,7 +66,7 @@ namespace wm3targets
       // order unspecified, and MSVC evaluates the trailing `n` first - it then
       // holds the *previous* slice's count, so the last append reads far past
       // the end of its array.
-      const difffuzz::Target* rows = wm3vec::Targets(n); // Wm3Vector3 / Wm3Vector2
+      const wmdiff::Target* rows = wm3vec::Targets(n); // Wm3Vector3 / Wm3Vector2
       Append(merged, rows, n);
 
       rows = wm3math::Targets(n); // Wm3Math

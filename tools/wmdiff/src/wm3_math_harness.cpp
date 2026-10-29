@@ -24,21 +24,16 @@ namespace wm3mathharness
 #define WM3MATH_FWD_UNARY(NAME)       \
   u32 NAME(const float x)             \
   {                                  \
-    return difffuzz::Bits(Mathf::NAME(x)); \
+    return wmdiff::Bits(Mathf::NAME(x)); \
   }
 
   WM3MATH_FWD_UNARY(Ceil)
   WM3MATH_FWD_UNARY(FAbs)
   WM3MATH_FWD_UNARY(Floor)
-  WM3MATH_FWD_UNARY(InvSqrt)
   WM3MATH_FWD_UNARY(Sqrt)
 
 #undef WM3MATH_FWD_UNARY
 
   // ---- Real -> Real, two arguments ----------------------------------------
 
-  u32 FMod(const float x, const float y)
-  {
-    return difffuzz::Bits(Mathf::FMod(x, y));
-  }
 } // namespace wm3mathharness

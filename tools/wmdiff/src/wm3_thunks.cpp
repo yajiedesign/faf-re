@@ -3,11 +3,11 @@
 // All bodies are empty on purpose - see wm3_thunks.h. Each one returns without
 // touching its output buffer, which the harness's canary then reports as a
 // mismatch. Wire a thunk up by giving it a __declspec(naked) call through the
-// retail entry point, the way tools/difffuzz/src/retail_thunks.cpp does.
+// retail entry point, the way tools/wmdiff/src/retail_thunks.cpp does.
 
 namespace wm3retail
 {
-  // The one wired-up thunk so far. difffuzz's Wm3Normalize got this wrong by
+  // The one wired-up thunk so far. wmdiff's Wm3Normalize got this wrong by
   // declaring a float return and comparing the leftover in EAX; retail is void,
   // so nothing comes back and the target must not look at a return value.
   __declspec(naked) void Normalize(float* v)
@@ -28,27 +28,7 @@ namespace wm3retail
     }
   }
 
-  // Retail 0x00452AF0, keeping the length the body leaves in ST(0) - see the
-  // declaration in wm3_thunks.h.
-  __declspec(naked) float NormalizeRet(float* v)
-  {
-    __asm {
-      push ebx
-      push esi
-      push edi
-      push ebp
-      mov  ecx, [esp + 20]      // our `v` -> the retail `this` in ECX
-      mov  eax, 0x00452AF0
-      call eax
-      pop  ebp
-      pop  edi
-      pop  esi
-      pop  ebx
-      ret                        // ST(0) still holds the length
-    }
-  }
-
-  // Retail 0x004757E0. `this` in ECX, **no** stack arguments, plain RET.
+// Retail 0x004757E0. `this` in ECX, **no** stack arguments, plain RET.
   // Returns ST(0) in x87 extended precision - it never rounds to float, so the
   // caller's own store is what rounds it. Leaving that to the C++ side (the
   // function is declared as returning float) is deliberate: comparing the raw

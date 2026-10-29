@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace difffuzz
+namespace wmdiff
 {
   /// The harness's own static thread-local block stands in for the retail's
   /// static TLS block.
@@ -398,7 +398,7 @@ namespace difffuzz
     si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
     PROCESS_INFORMATION pi{};
     if (!CreateProcessA(exe, GetCommandLineA(), nullptr, nullptr, TRUE, CREATE_SUSPENDED, nullptr, nullptr, &si, &pi)) {
-      std::fprintf(stderr, "difffuzz: CreateProcess(suspended) failed: %lu\n", GetLastError());
+      std::fprintf(stderr, "wmdiff: CreateProcess(suspended) failed: %lu\n", GetLastError());
       return 3;
     }
     void* const got = VirtualAllocEx(
@@ -406,7 +406,7 @@ namespace difffuzz
       PAGE_READWRITE
     );
     if (got == nullptr) {
-      std::fprintf(stderr, "difffuzz: VirtualAllocEx(0x%08X) in the suspended child failed: %lu\n", base, GetLastError());
+      std::fprintf(stderr, "wmdiff: VirtualAllocEx(0x%08X) in the suspended child failed: %lu\n", base, GetLastError());
       TerminateProcess(pi.hProcess, 3);
       CloseHandle(pi.hThread);
       CloseHandle(pi.hProcess);
@@ -444,4 +444,4 @@ namespace difffuzz
     VirtualProtect(p, 4, oldProtect, &oldProtect);
     return true;
   }
-} // namespace difffuzz
+} // namespace wmdiff
