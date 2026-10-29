@@ -25,8 +25,9 @@ not have:
   the objects the functions leave behind;
 * **call sequences** — the same inputs driven through a sequence of retail
   calls, not a single call per row;
-* **a reachability ledger** — a recorded answer to "does the engine actually
-  execute this?", so work is not spent on functions the engine never runs.
+* **a retail-counterpart ledger** — a recorded answer to "does the retail
+  image have this function at all?", so rebuild-only helpers are recorded as
+  out of scope instead of being paired against nothing.
 
 ## Build
 
