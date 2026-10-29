@@ -619,3 +619,104 @@ and the NaN - not the value - is what flips the comparison.
   `ToTriangle` verdict from "the difference is in `ToLine`" (wrong: the signs
   are identical) into "the difference is in the final combination" (an OR in
   the retail against an AND in the rebuild).
+
+---
+
+## 7. The second batch: the four remaining rows are closed
+
+The first batch landed the x87 chains of `Dot`, `LengthSq` and the segment
+distance (submodule commit `59f1614`) and took the live suite from 34/46 to
+42/46.  The four rows that were left are closed here (submodule commit
+`9af34dc`); the live suite is now **46/46**, at 1000000 iterations on the
+seeds `0x5EED2007` and `0xDEADBEEF`.
+
+| row | retail VA | verdict | what decided it |
+|---|---|---|---|
+| `IntrLine3Box3<float>::Test()` | `0x00A4FE60` | range (extended domain) | the three slab right-hand sides and the cross product are x87 chains |
+| `IntrSegment3Box3<float>::Find()` | `0x00A462A0` | range (extended domain) | `Clip` multiplies and divides on the x87 |
+| `IntrSegment3Box3<float>::GetPoint(int) const` | `0x00A46300` | range + a second rounding | `Clip` and the computation of the point |
+| `ContAlignedBox<float>(int, const Vector3<float>*, const bool*)` | `0x00A3AE40` | **call shape** (a bool byte) | the retail tests the mask byte against zero |
+
+### 7.1 `IntrLine3Box3<float>::Test` - the slab right-hand sides and the cross product
+
+Section 4.2 named the right quantity (`Extent[0]*afAWdU[1]` leaves the
+binary32 range) but not the place where the retail keeps it.  The retail's
+`Test` (0x00A4FE60) computes the three right-hand sides as x87 chains:
+
+```
+0x00A4FF5C  fmulp st(2)        ; Extent[1]*|d.Axis[2]|      (extended)
+0x00A4FF61  fmul  dword [..]   ; Extent[2]*|d.Axis[1]|      (extended)
+0x00A4FF65  faddp st(2)        ; the sum                    (extended)
+0x00A4FF69  fstp dword [esp+4] ; the sum -> binary32
+0x00A4FF71  fcomp st(2)        ; |WxD.Axis[0]| > the sum
+```
+
+(the second and the third test are the same shape at
+0x00A4FFDF/0x00A4FFE4/0x00A4FFEC/0x00A4FFF4 and
+0x00A5002D/0x00A50032/0x00A50018/0x00A50042).
+Only the sum is rounded to binary32; the two products keep the extended
+exponent, so a product that leaves the binary32 range does not become an
+infinity and the sum does not become a NaN.
+
+The cross product of the direction with the difference is an x87 chain as
+well (0x00A4FE88..0x00A4FECA): when both products of a component leave the
+binary32 range, their difference is still finite on the x87, while in
+binary32 the two infinities cancel into a NaN.
+
+Both are now computed in the extended domain (`SlabRhs`, `CrossInlined` in
+`Foundation/Intersection/Wm3IntrLine3Box3.cpp`).
+
+### 7.2 `IntrSegment3Box3<float>::Find` and `GetPoint` - `Clip`, not the box-local direction
+
+Section 4.3 attributed the two segment rows to "the box-local direction
+components overflow binary32".  That is not where the difference is: the
+box-local components are stored to binary32 by the retail as well (FSTP at
+0x00A50277, 0x00A5028E, 0x00A502A5 and 0x00A502BE, 0x00A502D7,
+0x00A502F0), so both sides see the same infinity.  The difference is in
+`Clip` (0x00A4FCC0), which the segment rows reach through `DoClipping`
+(0x00A50220):
+
+```
+0x00A4FCD9  fld  dword [eax]   ; rfT1
+0x00A4FCDB  fmul st(2)         ; fDenom*rfT1     (extended, never rounded)
+0x00A4FCDD  fcomp st(1)        ; the product against the numerator
+...
+0x00A4FCFE  fdivrp st(1)       ; fNumer/fDenom   (extended)
+0x00A4FD02  fstp dword [ecx]   ; the parameter -> binary32
+```
+
+The product is compared with the numerator while it still has the extended
+exponent, and the quotient is computed on the x87 and rounded to binary32
+once.  In binary32 the product can overflow to an infinity and the
+comparison then goes the wrong way.  `Clip` now does the same
+(`ClipProduct`, `ClipQuotient`; the quotient needed a new operation in the
+carrier, `Wm3Detail::Div24`).
+
+The intersection point is computed on the x87 as well: the product of the
+clip parameter and the direction is rounded to a 24-bit significand and
+stored back to binary32 (FLD/FMUL at 0x00A504FC..0x00A50500) *before* the
+origin is added (FADD dword at 0x00A50518).  The second rounding of the
+product is visible when the product lands in the binary32 denormal range,
+where the binary32 format has fewer bits to work with - that was the last
+two mismatches of the `GetPoint` row at 1000000 iterations.
+
+### 7.3 `ContAlignedBox<float>` - the mask byte is tested against zero
+
+Section 3.2 was right about the mechanism (the retail tests the mask byte
+against zero, the rebuild's `bool` test compiles to a comparison against
+one) and the row is now closed by spelling the test on the raw byte
+(`Foundation/Containment/Wm3ContBox3.cpp`):
+
+```
+0x00A3B30E  cmp byte ptr [ecx + esi], 0   ; the first valid point
+0x00A3B395  cmp byte ptr [esi + ecx], 0   ; the rest
+```
+
+**This is a call-shape difference, not an engine behaviour.**  For the
+canonical mask bytes (zero and one) the byte test and the `bool` test are
+the same, and the engine only ever calls the unmasked overload
+(`src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`, `abValid` defaults to
+`0`), so the change is semantically neutral for the engine; it only
+reproduces the retail for a mask byte that is not a canonical `bool`, which
+the engine cannot produce.  The same holds for the `Vector2` overload
+(0x00A685F0), which is a dead row and was left alone.
