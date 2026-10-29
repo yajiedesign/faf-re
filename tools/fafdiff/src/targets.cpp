@@ -1132,7 +1132,7 @@ namespace
     {
       "QuatCrossAdd",
       0x0044F880u,
-      "src/moho/math/QuaternionMath.cpp:1057",
+      "src/moho/sim/Sim.cpp:6286",
       sizeof(CrossAddIn),
       sizeof(CrossAddOut),
       &GenCrossAdd,

@@ -114,7 +114,7 @@ namespace
   // truth for every caller of this quaternion (`FUN_00453ED0.c` /
   // `Moho::DRAW_WireCircle`, and `Moho::DRAW_Circle`'s own doc comment below)
   // calls the real, already-fixed `Moho::QuatCrossAdd` (0x0044F880, defined
-  // in QuaternionMath.cpp) directly, so the local duplicate is removed in favor of that
+  // in Sim.cpp) directly, so the local duplicate is removed in favor of that
   // canonical definition -- see its doc comment for the scalar-first layout.
 
   [[nodiscard]] moho::Vector3f RotateByQuaternion(

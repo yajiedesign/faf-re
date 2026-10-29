@@ -59,7 +59,59 @@ set(FAFDIFF_SOURCES
   # in the engine.
   "${WM3_ROOT}/Foundation/System/Wm3System.cpp")
 
-add_executable(fafdiff EXCLUDE_FROM_ALL ${FAFDIFF_SOURCES})
+# --- The functions extracted from a TU the harness cannot link ------------------------
+# src/moho/sim/Sim.cpp holds moho::QuatCrossAdd (the row for retail 0x0044F880,
+# called by QuatFromVecRot). The whole TU cannot be linked here: its non-COMDAT
+# .CRT$XCU static initializer is a link root that references every static
+# object in the file, which drags in most of the engine (591 of 941 TUs). The
+# functions the rows need are therefore copied out of the source by
+# scripts/extract_sources.py, as declared in extract.json, and the copy is
+# compiled like any other engine translation unit.
+#
+# The extraction runs at build time, not at configure time: configure runs once,
+# and a source edit after that would go unnoticed. As a build command it is
+# re-run whenever the config or one of the sources changes, and the run fails
+# the build when a hash does not match, so a stale copy can never be compiled.
+#
+# The config carries both hashes (the source and the generated file); when one
+# no longer matches, the script prints the value to fill in. See extract.json.
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+set(FAFDIFF_EXTRACT_CONFIG "${CMAKE_CURRENT_SOURCE_DIR}/extract.json")
+set(FAFDIFF_EXTRACT_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/scripts/extract_sources.py")
+set(FAFDIFF_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+
+# Only the file names are read at configure time (the target has to know its
+# sources); no hashing, no extraction, nothing that can go stale here.
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" "${FAFDIFF_EXTRACT_SCRIPT}"
+          --config "${FAFDIFF_EXTRACT_CONFIG}" --root "${CMAKE_SOURCE_DIR}" --deps
+  OUTPUT_VARIABLE _fafdiff_extract_deps
+  RESULT_VARIABLE _fafdiff_extract_sources_rc
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+execute_process(
+  COMMAND "${Python3_EXECUTABLE}" "${FAFDIFF_EXTRACT_SCRIPT}"
+          --config "${FAFDIFF_EXTRACT_CONFIG}" --root "${CMAKE_SOURCE_DIR}"
+          --outdir "${FAFDIFF_GENERATED_DIR}" --outputs
+  OUTPUT_VARIABLE FAFDIFF_EXTRACTED
+  RESULT_VARIABLE _fafdiff_extract_outputs_rc
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT _fafdiff_extract_sources_rc EQUAL 0 OR NOT _fafdiff_extract_outputs_rc EQUAL 0)
+  message(FATAL_ERROR "fafdiff: ${FAFDIFF_EXTRACT_CONFIG} cannot be read")
+endif()
+
+set_source_files_properties(${FAFDIFF_EXTRACTED} PROPERTIES GENERATED TRUE)
+add_custom_command(
+  OUTPUT ${FAFDIFF_EXTRACTED}
+  COMMAND "${Python3_EXECUTABLE}" "${FAFDIFF_EXTRACT_SCRIPT}"
+          --config "${FAFDIFF_EXTRACT_CONFIG}" --root "${CMAKE_SOURCE_DIR}"
+          --outdir "${FAFDIFF_GENERATED_DIR}"
+  DEPENDS "${FAFDIFF_EXTRACT_CONFIG}" "${FAFDIFF_EXTRACT_SCRIPT}" ${_fafdiff_extract_deps}
+  COMMENT "fafdiff: extracting the engine functions under test"
+  VERBATIM)
+
+add_executable(fafdiff EXCLUDE_FROM_ALL ${FAFDIFF_SOURCES} ${FAFDIFF_EXTRACTED})
+add_custom_target(fafdiff_extract DEPENDS ${FAFDIFF_EXTRACTED})
+add_dependencies(fafdiff fafdiff_extract)
 set_target_properties(fafdiff PROPERTIES OUTPUT_NAME fafdiff)
 
 # The harness compiles the engine's own translation units, so it takes the

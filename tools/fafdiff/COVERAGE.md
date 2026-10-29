@@ -6,11 +6,11 @@ in the retail image.
 
 | item | value |
 |---|---|
-| functions in the ledger | **39** |
-| `src` commit | `f8231c6b` |
+| functions in the ledger | **38** |
+| `src` commit | `d814addb` |
 | screen data | `.tmp/fafdiff/screen.json` |
 | status data | `tools/fafdiff/data/coverage_status.json` |
-| statuses | `未匹配` 29, `已匹配` 10, `失败` 0, `不适用` 0 |
+| statuses | `未匹配` 29, `已匹配` 9, `失败` 0, `不适用` 0 |
 
 A row's status is one of four:
 
@@ -24,44 +24,43 @@ A row's status is one of four:
 | # | function | address | source | status |
 |---:|---|---|---|---|
 | 1 | `NormalizeVectorInto(Wm3::Vector3f* const dest, const Wm3::Vector3f& source)` | `0x0044F7E0` | `src/moho/math/Vector3f.cpp:25` | 已匹配 |
-| 2 | `QuatCrossAdd(Wm3::Quaternionf* const dest, Wm3::Vector3f v1, Wm3::Vector3f v2, const Wm3::Vector3f& fallbackAxis)` | `0x0044F880` | `src/moho/math/QuaternionMath.cpp:1057` | 已匹配 |
-| 3 | `Vector4f::operator=(const Vector4f& rhs)` | `0x0046FB20` | `src/moho/math/Vector4f.cpp:84` | 未匹配 |
-| 4 | `RayBoxSlabClip(RaySlabState& state, const Wm3::AxisAlignedBox3f& box)` | `0x00473DF0` | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105` | 未匹配 |
-| 5 | `atan2f(const float y, const float x)` | `0x004E9DF0` | `src/legacy/math/X87Math.cpp:465` | 未匹配 |
-| 6 | `MatrixToQuat(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004EB3F0` | `src/moho/math/QuaternionMath.cpp:256` | 已匹配 |
-| 7 | `RotateQuatByAngle(Wm3::Quaternionf* quat, float rads)` | `0x004EB740` | `src/moho/math/QuaternionMath.cpp:557` | 已匹配 |
-| 8 | `BlendOrientationDeltaByMaxAngle(const Wm3::Quaternionf& goalOrientation, const Wm3::Quaternionf& currentOrientation, const float turnStepRadians, bool* const outNoStep, Wm3::Quaternionf* const outOrientation)` | `0x004EB830` | `src/moho/math/QuaternionMath.cpp:739` | 未匹配 |
-| 9 | `QuatLERP(const Wm3::Quaternionf* const q1, const Wm3::Quaternionf* const q2, Wm3::Quaternionf* const out, float amount)` | `0x004EBA80` | `src/moho/math/QuaternionMath.cpp:408` | 已匹配 |
-| 10 | `SLERP(const Wm3::Quaternionf* const q2, const Wm3::Quaternionf* const q1, Wm3::Quaternionf* const out, const float t)` | `0x004EBC00` | `src/moho/math/QuaternionMath.cpp:466` | 已匹配 |
-| 11 | `ToString(const Vector4f& value)` | `0x004ECED0` | `src/moho/math/Vector4f.cpp:11` | 未匹配 |
-| 12 | `NormalizeQuatInPlace(Wm3::Quaternionf* const quat)` | `0x004EDAA0` | `src/moho/math/QuaternionMath.cpp:220` | 已匹配 |
-| 13 | `QuatsNearEqual(const Wm3::Quaternionf& lhs, const Wm3::Quaternionf& rhs)` | `0x004EDED0` | `src/moho/math/QuaternionMath.cpp:201` | 已匹配 |
-| 14 | `MatrixColumnsToQuatCanonical(const Wm3::Vector3f* const matrixColumns, Wm3::Quaternionf* const out)` | `0x004F0AE0` | `src/moho/math/QuaternionMath.cpp:391` | 未匹配 |
-| 15 | `MatrixRowsToQuatCanonical(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004F0CB0` | `src/moho/math/QuaternionMath.cpp:317` | 未匹配 |
-| 16 | `MakeSegment3fFromEndpoints(const Vector3f& start, const Vector3f& end)` | `0x004FE130` | `src/moho/math/Wm3Segment3FafExtras.cpp:8` | 未匹配 |
-| 17 | `GridPos::GridPos(Wm3::Vec3f* const wldPos, const int gridSize)` | `0x00506E20` | `src/moho/math/GridPos.cpp:22` | 未匹配 |
-| 18 | `BuildTiltShortestArcDelta(const Wm3::Vector3f& targetNormal, Wm3::Quaternionf* const outDelta, const Wm3::Vector3f& currentUp)` | `0x0050CB50` | `src/moho/math/QuaternionMath.cpp:983` | 未匹配 |
-| 19 | `CoordsAbsFloat(const float value)` | `0x0050D140` | `src/moho/math/QuaternionMath.cpp:946` | 未匹配 |
-| 20 | `CoordsScaleByInvSqrt(const float lengthSq, const float a, const float b, float& outA, float& outB)` | `0x0050D150` | `src/moho/math/QuaternionMath.cpp:959` | 未匹配 |
-| 21 | `VEC_LargestAxis(const Wm3::Vector3f& value)` | `0x005382E0` | `src/moho/math/Vector3f.cpp:116` | 未匹配 |
-| 22 | `IsValidVector2f(const Wm3::Vector2f& value)` | `0x005657B0` | `src/moho/math/Vector2f.cpp:8` | 未匹配 |
-| 23 | `IsValidVector3f(const Wm3::Vector3f& value)` | `0x005657F0` | `src/moho/math/Vector3f.cpp:12` | 未匹配 |
-| 24 | `VEC_HeadingFromXZ(const Wm3::Vector3f* const value)` | `0x00565A10` | `src/moho/math/Vector3f.cpp:137` | 未匹配 |
-| 25 | `EulerRollToQuat(const Wm3::Vector3f* const axis, Wm3::Quatf* const outQuaternion, const float roll)` | `0x00570750` | `src/moho/math/Vector3f.cpp:311` | 未匹配 |
-| 26 | `cosf(const float x)` | `0x005734D0` | `src/legacy/math/X87Math.cpp:431` | 未匹配 |
-| 27 | `sinf(const float x)` | `0x005734E0` | `src/legacy/math/X87Math.cpp:413` | 未匹配 |
-| 28 | `VecSetLength(Wm3::Vector3f* const vector, const float targetLength)` | `0x005B1C90` | `src/moho/math/Vector3f.cpp:149` | 未匹配 |
-| 29 | `NormalizeAngleSignedRadians(const float angleRadians)` | `0x0062FB50` | `src/moho/math/QuaternionMath.cpp:117` | 未匹配 |
-| 30 | `FloorSecondsToTicks(float seconds)` | `0x0066D1D0` | `src/moho/math/GridPos.h:33` | 未匹配 |
-| 31 | `QuatFromAxisAngleVector(Wm3::Quaternionf* const quat, Wm3::Vector3f axisAngle)` | `0x00697360` | `src/moho/math/QuaternionMath.cpp:719` | 未匹配 |
-| 32 | `IsUnitLengthVector3f(const Wm3::Vector3f& value)` | `0x0069A1D0` | `src/moho/math/Vector3f.cpp:73` | 未匹配 |
-| 33 | `VecSetLengthTo(Wm3::Vector3f* const destination, const Wm3::Vector3f* const targetLengthVector, const Wm3::Vector3f* const sourceVector)` | `0x0069A360` | `src/moho/math/Vector3f.cpp:200` | 未匹配 |
-| 34 | `QuatFromVecRot(Wm3::Quaternionf* quat, const Wm3::Vector3f* refAxis, float rads)` | `0x0069AA50` | `src/moho/math/QuaternionMath.cpp:606` | 已匹配 |
-| 35 | `QuatToAxisAndAngle(const Wm3::Quaternionf& quaternion, Wm3::Vector3f* const axisOut, float* const angleRadiansOut)` | `0x006C1070` | `src/moho/math/QuaternionMath.cpp:673` | 已匹配 |
-| 36 | `BuildRotationMatrixFromEulerHPR(Wm3::Vector3f* const outMatrix, const float heading, const float pitch, const float roll)` | `0x006D1E30` | `src/moho/math/QuaternionMath.cpp:840` | 未匹配 |
-| 37 | `QuaternionToRotationMatrix3x3(const double* const quaternionLanes, double* const outMatrixLanes)` | `0x00A3AD70` | `src/moho/math/QuaternionMath.cpp:73` | 未匹配 |
-| 38 | `frexp(const double x, int* const exponent)` | `0x00A8DA05` | `src/legacy/math/X87Math.cpp:291` | 未匹配 |
-| 39 | `asin(const double x)` | `0x00A8DE20` | `src/legacy/math/X87Math.cpp:773` | 未匹配 |
+| 2 | `Vector4f::operator=(const Vector4f& rhs)` | `0x0046FB20` | `src/moho/math/Vector4f.cpp:84` | 未匹配 |
+| 3 | `RayBoxSlabClip(RaySlabState& state, const Wm3::AxisAlignedBox3f& box)` | `0x00473DF0` | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105` | 未匹配 |
+| 4 | `atan2f(const float y, const float x)` | `0x004E9DF0` | `src/legacy/math/X87Math.cpp:465` | 未匹配 |
+| 5 | `MatrixToQuat(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004EB3F0` | `src/moho/math/QuaternionMath.cpp:256` | 已匹配 |
+| 6 | `RotateQuatByAngle(Wm3::Quaternionf* quat, float rads)` | `0x004EB740` | `src/moho/math/QuaternionMath.cpp:557` | 已匹配 |
+| 7 | `BlendOrientationDeltaByMaxAngle(const Wm3::Quaternionf& goalOrientation, const Wm3::Quaternionf& currentOrientation, const float turnStepRadians, bool* const outNoStep, Wm3::Quaternionf* const outOrientation)` | `0x004EB830` | `src/moho/math/QuaternionMath.cpp:739` | 未匹配 |
+| 8 | `QuatLERP(const Wm3::Quaternionf* const q1, const Wm3::Quaternionf* const q2, Wm3::Quaternionf* const out, float amount)` | `0x004EBA80` | `src/moho/math/QuaternionMath.cpp:408` | 已匹配 |
+| 9 | `SLERP(const Wm3::Quaternionf* const q2, const Wm3::Quaternionf* const q1, Wm3::Quaternionf* const out, const float t)` | `0x004EBC00` | `src/moho/math/QuaternionMath.cpp:466` | 已匹配 |
+| 10 | `ToString(const Vector4f& value)` | `0x004ECED0` | `src/moho/math/Vector4f.cpp:11` | 未匹配 |
+| 11 | `NormalizeQuatInPlace(Wm3::Quaternionf* const quat)` | `0x004EDAA0` | `src/moho/math/QuaternionMath.cpp:220` | 已匹配 |
+| 12 | `QuatsNearEqual(const Wm3::Quaternionf& lhs, const Wm3::Quaternionf& rhs)` | `0x004EDED0` | `src/moho/math/QuaternionMath.cpp:201` | 已匹配 |
+| 13 | `MatrixColumnsToQuatCanonical(const Wm3::Vector3f* const matrixColumns, Wm3::Quaternionf* const out)` | `0x004F0AE0` | `src/moho/math/QuaternionMath.cpp:391` | 未匹配 |
+| 14 | `MatrixRowsToQuatCanonical(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004F0CB0` | `src/moho/math/QuaternionMath.cpp:317` | 未匹配 |
+| 15 | `MakeSegment3fFromEndpoints(const Vector3f& start, const Vector3f& end)` | `0x004FE130` | `src/moho/math/Wm3Segment3FafExtras.cpp:8` | 未匹配 |
+| 16 | `GridPos::GridPos(Wm3::Vec3f* const wldPos, const int gridSize)` | `0x00506E20` | `src/moho/math/GridPos.cpp:22` | 未匹配 |
+| 17 | `BuildTiltShortestArcDelta(const Wm3::Vector3f& targetNormal, Wm3::Quaternionf* const outDelta, const Wm3::Vector3f& currentUp)` | `0x0050CB50` | `src/moho/math/QuaternionMath.cpp:983` | 未匹配 |
+| 18 | `CoordsAbsFloat(const float value)` | `0x0050D140` | `src/moho/math/QuaternionMath.cpp:946` | 未匹配 |
+| 19 | `CoordsScaleByInvSqrt(const float lengthSq, const float a, const float b, float& outA, float& outB)` | `0x0050D150` | `src/moho/math/QuaternionMath.cpp:959` | 未匹配 |
+| 20 | `VEC_LargestAxis(const Wm3::Vector3f& value)` | `0x005382E0` | `src/moho/math/Vector3f.cpp:116` | 未匹配 |
+| 21 | `IsValidVector2f(const Wm3::Vector2f& value)` | `0x005657B0` | `src/moho/math/Vector2f.cpp:8` | 未匹配 |
+| 22 | `IsValidVector3f(const Wm3::Vector3f& value)` | `0x005657F0` | `src/moho/math/Vector3f.cpp:12` | 未匹配 |
+| 23 | `VEC_HeadingFromXZ(const Wm3::Vector3f* const value)` | `0x00565A10` | `src/moho/math/Vector3f.cpp:137` | 未匹配 |
+| 24 | `EulerRollToQuat(const Wm3::Vector3f* const axis, Wm3::Quatf* const outQuaternion, const float roll)` | `0x00570750` | `src/moho/math/Vector3f.cpp:311` | 未匹配 |
+| 25 | `cosf(const float x)` | `0x005734D0` | `src/legacy/math/X87Math.cpp:431` | 未匹配 |
+| 26 | `sinf(const float x)` | `0x005734E0` | `src/legacy/math/X87Math.cpp:413` | 未匹配 |
+| 27 | `VecSetLength(Wm3::Vector3f* const vector, const float targetLength)` | `0x005B1C90` | `src/moho/math/Vector3f.cpp:149` | 未匹配 |
+| 28 | `NormalizeAngleSignedRadians(const float angleRadians)` | `0x0062FB50` | `src/moho/math/QuaternionMath.cpp:117` | 未匹配 |
+| 29 | `FloorSecondsToTicks(float seconds)` | `0x0066D1D0` | `src/moho/math/GridPos.h:33` | 未匹配 |
+| 30 | `QuatFromAxisAngleVector(Wm3::Quaternionf* const quat, Wm3::Vector3f axisAngle)` | `0x00697360` | `src/moho/math/QuaternionMath.cpp:719` | 未匹配 |
+| 31 | `IsUnitLengthVector3f(const Wm3::Vector3f& value)` | `0x0069A1D0` | `src/moho/math/Vector3f.cpp:73` | 未匹配 |
+| 32 | `VecSetLengthTo(Wm3::Vector3f* const destination, const Wm3::Vector3f* const targetLengthVector, const Wm3::Vector3f* const sourceVector)` | `0x0069A360` | `src/moho/math/Vector3f.cpp:200` | 未匹配 |
+| 33 | `QuatFromVecRot(Wm3::Quaternionf* quat, const Wm3::Vector3f* refAxis, float rads)` | `0x0069AA50` | `src/moho/math/QuaternionMath.cpp:606` | 已匹配 |
+| 34 | `QuatToAxisAndAngle(const Wm3::Quaternionf& quaternion, Wm3::Vector3f* const axisOut, float* const angleRadiansOut)` | `0x006C1070` | `src/moho/math/QuaternionMath.cpp:673` | 已匹配 |
+| 35 | `BuildRotationMatrixFromEulerHPR(Wm3::Vector3f* const outMatrix, const float heading, const float pitch, const float roll)` | `0x006D1E30` | `src/moho/math/QuaternionMath.cpp:840` | 未匹配 |
+| 36 | `QuaternionToRotationMatrix3x3(const double* const quaternionLanes, double* const outMatrixLanes)` | `0x00A3AD70` | `src/moho/math/QuaternionMath.cpp:73` | 未匹配 |
+| 37 | `frexp(const double x, int* const exponent)` | `0x00A8DA05` | `src/legacy/math/X87Math.cpp:291` | 未匹配 |
+| 38 | `asin(const double x)` | `0x00A8DE20` | `src/legacy/math/X87Math.cpp:773` | 未匹配 |
 
 ## Why a row is 不适用
 
@@ -112,16 +111,15 @@ The set is defined by exactly this predicate, in exactly one place
 tier == 'x87' AND section_is_code AND x87_to_first_ret > 0 AND (file starts with 'src/moho/math/' OR 'src/legacy/math/') AND NOT file ends with 'MathReflection.cpp' AND NOT '/backends/' in file AND NOT 'D3D' in file AND symbol does not contain '(dynamic initializer)'
 ```
 
-The set currently holds **39** functions. The generator asserts that the set
+The set currently holds **38** functions. The generator asserts that the set
 is non-empty and that every row is a real, named function (a `.cpp`
 definition or a real inline in a header) -- no dynamic initializers, no
 unresolved `sub_XXXX` names -- and fails loudly otherwise.
 
 The `calls <= 3` clause of the original specification is **not** applied:
-on the current tree it removes 8 rows and leaves 31, not 39. The rows
+on the current tree it removes 7 rows and leaves 31, not 38. The rows
 it would remove are listed here, so the difference is explicit:
 
-* `0x0044F880` dot (`src/moho/math/QuaternionMath.cpp:1057`)
 * `0x004EBC00` Moho::SLERP (`src/moho/math/QuaternionMath.cpp:466`)
 * `0x004EDED0` func_QuatsNearEqual (`src/moho/math/QuaternionMath.cpp:201`)
 * `0x004F0AE0` MatrixColumnsToQuatCanonical (`src/moho/math/QuaternionMath.cpp:391`)

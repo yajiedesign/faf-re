@@ -6,10 +6,11 @@
 
 **当前状态：表里有十条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
 （零售 `0x0044F7E0`，`moho::NormalizeVectorInto`）与
-`src/moho/math/QuaternionMath.cpp`（九条四元数比对项：`moho::MatrixToQuat`、
+`src/moho/math/QuaternionMath.cpp`（八条四元数比对项：`moho::MatrixToQuat`、
 `moho::RotateQuatByAngle`、`moho::QuatLERP`、`moho::SLERP`、
 `moho::NormalizeQuatInPlace`、`moho::QuatsNearEqual`、`moho::QuatFromVecRot`、
-`moho::QuatToAxisAndAngle`、`moho::QuatCrossAdd`）；它们带的依赖 TU 是
+`moho::QuatToAxisAndAngle`），外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
+`moho::QuatCrossAdd`（`extract.json`；见下文“复制的闭环”）；它们带的依赖 TU 是
 `src/legacy/math/X87Math.cpp`（`msvc8::` x87 助手的实现）与 Wild Magic 的
 `Foundation/System/Wm3System.cpp`（`Wm3::Quaternion` 的拷贝赋值调用
 `Wm3::System::Memcpy`）。逐条证据在 `tools/fafdiff/README.md`，覆盖账本在
@@ -82,9 +83,31 @@ harness 自动跟上 ✓
    （`CWldSession`、`IdPool`、`UserCommandIssueHelper`…）⇒ ⇒ 不收敛；
 3. 引擎 `.obj` 的符号闭包（上界）是 **591/941 个 TU**。
 
-⇒ ⇒ 所以 `QuatCrossAdd` 的定义放在 `src/moho/math/QuaternionMath.cpp`（它是四元数函数，放这里
-本身也合理）；移动前后函数体逐行相同、引擎 `.text` 逐位相同，harness 测的就是引擎编译出的
-那一份 ✓
+⇒ ⇒ 所以 harness **不链接这个 TU，只编译那个函数**：`extract.json` 用手写的行号区间声明要复制
+什么，`scripts/extract_sources.py` 把它切到 `<build>/tools/fafdiff/generated/`，CMake 用引擎
+自己的开关编译这份副本。复制出来的 TU 与引擎的 `Sim.cpp.obj` 里那个函数逐指令相同
+（172 条）✓
+
+### 复制的闭环：两个哈希，缺一不可
+
+`extract.json` 每个 entry 带两个哈希，脚本只做三件事：校验源哈希、按行号切片、校验生成哈希
+（**没有符号搜索，没有 C++ 解析**，行号是人写的）：
+
+| 字段 | 作用 |
+|---|---|
+| `sourceSha256` | 整个源文件。不符 ⇒ 行号是写给旧版本的，脚本报错并且**不**生成该 entry |
+| `outputSha256` | 生成文件的字节。不符 ⇒ 切出来的内容变了，必须有人读过才能用 |
+
+⇒ ⇒ 首次生成时 `outputSha256` 为空：脚本照样写出文件、算出 hash、**报错**。agent 打开生成
+文件确认切出来的正是那个函数，再把 hash 填回配置 ⇒ ⇒ 闭环 ✓
+
+⇒ ⇒ 源文件一改，`sourceSha256` 先挡下来；agent 更新行号与源哈希后，内容若变了，`outputSha256`
+再挡一次 ⇒ ⇒ "hash 更新了、行号忘了改"无法静默通过 ✓
+
+⇒ ⇒ 错误是**攒起来统一报**的，最多 10 条；到 10 条就不再处理后面的 entry，避免反复打断 ✓
+
+⇒ ⇒ 脚本跑在**构建期**（`add_custom_command`，依赖 `extract.json` 与源文件），不是 configure
+阶段——configure 只跑一次，源文件改了不会触发它 ✓
 
 ## 构建与运行
 

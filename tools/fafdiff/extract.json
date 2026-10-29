@@ -1,0 +1,41 @@
+{
+  "about": [
+    "Engine functions that fafdiff compiles but that live in a translation unit the",
+    "harness cannot link as a whole (tools/fafdiff/AGENTS.md: Sim.cpp's non-COMDAT",
+    ".CRT$XCU static initializer is a link root that pulls 591 of the engine's 941",
+    "TUs).",
+    "",
+    "scripts/extract_sources.py copies the listed line ranges out of the engine",
+    "source into the CMake build directory, and tools/fafdiff/CMakeLists.txt",
+    "compiles the copy with the engine's own switches (faf_engine_options).",
+    "",
+    "The ranges are written by hand - the script does no symbol search and no C++",
+    "parsing, it only slices the lines. Two hashes guard the copy:",
+    "",
+    "  sourceSha256  the whole source file. When it no longer matches, the ranges",
+    "                were written for an older revision, so the run fails and the",
+    "                ranges have to be re-checked.",
+    "  outputSha256  the generated file. When it no longer matches, the extracted",
+    "                bytes changed, so somebody has to read the new extraction",
+    "                before it can be used.",
+    "",
+    "The loop: run the build, which runs the script. A mismatch fails the build with",
+    "the hash to fill in. Read the generated file, confirm the ranges bracket",
+    "exactly the intended function, put the hash in the config, run again. Never",
+    "loosen the check."
+  ],
+  "files": [
+    {
+      "source": "src/moho/sim/Sim.cpp",
+      "sourceSha256": "e98cfcf6c1db4e096c1b05c3fa9c7b52a42f2efa59b860e5ae578bf48a83b663",
+      "output": "sim_quat_cross_add.cpp",
+      "outputSha256": "5ea8bc392908aa3308a15d2351d267b6f90500f71853d259df4cd30d0cdc854f",
+      "includes": [
+        "moho/math/QuaternionMath.h",
+        "moho/math/Vector3f.h"
+      ],
+      "ranges": [[6252, 6316]],
+      "note": "moho::QuatCrossAdd, retail 0x0044F880. Its row is in src/targets.cpp; QuatFromVecRot (QuaternionMath.cpp) calls it."
+    }
+  ]
+}

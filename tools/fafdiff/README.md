@@ -104,26 +104,33 @@ dependencies they bring with them are `src/legacy/math/X87Math.cpp` (the
 # QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201   in[32B] out[4B]
 # QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606   in[32B] out[16B]
 # QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673   in[16B] out[16B]
-# QuatCrossAdd       0x0044F880 src/moho/math/QuaternionMath.cpp:1057  in[36B] out[20B]
+# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286             in[36B] out[20B]
 ```
 
-### One source move, and why
+### One extracted function, and why
 
-`moho::QuatCrossAdd` (retail 0x0044F880) used to be defined in
-`src/moho/sim/Sim.cpp`, next to its `CDebugCanvas` callers. `QuatFromVecRot`
-(0x0069AA50) calls it, so the harness could not link the quaternion
-translation unit without dragging a 27,000-line simulation file (and its Lua,
-reflection and entity headers) into a 32-bit console tool. The definition
-therefore moved to `src/moho/math/QuaternionMath.cpp`, next to its caller and
-next to the declaration it always had in `QuaternionMath.h`; the body is
-unchanged, and `Sim.cpp` and `CD3DPrimBatcher.cpp` call it exactly as before.
+`moho::QuatCrossAdd` (retail 0x0044F880) is defined in
+`src/moho/sim/Sim.cpp`, next to its `CDebugCanvas` callers, and
+`QuatFromVecRot` (0x0069AA50) calls it. The harness cannot link `Sim.cpp` as
+a translation unit: the file has a non-COMDAT `.CRT$XCU` static initializer
+(`__GLOBAL__sub_I_Sim.cpp`) that is a link root, references every static
+object in the file, and drags in most of the engine -- 591 of the engine's
+941 translation units by the object-level symbol closure, and adding the
+handful of TUs that satisfy the first round of undefined symbols only moves
+the gap deeper into the sim core.
 
-The move has one visible consequence: the coverage ledger's predicate is
-"the file lives under `src/moho/math/` or `src/legacy/math/`", so
-`0x0044F880` **enters** the ledger (it was `src/moho/sim/Sim.cpp` before and
-was therefore outside it). The ledger now holds 39 functions instead of 38,
-and every row below it moved down by one. The function is paired as well --
-it has a row of its own, listed last in the table.
+So the harness does not link the file; it compiles **just the function**.
+`extract.json` lists, by hand, the line ranges to copy and the sha256 of the
+source; `scripts/extract_sources.py` slices them into
+`<build>/tools/fafdiff/generated/`; the CMake target compiles that copy with
+the engine's own switches. Two hashes close the loop: a source edit fails the
+build until the ranges and `sourceSha256` are re-checked, and a changed
+extraction fails the build until somebody reads it and records
+`outputSha256`. Details in `AGENTS.md`.
+
+The function therefore stays out of the coverage ledger, whose predicate is
+"the file lives under `src/moho/math/` or `src/legacy/math/`" -- the ledger
+holds 38 functions, and the row below is the tenth of the paired table.
 
 ## The paired rows
 
@@ -594,7 +601,8 @@ struct AxisAngleOut { Wm3::Vector3f axis; float angle; };     // 16 bytes
 
 ### `QuatCrossAdd` -- retail `0x0044F880`
 
-`src/moho/math/QuaternionMath.cpp:1057`.
+`src/moho/sim/Sim.cpp:6286`, extracted into the harness by `extract.json`
+(see above).
 
 **The retail convention**
 
@@ -668,6 +676,7 @@ the symbol names and the file header lines removed):
 | `src/moho/math/Vector3f.cpp` | identical (386 instruction lines) |
 | `src/moho/math/QuaternionMath.cpp` | identical (2908 instruction lines) |
 | `src/legacy/math/X87Math.cpp` | identical (1811 instruction lines) |
+| the extracted `QuatCrossAdd` (`Sim.cpp` vs `generated/sim_quat_cross_add.cpp`) | identical (172 instruction lines) |
 
 The engine's x86 `/FIplatform/X87SqrtCall.h` changes none of them:
 `faf_codegen` already keeps `sqrt` a call on x86
