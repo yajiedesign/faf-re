@@ -637,48 +637,13 @@ def tu_class_of(src_rel: str, symbol: str, section_is_code) -> str:
     return "engine"
 
 
-# ---------------------------------------------------------------- difffuzz
-
-DIFFFUZZ_TARGETS = os.path.join(REPO_ROOT, "tools", "difffuzz", "src", "targets_math.cpp")
-
-RE_DIFFFUZZ_NAME = re.compile(r"\{\"([^\"]+)\"")
-
-
-def difffuzz_names(path=DIFFFUZZ_TARGETS):
-    """Leaf identifiers of every target already present in difffuzz."""
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-    except OSError:
-        return set()
-    names = set()
-    for n in RE_DIFFFUZZ_NAME.findall(text):
-        names.add(n)
-        leaf = n.split("::")[-1]
-        names.add(leaf)
-    return names
-
-
-def in_difffuzz(symbol: str, names) -> int:
-    """1 when the symbol is already a difffuzz target (leaf identifier match).
-
-    `func_QuatLERP` matches the difffuzz target `QuatLERP`.
-    """
-    if not symbol or symbol == "<unknown>":
-        return 0
-    leaf = symbol.split("::")[-1].strip()
-    leaf = re.sub(r"@\s*<[^>]*>$", "", leaf)
-    leaf = leaf.split("(")[0].strip()
-    if not leaf:
-        return 0
-    cands = {leaf}
-    if leaf.startswith("func_"):
-        cands.add(leaf[5:])
-    for c in cands:
-        if c in names:
-            return 1
-    return 0
-
+# ------------------------------------------------- the earlier leaf harness
+#
+# The earlier harness (the upstream one in tools/, read-only for us) keeps its
+# own list of leaf targets.  Its coverage no longer attests the code the
+# engine ships - it builds its copies of the engine sources with MSVC cl,
+# while the engine itself builds with clang-cl - so it is not a reason to skip
+# a function here, and the screening no longer carries a flag for it.
 
 # ------------------------------------------------------------------- git
 
@@ -708,8 +673,7 @@ CSV_COLUMNS = ["address", "tier", "symbol", "file", "line", "body_bytes",
                "x87", "ssescalar", "ssedouble", "calls", "math_calls",
                "src_double", "src_mathlib", "src_x87", "src_wm3",
                "x87_to_first_ret", "ssescalar_to_first_ret",
-               "ssedouble_to_first_ret", "thirdparty", "tu_class",
-               "in_difffuzz"]
+               "ssedouble_to_first_ret", "thirdparty", "tu_class"]
 
 
 def main(argv=None):
@@ -729,7 +693,6 @@ def main(argv=None):
     md = make_disassembler()
 
     src_commit = git_commit(args.src)
-    dfz_names = difffuzz_names()
 
     annotations = parse_sources(args.src)
     total_rows = len(annotations)
@@ -782,7 +745,6 @@ def main(argv=None):
             "next_addr": "0x%08X" % next_of[a],
             "thirdparty": 1 if is_thirdparty(ann.src_rel, ann.symbol) else 0,
             "tu_class": tu_class_of(ann.src_rel, ann.symbol, d["section_is_code"]),
-            "in_difffuzz": in_difffuzz(ann.symbol, dfz_names),
         })
 
     # -------------------------------------------------------------- CSV
@@ -824,7 +786,6 @@ def main(argv=None):
             "counts_per_tier": dict(Counter(r["tier"] for r in rows)),
             "counts_per_tu_class": dict(Counter(r["tu_class"] for r in rows)),
             "counts_per_thirdparty": dict(Counter(r["thirdparty"] for r in rows)),
-            "in_difffuzz_count": sum(1 for r in rows if r["in_difffuzz"]),
             "priority_count": len(priority),
             "functions": rows,
         }, fh, indent=1, sort_keys=False)
@@ -955,8 +916,6 @@ def main(argv=None):
     lines.append("| `tu_class` | `math` (src/moho/math, src/legacy/math, "
                  "gpg/gal/StringUtils.cpp), `thirdparty`, `noncode` (address not in a "
                  "code section) or `engine` |")
-    lines.append("| `in_difffuzz` | 1 when the symbol is already a target in "
-                 "`tools/difffuzz/src/targets_math.cpp` (leaf-identifier match) |")
     lines.append("")
     lines.append("| tu_class | count |")
     lines.append("|---|---|")
@@ -966,7 +925,6 @@ def main(argv=None):
     lines.append("| flag | count |")
     lines.append("|---|---|")
     lines.append("| `thirdparty` | %d |" % sum(1 for r in rows if r["thirdparty"]))
-    lines.append("| `in_difffuzz` | %d |" % sum(1 for r in rows if r["in_difffuzz"]))
     lines.append("")
 
     summary_path = os.path.join(args.out, "summary.md")
@@ -979,11 +937,10 @@ def main(argv=None):
           % (unique_addrs, total_rows, dupes,
              tiers.get("x87", 0), tiers.get("sse", 0), tiers.get("int", 0),
              tiers.get("unmapped", 0), len(priority), elapsed))
-    print("screen_math: src_commit=%s | tu_class: %s | thirdparty=%d | in_difffuzz=%d"
+    print("screen_math: src_commit=%s | tu_class: %s | thirdparty=%d"
           % (src_commit,
              dict(Counter(r["tu_class"] for r in rows)),
-             sum(1 for r in rows if r["thirdparty"]),
-             sum(1 for r in rows if r["in_difffuzz"])))
+             sum(1 for r in rows if r["thirdparty"])))
     print("screen_math: new columns: %s"
           % ", ".join(CSV_COLUMNS[15:]))
     return 0

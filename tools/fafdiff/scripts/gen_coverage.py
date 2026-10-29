@@ -96,10 +96,10 @@ STATUS_NA = "不适用"
 STATUSES = (STATUS_UNMATCHED, STATUS_MATCHED, STATUS_FAILED, STATUS_NA)
 STATUSES_NEEDING_WHY = (STATUS_NA, STATUS_FAILED)
 
-# difffuzz is no longer a reason to skip a row: the engine moved to clang-cl
-# (cmake/FafCodegen.cmake) while tools/difffuzz still builds its copies with
-# MSVC cl, so its coverage no longer attests the shipped engine's code.
-DEFAULT_NA_WHY = "difffuzz already covers it; fafdiff adds no dimension"
+# The earlier leaf harness is not a reason to skip a row: the engine moved to
+# clang-cl (cmake/FafCodegen.cmake) while that harness still builds its copies
+# with MSVC cl, so its coverage no longer attests the shipped engine's code.
+DEFAULT_NA_WHY = "the earlier harness already covers it; fafdiff adds no dimension"
 
 
 def in_ledger(r, calls_limit=CALLS_LIMIT) -> bool:
@@ -523,7 +523,7 @@ def main(argv=None):
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--init-status", action="store_true",
                     help="write a default coverage_status.json (all 未匹配; "
-                         "difffuzz-covered rows 不适用) and exit")
+                         "the rows the earlier harness covers 不适用) and exit")
     ap.add_argument("--sync-status", action="store_true",
                     help="rewrite coverage_status.json: keep the entries of the "
                          "addresses still in the set, drop the ones that left it, "
@@ -555,7 +555,6 @@ def main(argv=None):
             "name_recovered": recovered,
             "file": r["file"],
             "line": r["line"],
-            "in_difffuzz": r.get("in_difffuzz", 0),
             "calls": r.get("calls", 0),
         })
 

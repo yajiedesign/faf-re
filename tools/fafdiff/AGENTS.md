@@ -1,19 +1,23 @@
 # AGENTS.md —— fafdiff 配对 harness
 
 本文件是 `tools/fafdiff` 的 agent 操作指引。仓库级的约定（构建入口、部署、机器环境、术语）
-在仓库根目录的 `AGENTS.md`；`tools/difffuzz/README.md` 与
-`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另外两个 harness 的指引。
+在仓库根目录的 `AGENTS.md`；`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另一个 harness
+的指引。
 
-**当前状态：表是空的（P0 只有骨架）。** 没有比对项，没有目标 TU。
+**当前状态：表是空的。** 没有比对项，没有目标 TU。
+
+## 术语：中文一律叫“比对项”
+
+一条比对项的中文叫**比对项**，不叫“行”。英文文档保留 `row`（那里确实指表格行），
+中文正文、注释、提交信息一律不用“行”指代它——`行号`、`执行`、`一行源码` 这类词照旧。
 
 ## 它是什么
 
 一个**独立的 32 位控制台工具**：把零售二进制 `ForgedAlliance_6c6c92f.exe`
-映射进自己的地址空间，与**重建版主引擎**（`src/sdk/...`）**逐位**比对同一批输入。
+映射进自己的地址空间，与**重建版主引擎**（`src/...`）**逐位**比对同一批输入。
 
-与 `tools/difffuzz` 的关键区别：**被测代码是从 `src/sdk` 直接编进 harness 的**，用的是引擎
-自己的编译开关（`tools/difffuzz/build.bat` 对三个 TU 已经是这个做法）；镜像代码只出现在
-`difffuzz` 的 `sdk_mirror.cpp` 里，本 harness 一律不镜像。
+关键区别：**被测代码是从 `src/` 直接编进 harness 的**，用的是引擎自己的编译开关
+（harness 是引擎 CMake 工程的一个 target，链 `faf_codegen`）；镜像代码一律不镜像。
 
 ### 从 wmdiff 搬共享内核时的两条硬注意事项
 
@@ -40,34 +44,55 @@
 
 否则 harness 测的是另一个程序，而不是引擎构建的那个。
 
-**绝对不得修改 `src/sdk/main.vcxproj`、任何 `.props`、或 `build.bat` 之外的引擎工程文件** ——
-哪怕只做一次实验、哪怕只改一行。差异的收敛位置只有两个：重建源码，或比对中零售一侧的接线；
-**绝不在"怎么编译"上**。
+**绝对不得修改任何引擎工程文件或编译选项** —— 哪怕只做一次实验、哪怕只改一行。差异的收敛
+位置只有两个：重建源码，或比对中零售一侧的接线；**绝不在"怎么编译"上**。
 
-引擎侧开关（`main.vcxproj` Release|Win32）与本 harness 的对应关系：
+harness 由引擎的 CMake 工程构建（`tools/fafdiff/CMakeLists.txt`），因此：
 
-| 引擎 | harness |
+* 编译器与代码生成契约就是引擎的（clang-cl + `faf_codegen`：`/fp:precise`、
+  不许 contraction、x86 上 `/arch:SSE2`、Math 库调用不内联……）；
+* `/EHs /permissive- /W3` 与引擎一致；
+* 宏集合与引擎一致（`WIN32 _CONSOLE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS`）。
+
+⇒ ⇒ 引擎侧开关一旦变化（`/D` 列表、`/FI`、include 路径），必须与引擎工程
+（`src/CMakeLists.txt`、`cmake/FafCodegen.cmake`）对过一遍 ⇒ ⇒ 开关漂了，harness 测的就是
+引擎从没构建过的程序 ✓
+
+## 构建与运行
+
+```bash
+# 从仓库根目录
+cmake --preset clang-x86-release
+cmake --build --preset clang-x86-release --target fafdiff
+# -> build/clang-x86-release/tools/fafdiff/fafdiff.exe
+
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --iters 1000000 --seed 0x5EED2007
+```
+
+harness 映射的是 32 位零售镜像，**只有 x86 配置有它**；它是 `EXCLUDE_FROM_ALL`，引擎构建
+不依赖它。
+
+## 比对项的 ABI 是**带类型**的
+
+`Target`（`src/fuzz.h`）只有这些字段：
+
+| 字段 | 含义 |
 |---|---|
-| `/D WIN32 /D NDEBUG /D _WINDOWS /D WIN32_LEAN_AND_MEAN /D NOMINMAX` | 同（`NDEBUG` 只在 Release 分支） |
-| `/D LUAPLUS_LIB /D BOOST_ALL_NO_LIB /D BOOST_NO_AUTO_PTR /D _CRT_SECURE_NO_WARNINGS` | 同 |
-| `/std:c++20` | `/std:c++20` |
-| `/permissive-` | `/permissive-` |
-| `/fp:precise` | `/fp:precise` |
-| Release `/O2 /Oi /Oy- /Gy /MD`，强制包含 `platform\X87SqrtCall.h` | 同（Debug 分支不 `/FI`） |
-| Debug `/Od /Ob1 /MDd /D _DEBUG /D _ITERATOR_DEBUG_LEVEL=0` | 同 |
+| `name` | 短名，`--filter` 用它 |
+| `va` | 零售入口地址（填好之前是 0） |
+| `source` | 我们这边的定义位置 `file:line` |
+| `inBytes` / `outBytes` | 带类型的输入/输出结构体大小 |
+| `genT` | `void(Rng&, void*, DrawKind)`：按行自己的类型填输入 |
+| `retailT` | `void(const void*, void*)`：调零售那一侧 |
+| `oursT` | `void(const void*, void*)`：调重建那一侧 |
 
-`/arch:`、`/fp:`、`/Oi`、`/O2` 一律不许动：wmdiff 实测加上 `/arch:IA32` 能让某些比对项
-"全过"，而那只是把重建变成另一个程序 ⇒ ⇒ 不许为了让比对通过而改编译选项 ✓
+⇒ ⇒ **没有"一摞没有类型的字"通道**：每个比对项带自己的 `In`/`Out` 结构体，harness 只看见
+字节缓冲区 ⇒ ⇒ ABI 从一开始就是带类型的，**没有转换历史要保留** ✓
 
-## 编译开关的审计基准
-
-**`buildstage/main/Win32/Release/main.tlog/CL.command.1.tlog` 存着引擎构建实际用的那条 `cl`
-命令行** —— 那是基准，不是本 harness 的 `build.bat`。
-
-⇒ ⇒ 以后**任何**对 `build.bat` 里引擎侧开关（`/D` 列表、`/FI`、include 路径）的改动，
-必须先与那个 tlog 对过一遍 ⇒ ⇒ 开关漂了，harness 测的就是引擎从没构建过的程序 ✓
-
-（自动检查器还没写；先靠人。）
+⇒ ⇒ `genT` 的 `DrawKind`：`WithExtremes`（默认）是全混合抽样，`Ordinary`（`--skip-extreme`
+选的就是它）只抽有限、量级正常、非非规格化的车道 ⇒ ⇒ 因此**带类型的比对项不会因为输入
+"太极端"而被跳过** ✓
 
 ## 种子按比对项在表里的序号派生 ⇒ ⇒ 表里不许有重复项
 
@@ -80,9 +105,8 @@
 
 ## 信比对结果之前，先看构建退出码与 exe 的时间戳
 
-**构建失败时 harness 会跑旧二进制。** `build.bat` 把错误写进退出码，而比对项照测
-`build/` 里那个**上一次成功构建**留下的 exe ⇒ ⇒ "改了源码、结果一个数都没变"会被读成
-"这个改动不影响结果" ⇒ ⇒
+**构建失败时 harness 会跑旧二进制。** 旧二进制会留在 `build/` 里，而比对项照测它 ⇒ ⇒
+"改了源码、结果一个数都没变"会被读成"这个改动不影响结果" ⇒ ⇒
 
 ⇒ ⇒ **信比对项之前先看构建退出码 + exe 的时间戳** ⇒ ⇒ 一次变体搜索就是这么白跑的（每个变体
 都"无变化"，因为根本没重编）✓
@@ -90,15 +114,19 @@
 ⇒ ⇒ 这条与"量具侧的 ABI 错误会伪装成重建的数值差异"同族 ⇒ ⇒ 下"这是重建的缺陷"这个结论
 之前，先证明量具是新的、是对齐的 ✓
 
-## `tools/difffuzz` 是上游，只读
+## 上游那一代 harness 是只读的
 
-`tools/difffuzz` 是**上游 harness**（早于本项目的一代设计），**只读**：
-不许改它，不许把它当模板抄它的目标。
+更早一代的叶子函数 harness（`tools/` 下的另一个 harness，工具清单见 `tools/README.md`）是
+**上游**，**只读**：不许改它，不许把它当模板抄它的目标。
 
 ⇒ ⇒ 但**也不许把它的比对项原样搬过来**：那样做等于把上游的工作重做一遍而没有新增维度 ⇒ ⇒
 fafdiff 要加的是**新维度** —— **对象状态**（不只返回值与出参，还有函数留下的对象字节）、
 **调用序列**（同一批输入走过一串零售调用，而不是每个比对项一次调用）、**可达性账本**、
-**按 TU 的系统覆盖** ⇒ ⇒ 一个目标若只是 difffuzz 已有目标的翻版，**不加维度就不许入表** ✓
+**按 TU 的系统覆盖** ⇒ ⇒ 一个目标若只是上游已有目标的翻版，**不加维度就不许入表** ✓
+
+⇒ ⇒ 另外：上游 harness 的覆盖**不再是**跳过某个函数的理由 —— 引擎已经换成 clang-cl 构建
+（`cmake/FafCodegen.cmake`），而上游那份仍用 MSVC `cl` 编它自己的副本 ⇒ ⇒ 它的覆盖不再为
+引擎实际发布的代码作证 ✓
 
 ## 判定标准
 

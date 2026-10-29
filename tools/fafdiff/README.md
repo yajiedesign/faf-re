@@ -1,27 +1,23 @@
 # fafdiff
 
-`fafdiff` is a **second differential harness**: it compares the main engine
-rebuild's source (`src/sdk/...`) against the retail
+`fafdiff` is a **differential harness**: it compares the main engine rebuild's
+source (`src/...`) against the retail
 `C:\ProgramData\FAForever\bin\ForgedAlliance_6c6c92f.exe`, bit for bit.
 
 It is modelled on `dependencies/WildMagic3p8/wmdiff/`, which does the same
 thing for the Wild Magic 3.8 library rebuild. The shared core
-(`src/fuzz.h`, `src/gen.cpp`, `src/pe_image.*`) is a verbatim copy of wmdiff's.
+(`src/fuzz.h`, `src/gen.cpp`, `src/pe_image.*`) follows wmdiff's.
 
-## How it differs from `tools/difffuzz`
+## Scope
 
-`tools/difffuzz` is the earlier harness and is **upstream** (read-only for us).
-Its design differs in one decisive respect: the engine sources it could not
-include directly were **mirrored by hand** into `src/sdk_mirror.cpp`, so it
-measured a copy rather than the engine.
+The design point: the translation units under test are **compiled into the
+harness straight from `src/`**, with the engine's own switches (the engine's
+CMake target links `faf_codegen`, the same code-generation contract the engine
+uses). Nothing is mirrored by hand, so what is measured is the engine's own
+code.
 
-`fafdiff` takes the other route: the translation units under test are
-**compiled into the harness from `src/sdk`**, with the engine's own switches
-(the arrangement `tools/difffuzz/build.bat` already uses for three
-translation units). Nothing is mirrored by hand, so what is measured is the
-engine's own code.
-
-Beyond that, fafdiff is planned to add dimensions difffuzz does not have:
+Beyond that, fafdiff adds dimensions the earlier leaf-function harness does
+not have:
 
 * **systematic per-TU coverage** — one translation unit at a time, in a ledger,
   rather than "whatever was recovered so far";
@@ -34,25 +30,25 @@ Beyond that, fafdiff is planned to add dimensions difffuzz does not have:
 
 ## Build
 
+The harness is a target of the engine's own CMake project, so it is built with
+the engine's compiler (clang-cl) and the engine's code-generation contract:
+
 ```bash
 # from the repository root
-MSYS_NO_PATHCONV=1 ./tools/fafdiff/build.bat all      # release + debug
-MSYS_NO_PATHCONV=1 ./tools/fafdiff/build.bat release
-MSYS_NO_PATHCONV=1 ./tools/fafdiff/build.bat debug
+cmake --preset clang-x86-release
+cmake --build --preset clang-x86-release --target fafdiff
+# -> build/clang-x86-release/tools/fafdiff/fafdiff.exe
 ```
 
-Output: `tools/fafdiff/build/fafdiff_release.exe` and
-`tools/fafdiff/build/fafdiff_debug.exe`.
-
-The build never touches `src/sdk/main.vcxproj` or any `.props`; see
-`AGENTS.md` for the compile-parity rule and the flag audit.
+The harness maps a 32-bit retail image, so it exists for x86 configures only.
+It is `EXCLUDE_FROM_ALL`: the engine build does not depend on it.
 
 ## Run
 
 ```bash
-./tools/fafdiff/build/fafdiff_release.exe --list                 # the table
-./tools/fafdiff/build/fafdiff_release.exe --iters 1000000 --seed 0x5EED2007
-./tools/fafdiff/build/fafdiff_release.exe --iters 1000000 --filter "SomeName"
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --iters 1000000 --seed 0x5EED2007
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --iters 1000000 --filter "SomeName"
 ```
 
 Options: `--iters N`, `--seed S`, `--filter NAME` (comma-separated substrings),
@@ -62,40 +58,43 @@ Options: `--iters N`, `--seed S`, `--filter NAME` (comma-separated substrings),
 The default retail image is
 `C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe`.
 
-## The target row
+## The comparison row
 
-A row is one paired function:
+A row is one paired function. The ABI is **typed from the start**: the row's
+own file owns the input and output struct types, and the harness only ever sees
+opaque byte buffers behind them.
 
 | field | meaning |
 |---|---|
 | `name` | short name, used by `--filter` |
 | `va` | the retail entry point (0 until it is filled in) |
 | `source` | where our side lives (`file:line`) |
-| `inWords` / `outWords` | how many 32-bit words the generator writes and the comparison reads |
-| `inLayout` / `outLayout` | human-readable description of those words |
-| `gen` | fills the input words from the row's RNG |
-| `retail` | calls the retail function through the mapped image |
-| `ours` | calls the engine's own function |
+| `inBytes` / `outBytes` | the size of the typed input and output structs |
+| `genT` | fills the typed input struct from the row's RNG |
+| `retailT` | calls the retail function through the mapped image |
+| `oursT` | calls the engine's own function |
+
+`genT` takes a `DrawKind`: `WithExtremes` (the default) draws the full
+mixture, `Ordinary` (what `--skip-extreme` selects) draws only finite, in-range,
+normal lanes.
 
 The table lives in `src/targets.cpp`; the aggregator is `fafdiff::Targets(int&)`
 declared in `src/targets.h`.
 
 ## State
 
-**The table is empty until P1.** There are no targets yet: `--list` prints the
-header and no rows, and a run reports `0/0 targets passed`. P1 adds the first
-translation unit under test and the first rows.
+**The table is empty until the first translation unit under test lands.**
+`--list` prints the header and no rows, and a run reports `0/0 targets passed`.
 
 ## Coverage ledger
 
 `COVERAGE.md` is the per-function coverage ledger for the x87-tier math
-surface: the **195** functions of `src/sdk/moho/math/**` and
-`src/sdk/legacy/math/**` that the retail image still executes with x87
-arithmetic. Every row carries the function's source-level name, its retail
-address, its source location and one of four statuses (`未匹配`, `已匹配`,
-`失败`, `不适用`). Start there: it says, per function, whether the pair exists
-yet, and -- for the rows marked `不适用` -- why it will never exist
-(difffuzz already covers that function, so fafdiff would add no dimension).
+surface: the functions of `src/moho/math/**` and `src/legacy/math/**` that the
+retail image still executes with x87 arithmetic. Every row carries the
+function's source-level name, its retail address, its source location and one of
+four statuses (`未匹配`, `已匹配`, `失败`, `不适用`). Start there: it says, per
+function, whether the pair exists yet, and -- for the rows marked `不适用` --
+why it will never exist.
 
 The table is **generated**, not hand-written: `scripts/gen_coverage.py` builds
 it from the screen data (`scripts/screen_math.py` ->
@@ -110,10 +109,8 @@ PYTHONUTF8=1 .tmp/venv/Scripts/python.exe \
     tools/fafdiff/scripts/gen_coverage.py
 ```
 
-The generator fails loudly (and writes nothing) if the set no longer holds
-195 functions, if a status is missing, invalid or lacks its `why` sentence, or
-if a status entry points at an address outside the set -- the denominator of
-the ledger must not drift silently. `scripts/gen_coverage.py --init-status`
-writes a fresh status file (everything `未匹配`, difffuzz-covered rows
-`不适用`).
-
+The generator fails loudly (and writes nothing) if a status is missing, invalid
+or lacks its `why` sentence, or if a status entry points at an address outside
+the set -- the denominator of the ledger must not drift silently.
+`scripts/gen_coverage.py --init-status` writes a fresh status file (everything
+`未匹配`).

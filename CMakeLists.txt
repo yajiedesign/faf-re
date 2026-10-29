@@ -121,3 +121,11 @@ add_subdirectory(tests)
 if(FAF_TARGET_ARCH STREQUAL "x86")
   add_subdirectory(tools/wmdiff)
 endif()
+
+# --- Engine-side paired comparison harness (tools/fafdiff) -----------------------------
+# Same story: it maps a 32-bit retail image at 0x00400000, so it exists only
+# for x86 configures.  EXCLUDE_FROM_ALL: the engine build does not depend on
+# it.
+if(FAF_TARGET_ARCH STREQUAL "x86")
+  add_subdirectory(tools/fafdiff)
+endif()

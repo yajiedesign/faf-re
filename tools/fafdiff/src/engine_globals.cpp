@@ -11,7 +11,7 @@
 // CPUID/movapd probe, i.e. 1 on any machine that runs the game.  The harness
 // pokes the same 1 into the mapped retail image.
 //
-// This is the same trick tools/difffuzz/src/sdk_mirror.cpp:15 uses.  If the
-// engine ever moves the definition, this file must follow it.
+// This is the same trick the older mirror-based harness used.  If the engine
+// ever moves the definition, this file must follow it.
 
 extern "C" int global_mode_sse2 = 1;

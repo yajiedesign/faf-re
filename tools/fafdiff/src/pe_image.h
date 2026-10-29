@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace difffuzz
+namespace fafdiff
 {
   /**
    * What a hand-mapped image needs from the loader, and what it now gets.
@@ -66,4 +66,4 @@ namespace difffuzz
   /// otherwise puts NLS views and heaps at 0x00400000), resumes it and
   /// returns its exit code.
   int RelaunchWithPreclaimedImage(std::uint32_t base, std::uint32_t size);
-} // namespace difffuzz
+} // namespace fafdiff

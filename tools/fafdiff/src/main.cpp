@@ -1,17 +1,15 @@
-// fafdiff - differential test of the rebuilt main engine (src/sdk) against the
+// fafdiff - differential test of the rebuilt main engine (src/) against the
 // retail engine's copy.
 //
-// Same shape as tools/difffuzz: map the retail PE at its preferred base, call
+// Same shape as tools/wmdiff: map the retail PE at its preferred base, call
 // the retail function and our rebuilt one with identical random inputs, and
-// compare every output word bit for bit. The difference is scope - difffuzz
-// covers recovered engine sources that its build cannot include directly, so it
-// mirrors them by hand; fafdiff compiles the engine translation units under
-// test straight from src/sdk with the engine's own switches (see build.bat),
-// so nothing is copied by hand.
+// compare every output word bit for bit. The difference is scope - wmdiff
+// covers the Wild Magic 3.8 library; fafdiff compiles the engine translation
+// units under test straight from src/ with the engine's own switches, so
+// nothing is copied by hand.
 //
-// The shared core (fuzz.h, gen.cpp, pe_image.*) is a verbatim copy of
-// dependencies/WildMagic3p8/wmdiff/src, which shares the same core with
-// tools/difffuzz. Keep the three in step.
+// The ABI is typed from the start: a row owns its input and output structs and
+// the harness only ever sees opaque byte buffers behind them.
 
 #include "fuzz.h"
 #include "targets.h"
@@ -27,20 +25,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
-using difffuzz::FromBits;
-using difffuzz::kCanary;
-using difffuzz::kMaxWords;
-using difffuzz::Rng;
+using fafdiff::FromBits;
+using fafdiff::kCanary;
+using fafdiff::Rng;
 
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
-
-/// Float lane i of an input word block.
-[[nodiscard]] inline float F(const u32* in, const int i) noexcept
-{
-  return FromBits(in[i]);
-}
 
 namespace
 {
@@ -52,7 +44,6 @@ namespace
   const char* gImage = "C:/ProgramData/FAForever/bin/ForgedAlliance_6c6c92f.exe";
   bool gStrictNan = false;
   bool gSkipExtreme = false;
-  difffuzz::Rng* gGenRng = nullptr;
 
   // The retail CRT's Windows-version cache. `__get_winmajor` (0x00A83756)
   // checks the flag at 0x00FB7D50 and, when it is clear, works the version out
@@ -110,33 +101,14 @@ namespace
   // from `global_compat_flag` during CRT startup, which never runs here. The
   // CRT math dispatch bodies read it directly: at 0 the retail ceil/floor (and
   // friends) take the x87 fallback, whose NaN/errno path calls imports the
-  // mapped image cannot service. difffuzz seeds the same word to 1 before any
-  // target runs.
+  // mapped image cannot service. fafdiff seeds the same word to 1 before any
+  // row runs.
   constexpr u32 kRetailGlobalModeSse2 = 0x01107030u;
 
-  // Retail static C-init entries whose BSS results the targets read. They run
+  // Retail static C-init entries whose BSS results the rows read. They run
   // in the CRT's static-init pass, before any thread installs _PC_24, so they
   // execute under the Windows default control word 0x027F.
   constexpr u32 kRetailStaticInits[] = {0x00BEDC30u, 0x00BEDC60u};
-
-  // The retail CRT's own start-up, or the part of it the harness needs.
-  //
-  // 0x00A95DC4 is the CRT's dynamic API resolution: it loads KERNEL32.DLL,
-  // resolves FlsAlloc / FlsGetValue / FlsSetValue / FlsFree into the slots at
-  // 0x00FB7E18..0x00FB7E24, allocates the per-thread slot, publishes it at
-  // 0x00F3E49C and initialises the per-thread data. The MSVC 2008+ CRT keeps
-  // its errno and its thread state in fiber-local storage, and without this
-  // the FLS pointers are the 0xFEFEFEFE the file happens to hold.
-  //
-  // It has to run before any target does. Without it, the CRT's per-thread
-  // accessor asks the OS for the Windows version, which goes back through the
-  // same accessor, and the pair recurses until the stack is gone.
-  // (The retail CRT's start-up itself is 0x00A95DC4: it loads KERNEL32.DLL and
-  // resolves FlsAlloc / FlsGetValue / FlsSetValue / FlsFree into the slots at
-  // 0x00FB7E18..0x00FB7E24, then allocates the thread slot and publishes it at
-  // 0x00F3E49C. Calling it from the harness recurses, because the start-up
-  // itself reaches the version path that recurses - so what is published here
-  // is the one piece of it that matters and that does not recurse.)
 
   // The simulation's FP environment. The x87 control word is applied with
   // fldcw, so this is a raw 16-bit control word. 0x007F decodes as precision
@@ -152,10 +124,7 @@ namespace
   u32 gControlWord = 0x007Fu;
   // MXCSR control bits: all exceptions masked, round-to-nearest, DAZ and FTZ
   // off. This is what the engine's IsDefaultFloatingPointEnvironment() gates on
-  // (`_mm_getcsr() & 0x1F80 == 0x1F80`). The banner can print 0x1FA0 because
-  // bits 0..5 are sticky exception *flags*, not control: 0x1FA0 is this value
-  // with the precision flag (0x20) set by startup code. DAZ is bit 6 and is
-  // clear; it was never the cause of the denormal residuals.
+  // (`_mm_getcsr() & 0x1F80 == 0x1F80`).
   constexpr u32 kMxcsr = 0x1F80u;
 
   void SetFpEnv() noexcept
@@ -173,16 +142,6 @@ namespace
     unsigned short cw;
     __asm fnstcw cw
     return cw;
-  }
-
-  /// x87 stack depth (8 - number of empty tag slots), to catch an unbalanced
-  /// call on either side.
-  [[nodiscard]] int X87Depth() noexcept
-  {
-    unsigned short sw;
-    __asm fnstsw sw
-    const int top = (sw >> 11) & 7;
-    return top == 0 ? 0 : 8 - top;
   }
 
   // Where the last caught exception was raised, and its code. A stack overflow
@@ -316,7 +275,10 @@ namespace
   }
 
   // SEH has to live in a function without C++ unwinding objects.
-  DWORD CallGuarded(void (*fn)(const u32*, u32*), const u32* in, u32* out) noexcept
+  //
+  // The row's own file owns the input and output struct types, so the harness
+  // only ever passes opaque byte buffers.
+  DWORD CallGuardedTyped(void (*fn)(const void*, void*), const void* in, void* out) noexcept
   {
     __try {
       fn(in, out);
@@ -326,11 +288,10 @@ namespace
     return 0;
   }
 
-  // A retail void(void) C-init entry. difffuzz runs the two entries whose BSS
-  // results the targets read (0x00BEDC30 computes float pi at 0x00FB78FC,
+  // A retail void(void) C-init entry. fafdiff runs the two entries whose BSS
+  // results the rows read (0x00BEDC30 computes float pi at 0x00FB78FC,
   // 0x00BEDC60 computes pi/2 at 0x00FB7914); the retail CRT would have run
-  // them before main. Without them 0x006C1070's w <= -1 arm returns 0 instead
-  // of pi.
+  // them before main.
   __declspec(naked) void RunRetailInit(const unsigned int va) noexcept
   {
     __asm {
@@ -363,43 +324,48 @@ namespace
     return (w & 0x7F800000u) == 0x7F800000u && (w & 0x007FFFFFu) != 0;
   }
 
-  void PrintWords(const char* label, const u32* w, const int n, const char* layout)
+  // The typed path's mismatch report: the row's struct layout is the row
+  // file's business, so the lanes are printed as raw words.
+  void PrintMismatchTyped(const fafdiff::Target& t, int iter, const unsigned char* in,
+    const unsigned char* outR, const unsigned char* outO)
   {
-    std::printf("    %s [%s]\n      ", label, layout);
-    for (int k = 0; k < n; ++k) {
-      if (k && (k % 4) == 0) {
-        std::printf("\n      ");
-      }
-      std::printf("%08X(%g) ", w[k], static_cast<double>(FromBits(w[k])));
+    std::printf("[MISMATCH] %s (retail 0x%08X vs %s) iter %d  inputs (typed):\n",
+      t.name, t.va, t.source, iter);
+    for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+      u32 w = 0;
+      std::memcpy(&w, in + k, 4);
+      std::printf("        %08X(%g)\n", w, static_cast<double>(FromBits(w)));
     }
-    std::printf("\n");
+    for (std::uint32_t k = 0; k + 4 <= t.outBytes; k += 4) {
+      u32 r = 0, o = 0;
+      std::memcpy(&r, outR + k, 4);
+      std::memcpy(&o, outO + k, 4);
+      std::printf("        %08X(%g)  vs  %08X(%g)\n", r, static_cast<double>(FromBits(r)),
+        o, static_cast<double>(FromBits(o)));
+    }
   }
 
-  void PrintMismatch(const difffuzz::Target& t, int iter, bool extreme, const u32* in,
-    const u32* outR, const u32* outO)
+  /// Fill a byte buffer with the canary, one 32-bit word at a time.
+  void FillCanary(unsigned char* p, const std::size_t bytes) noexcept
   {
-    std::printf(
-      "[MISMATCH] %s (retail 0x%08X vs %s) iter %d  inputs: %s\n", t.name, t.va, t.source,
-      iter, extreme ? "EXTREME (denormal/inf/NaN or |x| outside 2^-63..2^63)" : "ordinary");
-    std::printf("      input   [%s]\n", t.inLayout);
-    for (int k = 0; k < t.inWords; ++k) {
-      std::printf("        %08X(%g)\n", in[k], static_cast<double>(FromBits(in[k])));
+    for (std::size_t k = 0; k + 4 <= bytes; k += 4) {
+      const u32 canary = kCanary;
+      std::memcpy(p + k, &canary, 4);
     }
-    PrintWords("retail", outR, t.outWords, t.outLayout);
-    PrintWords("ours  ", outO, t.outWords, t.outLayout);
   }
 
   void Usage()
   {
     std::printf(
       "fafdiff [--iters N] [--seed S] [--filter NAME] [--max-mismatch N]\n"
-      "       [--image PATH] [--cw 0xNNNN] [--snan] [--strict-nan] [--skip-extreme] [--list]\n"
-      "  --filter   run only targets whose name contains NAME (comma-separated list ok)\n"
+      "         [--image PATH] [--cw 0xNNNN] [--snan] [--strict-nan] [--skip-extreme] [--list]\n"
+      "  --filter   run only rows whose name contains NAME (comma-separated list ok)\n"
       "  --cw       x87 control word (default 0x007F: _PC_24, round-nearest, all masked)\n"
       "  --snan     allow signaling NaNs in generated inputs\n"
       "  --strict-nan  count NaN-payload-only differences as mismatches\n"
-      "  --skip-extreme  drop inputs that are denormal/inf/NaN or outside 2^-63..2^63\n"
-      "  --list     print the target table and exit\n");
+      "  --skip-extreme  draw ordinary inputs only: every lane finite, in range\n"
+      "                   and normal (no NaN, no infinity, no subnormal)\n"
+      "  --list     print the row table and exit\n");
   }
 
   bool ParseArgs(int argc, char** argv)
@@ -423,7 +389,7 @@ namespace
       } else if (std::strcmp(a, "--strict-nan") == 0) {
         gStrictNan = true;
       } else if (std::strcmp(a, "--snan") == 0) {
-        difffuzz::gAllowSnan = true;
+        fafdiff::gAllowSnan = true;
       } else if (std::strcmp(a, "--list") == 0) {
         gList = true;
       } else if (std::strcmp(a, "--help") == 0 || std::strcmp(a, "-h") == 0) {
@@ -468,14 +434,14 @@ int main(int argc, char** argv)
   }
 
   int count = 0;
-  const difffuzz::Target* const targets = fafdiff::Targets(count);
+  const fafdiff::Target* const targets = fafdiff::Targets(count);
 
   if (gList) {
-    std::printf("%-18s %-10s %-52s %s\n", "name", "retail VA", "our source", "layouts");
+    std::printf("%-18s %-10s %-52s %s\n", "name", "retail VA", "our source", "typed layout");
     for (int i = 0; i < count; ++i) {
-      const difffuzz::Target& t = targets[i];
-      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s\n", t.name, t.va,
-        t.source[0] ? t.source : "(none)", t.inLayout, t.outLayout,
+      const fafdiff::Target& t = targets[i];
+      std::printf("%-18s 0x%08X %-52s in[%uB] out[%uB]%s\n", t.name, t.va,
+        t.source[0] ? t.source : "(none)", t.inBytes, t.outBytes,
         t.va == 0 ? "   [TODO: retail VA not filled in]" : "");
     }
     return 0;
@@ -487,15 +453,15 @@ int main(int argc, char** argv)
   if (GetEnvironmentVariableA("FAFDIFF_CHILD", nullptr, 0) == 0) {
     u32 base = 0;
     u32 size = 0;
-    if (!difffuzz::ReadImageExtent(gImage, base, size)) {
+    if (!fafdiff::ReadImageExtent(gImage, base, size)) {
       std::fprintf(stderr, "fafdiff: cannot read PE header of %s\n", gImage);
       return 3;
     }
     std::fflush(stdout);
-    return difffuzz::RelaunchWithPreclaimedImage(base, size);
+    return fafdiff::RelaunchWithPreclaimedImage(base, size);
   }
 
-  difffuzz::RetailImage image;
+  fafdiff::RetailImage image;
   std::string error;
   if (!image.Load(gImage, error)) {
     std::printf("fafdiff: cannot map %s: %s\n", gImage, error.c_str());
@@ -601,7 +567,7 @@ int main(int argc, char** argv)
     }
   }
   {
-    const difffuzz::ImageEnvironment env = difffuzz::DescribeEnvironment();
+    const fafdiff::ImageEnvironment env = fafdiff::DescribeEnvironment();
     std::printf("fafdiff: mapped %s at 0x%08X (0x%X bytes, %u imports resolved, %u trapped)",
       gImage, image.Base(), image.SizeOfImage(), env.resolved_imports, env.trapped_imports);
     if (env.tls_bytes != 0) {
@@ -625,7 +591,7 @@ int main(int argc, char** argv)
   // does not exist at the debugger's initial break, and an int3 planted from
   // inside the harness (FAFDIFF_INT3_AT) is written but the WOW64 target raises
   // 0xC000001D past it instead of a breakpoint exception. Here the image is
-  // mapped and the debugger can install its own breakpoint before any target
+  // mapped and the debugger can install its own breakpoint before any row
   // runs. Combine with FAFDIFF_RW_CODE so the .text write is permitted.
   if (std::getenv("FAFDIFF_BREAK_AFTER_LOAD") != nullptr) {
     std::printf("fafdiff: FAFDIFF_BREAK_AFTER_LOAD - yielding to the debugger\n");
@@ -665,7 +631,7 @@ int main(int argc, char** argv)
   }
 
   for (int i = 0; i < count; ++i) {
-    const difffuzz::Target& t = targets[i];
+    const fafdiff::Target& t = targets[i];
     if (!Selected(t.name)) {
       continue;
     }
@@ -676,47 +642,48 @@ int main(int argc, char** argv)
     int mismatches = 0, nanPayloadOnly = 0;
     bool crashed = false;
 
+    // Every row is on the typed path: the two sides are handed the same typed
+    // input struct and answer with a typed output struct, and the harness only
+    // ever sees the byte buffers behind them.
+    std::vector<unsigned char> tin;
+    std::vector<unsigned char> toutR;
+    std::vector<unsigned char> toutO;
+    tin.assign(t.inBytes, 0);
+    toutR.assign(t.outBytes, 0);
+    toutO.assign(t.outBytes, 0);
+
+    if (gStackLimit == nullptr) {
+      MEMORY_BASIC_INFORMATION stackInfo{};
+      ULONG_PTR low = 0, high = 0;
+      GetCurrentThreadStackLimits(&low, &high);
+      gStackLimit = reinterpret_cast<const void*>(low);
+    }
+
     for (int iter = 0; iter < gIters; ++iter) {
-      u32 in[difffuzz::kMaxWords];
-      u32 outR[difffuzz::kMaxWords];
-      u32 outO[difffuzz::kMaxWords];
+      bool bad = false, onlyNanPayload = true;
 
-      for (int k = 0; k < t.inWords; ++k) {
-        in[k] = difffuzz::kCanary;
-      }
-      for (int k = 0; k < t.outWords; ++k) {
-        outR[k] = difffuzz::kCanary;
-        outO[k] = difffuzz::kCanary;
-      }
+      // The canary goes into the byte buffers exactly as it used to go into
+      // the word buffers: a lane nobody writes still shows up as 0xCDCDCDCD.
+      // The typed row is never scanned for extreme words - it draws ordinary
+      // inputs itself when --skip-extreme is on.
+      FillCanary(tin.data(), tin.size());
+      FillCanary(toutR.data(), toutR.size());
+      FillCanary(toutO.data(), toutO.size());
 
-      t.gen(gen, in);
-
-      bool extreme = false;
-      for (int k = 0; k < t.inWords; ++k) {
-        if (IsNan(in[k]) || std::fabs(static_cast<double>(FromBits(in[k]))) > 9.2e18
-          || (FromBits(in[k]) != 0.0f && std::fabs(static_cast<double>(FromBits(in[k]))) < 1.2e-38)) {
-          extreme = true;
-        }
-      }
-      if (gSkipExtreme && extreme) {
-        continue;
-      }
+      t.genT(gen, tin.data(), gSkipExtreme ? fafdiff::DrawKind::Ordinary
+                                           : fafdiff::DrawKind::WithExtremes);
 
       SetFpEnv();
-      if (gStackLimit == nullptr) {
-        MEMORY_BASIC_INFORMATION stackInfo{};
-        ULONG_PTR low = 0, high = 0;
-        GetCurrentThreadStackLimits(&low, &high);
-        gStackLimit = reinterpret_cast<const void*>(low);
-      }
       {
-        const DWORD code = CallGuarded(t.retail, in, outR);
+        const DWORD code = CallGuardedTyped(t.retailT, tin.data(), toutR.data());
         if (code != 0) {
           std::printf("[CRASH] %s retail side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
             t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
           DumpStackFrames();
-          for (int k = 0; k < t.inWords; ++k) {
-            std::printf(" %08X", in[k]);
+          for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+            u32 w = 0;
+            std::memcpy(&w, tin.data() + k, 4);
+            std::printf(" %08X", w);
           }
           std::printf("\n");
           crashed = true;
@@ -726,12 +693,14 @@ int main(int argc, char** argv)
 
       SetFpEnv();
       {
-        const DWORD code = CallGuarded(t.ours, in, outO);
+        const DWORD code = CallGuardedTyped(t.oursT, tin.data(), toutO.data());
         if (code != 0) {
           std::printf("[CRASH] %s our side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
             t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
-          for (int k = 0; k < t.inWords; ++k) {
-            std::printf(" %08X", in[k]);
+          for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+            u32 w = 0;
+            std::memcpy(&w, tin.data() + k, 4);
+            std::printf(" %08X", w);
           }
           std::printf("\n");
           crashed = true;
@@ -739,10 +708,12 @@ int main(int argc, char** argv)
         }
       }
 
-      bool bad = false, onlyNanPayload = true;
-      for (int k = 0; k < t.outWords; ++k) {
-        if (outR[k] != outO[k]) {
-          if (!(IsNan(outR[k]) && IsNan(outO[k]))) {
+      for (std::uint32_t k = 0; k + 4 <= t.outBytes; k += 4) {
+        u32 r = 0, o = 0;
+        std::memcpy(&r, toutR.data() + k, 4);
+        std::memcpy(&o, toutO.data() + k, 4);
+        if (r != o) {
+          if (!(IsNan(r) && IsNan(o))) {
             onlyNanPayload = false;
           }
           bad = true;
@@ -759,7 +730,7 @@ int main(int argc, char** argv)
           continue;
         }
         if (mismatches < gMaxMismatch) {
-          PrintMismatch(t, iter, extreme, in, outR, outO);
+          PrintMismatchTyped(t, iter, tin.data(), toutR.data(), toutO.data());
         }
         ++mismatches;
       }

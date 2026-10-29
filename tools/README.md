@@ -186,6 +186,6 @@ not picked up by `build.ps1`.
 | Tool | What it is |
 |---|---|
 | `difffuzz` | Differential fuzzing of pure leaf functions: calls a retail function and the recovered C++ for it with the same random inputs. `build.bat`, output in `build/`. |
-| `fafdiff` | The same idea for the **engine** rebuild: compiles translation units from `src/sdk` with the engine's own switches and compares them bit-for-bit against the retail exe. Infrastructure only so far - the target table is empty. See `fafdiff/README.md` and `fafdiff/AGENTS.md`. |
+| `fafdiff` | The same idea for the **engine** rebuild: compiles translation units from `src/` with the engine's own switches (it is a target of the engine's own CMake project) and compares them bit-for-bit against the retail exe. Infrastructure only so far - the target table is empty. See `fafdiff/README.md` and `fafdiff/AGENTS.md`. |
 | `x87sim` | 32-bit x87 FPU simulator used to reproduce a retail body's arithmetic. |
 | `sfd-inspect` | CMake project for inspecting `.sfd` files. |
