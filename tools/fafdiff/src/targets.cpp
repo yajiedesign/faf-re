@@ -1,7 +1,9 @@
 #include "targets.h"
 
 #include "moho/math/QuaternionMath.h"
+#include "moho/math/Vector2f.h"
 #include "moho/math/Vector3f.h"
+#include "moho/math/Vector4f.h"
 
 #include <cmath>
 #include <cstdint>
@@ -1038,6 +1040,1080 @@ namespace
       : 0u;
   }
 
+  // ---------------------------------------------------------------------
+  // The vector rows.
+  //
+  // Every convention quoted below was measured from the retail image with
+  // `.tmp/disasm.py <va>`, and cross-read against the callers that set the
+  // registers up (the callers are only used to confirm the convention; whether
+  // the engine calls a function is not what makes it a row).
+
+  // --- Vector4fAssign - retail 0x0046FB20 --------------------------------
+  //
+  //   0x0046FB20  fld  dword ptr [ecx]      <- the source lane
+  //   0x0046FB22  fstp dword ptr [eax]      <- the destination lane
+  //   0x0046FB24  fld  dword ptr [ecx + 4]
+  //   0x0046FB27  fstp dword ptr [eax + 4]
+  //   ...        (four lanes, x87 load/store each)
+  //   0x0046FB36  ret
+  //
+  // So: the destination in EAX, the source in ECX, and the return value is
+  // the destination pointer (EAX is never written). The lanes are copied
+  // through the x87 stack, so a quiet NaN keeps its payload and only a
+  // signalling NaN would be quieted by the load.
+  //
+  // The comparison is the four destination lanes plus the answer to the
+  // question the return value answers: is it the destination pointer?
+
+  struct V4AssignIn
+  {
+    moho::Vector4f rhs;
+  };
+
+  struct V4AssignOut
+  {
+    moho::Vector4f dest;
+    std::uint32_t returnedDest;
+  };
+
+  void GenV4Assign(Rng& rng, void* in, const DrawKind kind)
+  {
+    V4AssignIn& typed = *static_cast<V4AssignIn*>(in);
+    float lanes[4];
+    if (kind == DrawKind::Ordinary) {
+      for (int k = 0; k < 4; ++k) {
+        lanes[k] = GenOrdinaryLane(rng);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 40) {
+        // the full float mixture: NaN, infinity, denormal, signed zero
+        for (int k = 0; k < 4; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else if (mode < 65) {
+        // the edge lanes, signed zeros included
+        for (int k = 0; k < 4; ++k) {
+          lanes[k] = rng.Chance(60) ? GenEdge(rng) : GenPlain(rng, 10.0f);
+        }
+      } else if (mode < 85) {
+        // axis aligned lanes with signed zeros
+        static constexpr float kLane[] = {0.0f, -0.0f, 1.0f, -1.0f, 0.5f, -0.5f};
+        for (int k = 0; k < 4; ++k) {
+          lanes[k] = rng.Chance(25) ? GenPlain(rng, 10.0f) : kLane[rng.Below(6)];
+        }
+      } else {
+        for (int k = 0; k < 4; ++k) {
+          lanes[k] = GenPlain(rng, 1000.0f);
+        }
+      }
+    }
+    // The lanes are written through the members, not through a
+    // `moho::Vector4f` temporary: the copy assignment is the very function
+    // this row compares, and a temporary would be assigned into the input
+    // with it - which would quietly normalise the input with the code under
+    // test.
+    typed.rhs.x = lanes[0];
+    typed.rhs.y = lanes[1];
+    typed.rhs.z = lanes[2];
+    typed.rhs.w = lanes[3];
+  }
+
+  __declspec(naked) void RetailVector4fAssign(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  eax, ebx             // the retail's destination
+      mov  ecx, [esp + 20]      // the retail's source
+      mov  edx, 0x0046FB20
+      call edx
+      cmp  eax, ebx             // the retail returns the destination pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax      // 1 when it does
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursVector4fAssign(const void* in, void* out)
+  {
+    const V4AssignIn& typedIn = *static_cast<const V4AssignIn*>(in);
+    V4AssignOut& typedOut = *static_cast<V4AssignOut*>(out);
+    moho::Vector4f& result = (typedOut.dest = typedIn.rhs);
+    typedOut.returnedDest = (&result == &typedOut.dest) ? 1u : 0u;
+  }
+
+  // --- VEC_LargestAxis - retail 0x005382E0 --------------------------------
+  //
+  //   0x005382E0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x005382E6  fld  dword ptr [ecx + 4]   <- |y|
+  //   0x005382ED  fld  dword ptr [ecx]       <- |x|
+  //   0x005382F3  fcompi st(1)               <- |y| against |x|
+  //   0x005382F7  jbe  0x005382FE            <- not greater: x wins
+  //   0x005382F9  mov  edx, 1                <- y wins
+  //   0x005382FE  fld  dword ptr [ecx + 8]   <- |z|
+  //   0x00538308  fld  dword ptr [ecx + edx*4] <- the winner's magnitude
+  //   0x0053830F  fcompi st(1)
+  //   0x00538313  ja   0x00538317            <- |z| greater: z wins
+  //   0x00538315  mov  eax, edx              <- the x/y winner
+  //   0x00538317  mov  esp, ebp / pop ebp / ret
+  //
+  // So: the vector in ECX, the axis index (0, 1 or 2) in EAX. The `jbe` and
+  // `ja` are the *ordered* comparisons, so a NaN lane never wins: the x/y
+  // winner survives, and a NaN z keeps it.
+  //
+  // The comparison is the index - a plain value, not a flag - so this row is
+  // a full witness of the tie-break, not a weak boolean one.
+
+  struct LargestAxisIn
+  {
+    Wm3::Vector3f value;
+  };
+
+  struct LargestAxisOut
+  {
+    std::uint32_t axis;
+  };
+
+  void GenLargestAxis(Rng& rng, void* in, const DrawKind kind)
+  {
+    LargestAxisIn& typed = *static_cast<LargestAxisIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      for (int k = 0; k < 3; ++k) {
+        lanes[k] = GenOrdinaryLane(rng);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 25) {
+        // ties: two lanes of exactly the same magnitude - the tie-break is
+        // the whole point of this row
+        const float a = GenOrdinaryLane(rng);
+        const std::uint32_t which = rng.Below(3);
+        lanes[0] = (which == 0) ? a : GenPlain(rng, 10.0f);
+        lanes[1] = (which == 1) ? a : GenPlain(rng, 10.0f);
+        lanes[2] = (which == 2) ? a : GenPlain(rng, 10.0f);
+        // and the third lane is either the same magnitude again or a NaN
+        if (rng.Chance(30)) {
+          lanes[rng.Below(3)] = FromBits(0x7FC00000u);
+        } else if (rng.Chance(40)) {
+          lanes[rng.Below(3)] = a;
+        }
+      } else if (mode < 50) {
+        // the full mixture: NaN, infinity, denormal, signed zero
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else if (mode < 75) {
+        GenVec3(rng, lanes);
+      } else {
+        // axis aligned lanes, magnitudes equal or not
+        static constexpr float kLane[] = {0.0f, -0.0f, 1.0f, -1.0f, 2.0f, -2.0f};
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = kLane[rng.Below(6)];
+        }
+      }
+    }
+    typed.value = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+  }
+
+  __declspec(naked) void RetailVECLargestAxis(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  ecx, [esp + 20]      // the retail's vector
+      mov  eax, 0x005382E0
+      call eax
+      mov  [ebx], eax           // the axis index
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursVECLargestAxis(const void* in, void* out)
+  {
+    const LargestAxisIn& typedIn = *static_cast<const LargestAxisIn*>(in);
+    LargestAxisOut& typedOut = *static_cast<LargestAxisOut*>(out);
+    typedOut.axis = static_cast<std::uint32_t>(moho::VEC_LargestAxis(typedIn.value));
+  }
+
+  // --- VecSetLength - retail 0x005B1C90 ----------------------------------
+  //
+  //   0x005B1C90  sub  esp, 8
+  //   0x005B1C93  movss xmm2, [esi + 4]      <- the vector's lanes
+  //   0x005B1CAA  mulss xmm3, xmm2           <- y*y
+  //   0x005B1CAE  mulss xmm0, xmm0           <- x*x
+  //   0x005B1CB5  addss xmm0, xmm3           <- x*x + y*y
+  //   0x005B1CBD  addss xmm0, xmm2           <- + z*z
+  //   0x005B1CC1  comiss xmm0, [0x00E4F6E0]  <- against 0.0f
+  //   0x005B1CCD  jbe  0x005B1CFE            <- not greater: fail
+  //   0x005B1CCF  fld  dword ptr [esp]       <- the squared length
+  //   0x005B1CD6  call 0x0040EAF0            <- the retail's sqrt
+  //   0x005B1CDB  fdivr dword ptr [esp+0x10] <- targetLength / sqrt(lenSq)
+  //   0x005B1CE2  mov  al, 1                 <- the answer
+  //   0x005B1CEA  fstp dword ptr [esi]       <- x * scale
+  //   0x005B1CF1  fstp dword ptr [esi + 4]   <- scale * y
+  //   0x005B1CF7  fstp dword ptr [esi + 8]   <- scale * z
+  //   0x005B1CFE  xor  al, al                <- the answer: false
+  //
+  // So: the vector in ESI (worked in place), the target length as the first
+  // stack argument (the retail leaves it for the caller to pop), and the
+  // answer in AL. The scale stays on the x87 stack across the three
+  // multiplies, one float store per lane.
+
+  struct SetLengthIn
+  {
+    Wm3::Vector3f vector;
+    float targetLength;
+  };
+
+  struct SetLengthOut
+  {
+    Wm3::Vector3f vector;
+    std::uint32_t accepted;
+  };
+
+  void GenSetLength(Rng& rng, void* in, const DrawKind kind)
+  {
+    SetLengthIn& typed = *static_cast<SetLengthIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      GenUnitVec3(rng, lanes);
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 25) {
+        // the degenerate vector: no positive squared length
+        lanes[0] = 0.0f;
+        lanes[1] = 0.0f;
+        lanes[2] = 0.0f;
+        if (rng.Chance(40)) {
+          lanes[rng.Below(3)] = -0.0f;
+        }
+      } else if (mode < 45) {
+        // denormal lanes: the squared length underflows to zero
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = FromBits(0x00000001u + rng.Below(0x007FFFFFu));
+        }
+      } else if (mode < 65) {
+        // NaN and infinity lanes: the length is unordered or infinite
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else {
+        GenVec3(rng, lanes);
+      }
+    }
+    typed.vector = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+
+    if (kind == DrawKind::Ordinary) {
+      typed.targetLength = static_cast<float>(rng.Range(0.25, 10.0));
+    } else {
+      switch (rng.Below(12)) {
+      case 0:
+        typed.targetLength = 0.0f;
+        break;
+      case 1:
+        typed.targetLength = -0.0f;
+        break;
+      case 2:
+        typed.targetLength = FromBits(0x00000001u); // the smallest denormal
+        break;
+      case 3:
+        typed.targetLength = FromBits(0x7F800000u); // +inf
+        break;
+      case 4:
+        typed.targetLength = FromBits(0xFF800000u); // -inf
+        break;
+      case 5:
+        typed.targetLength = FromBits(0x7FC00000u); // NaN
+        break;
+      case 6:
+        typed.targetLength = FromBits(0x7F7FFFFFu); // FLT_MAX
+        break;
+      case 7:
+        typed.targetLength = FromBits(0x00800000u); // FLT_MIN
+        break;
+      case 8:
+        typed.targetLength = -static_cast<float>(rng.Range(0.25, 10.0));
+        break;
+      case 9:
+        typed.targetLength = static_cast<float>(rng.Range(0.0, 1.0));
+        break;
+      default:
+        typed.targetLength = static_cast<float>(rng.Range(0.25, 100.0));
+        break;
+      }
+    }
+  }
+
+  __declspec(naked) void RetailVecSetLength(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      // The retail works in place: the input vector is copied into the output
+      // buffer first, and the retail is handed that buffer.
+      mov  eax, [ebp]
+      mov  [ebx], eax
+      mov  eax, [ebp + 4]
+      mov  [ebx + 4], eax
+      mov  eax, [ebp + 8]
+      mov  [ebx + 8], eax
+      mov  esi, ebx             // the retail's vector
+      push dword ptr [ebp + 12] // the target length, the first stack argument
+      mov  eax, 0x005B1C90
+      call eax
+      add  esp, 4               // the retail does not pop its argument
+      movzx eax, al             // the answer is in AL
+      mov  [ebx + 12], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursVecSetLength(const void* in, void* out)
+  {
+    const SetLengthIn& typedIn = *static_cast<const SetLengthIn*>(in);
+    SetLengthOut& typedOut = *static_cast<SetLengthOut*>(out);
+    typedOut.vector = typedIn.vector;
+    typedOut.accepted = moho::VecSetLength(&typedOut.vector, typedIn.targetLength) ? 1u : 0u;
+  }
+
+  // --- VecSetLengthTo - retail 0x0069A360 --------------------------------
+  //
+  //   0x0069A360  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x0069A369  movss xmm2, [ecx + 4]      <- the source's lanes
+  //   0x0069A397  comiss xmm0, [0x00E4F6E0]  <- the source's squared length
+  //   0x0069A3A3  jbe  0x0069A3DA            <- not greater: copy the target
+  //   0x0069A3A5  fld  dword ptr [edx + 8]   <- the target's lanes
+  //   0x0069A3BB  fdiv dword ptr [esp]       <- |target|^2 / sourceLengthSq
+  //   0x0069A3BE  fsqrt                     <- the scale
+  //   0x0069A3C6  fstp dword ptr [eax]       <- source.x * scale
+  //   0x0069A3DA  fld  dword ptr [edx]       <- the fallback: the target
+  //   0x0069A3EC  pop  ebp / ret
+  //
+  // So: the destination in EAX, the source vector in ECX, the target length
+  // vector in EDX, and the return value is the destination pointer. The
+  // squared lengths and the scale stay on the x87 stack.
+
+  struct SetLengthToIn
+  {
+    Wm3::Vector3f target;
+    Wm3::Vector3f source;
+  };
+
+  struct SetLengthToOut
+  {
+    Wm3::Vector3f dest;
+    std::uint32_t returnedDest;
+  };
+
+  void GenSetLengthTo(Rng& rng, void* in, const DrawKind kind)
+  {
+    SetLengthToIn& typed = *static_cast<SetLengthToIn*>(in);
+    float target[3];
+    float source[3];
+    if (kind == DrawKind::Ordinary) {
+      GenUnitVec3(rng, target);
+      GenUnitVec3(rng, source);
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 25) {
+        // the degenerate source: no positive squared length, so the target is
+        // copied instead
+        source[0] = 0.0f;
+        source[1] = 0.0f;
+        source[2] = 0.0f;
+        if (rng.Chance(40)) {
+          source[rng.Below(3)] = -0.0f;
+        }
+      } else if (mode < 45) {
+        for (int k = 0; k < 3; ++k) {
+          source[k] = FromBits(0x00000001u + rng.Below(0x007FFFFFu));
+        }
+      } else if (mode < 65) {
+        for (int k = 0; k < 3; ++k) {
+          source[k] = GenFloat(rng);
+        }
+      } else {
+        GenVec3(rng, source);
+      }
+      if (mode >= 25 && mode < 45) {
+        GenVec3(rng, target);
+      } else if (rng.Chance(50)) {
+        GenVec3(rng, target);
+      } else {
+        GenUnitVec3(rng, target);
+      }
+    }
+    typed.target = Wm3::Vector3f(target[0], target[1], target[2]);
+    typed.source = Wm3::Vector3f(source[0], source[1], source[2]);
+  }
+
+  __declspec(naked) void RetailVecSetLengthTo(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  esi, [esp + 24]      // out
+      mov  eax, esi             // the retail's destination
+      lea  ecx, [ebp + 12]      // the retail's source vector
+      mov  edx, ebp             // the retail's target length vector
+      mov  ebx, 0x0069A360
+      call ebx
+      cmp  eax, esi             // the retail returns the destination pointer
+      sete al
+      movzx eax, al
+      mov  [esi + 12], eax      // 1 when it does
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursVecSetLengthTo(const void* in, void* out)
+  {
+    const SetLengthToIn& typedIn = *static_cast<const SetLengthToIn*>(in);
+    SetLengthToOut& typedOut = *static_cast<SetLengthToOut*>(out);
+    Wm3::Vector3f* const result =
+      moho::VecSetLengthTo(&typedOut.dest, &typedIn.target, &typedIn.source);
+    typedOut.returnedDest = (result == &typedOut.dest) ? 1u : 0u;
+  }
+
+  // --- VEC_HeadingFromXZ - retail 0x00565A10 ------------------------------
+  //
+  //   0x00565A10  push ecx
+  //   0x00565A11  fld  dword ptr [eax + 8]   <- z
+  //   0x00565A1B  fld  dword ptr [eax]       <- x
+  //   0x00565A20  call 0x004E9DF0            <- the retail's atan2 (fpatan)
+  //   0x00565A25  add  esp, 8 / pop ecx / ret
+  //
+  // So: the vector in EAX, and the answer comes back **on the x87 stack**
+  // (the retail's atan2 does not spill it). The harness rounds it to a float
+  // exactly once, which is what the engine's own `msvc8::atan2` does as well
+  // (its `fstp result`).
+  //
+  // The retail's atan2 is `fld y; fld x; fpatan` with the two floats on the
+  // stack: the retail pushes z first and x second, so the call is
+  // atan2(y = x, x = z) - the planar heading of the vector.
+
+  struct HeadingIn
+  {
+    Wm3::Vector3f value;
+  };
+
+  struct HeadingOut
+  {
+    float heading;
+  };
+
+  void GenHeading(Rng& rng, void* in, const DrawKind kind)
+  {
+    HeadingIn& typed = *static_cast<HeadingIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      GenUnitVec3(rng, lanes);
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 30) {
+        // the corners of atan2: the axes, the origin, and the sign corners
+        static constexpr float kLane[][2] = {
+          { 0.0f, 0.0f },  // the origin
+          { 1.0f, 0.0f },  // +x
+          { -1.0f, 0.0f }, // -x
+          { 0.0f, 1.0f },  // +z
+          { 0.0f, -1.0f }, // -z
+          { -0.0f, 0.0f }, // -0 in x
+          { 0.0f, -0.0f }, // -0 in z
+        };
+        const std::uint32_t which = rng.Below(7);
+        lanes[0] = kLane[which][0];
+        lanes[2] = kLane[which][1];
+        lanes[1] = GenPlain(rng, 10.0f);
+      } else if (mode < 55) {
+        // NaN, infinity and denormal lanes: the quadrant is unordered
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else {
+        GenVec3(rng, lanes);
+      }
+    }
+    typed.value = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+  }
+
+  __declspec(naked) void RetailVECHeadingFromXZ(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  eax, [esp + 20]      // the retail's vector
+      mov  ecx, 0x00565A10
+      call ecx
+      fstp dword ptr [ebx]      // the answer comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursVECHeadingFromXZ(const void* in, void* out)
+  {
+    const HeadingIn& typedIn = *static_cast<const HeadingIn*>(in);
+    HeadingOut& typedOut = *static_cast<HeadingOut*>(out);
+    typedOut.heading = moho::VEC_HeadingFromXZ(&typedIn.value);
+  }
+
+  // --- EulerRollToQuat - retail 0x00570750 -------------------------------
+  //
+  //   0x00570750  sub  esp, 8
+  //   0x00570753  fld  dword ptr [esp + 0xc]  <- the roll, the first argument
+  //   0x00570758  fmul dword ptr [0x00E4F724] <- * 0.5f
+  //   0x00570765  call 0x005734E0             <- the retail's sinf
+  //   0x00570775  call 0x005734D0             <- the retail's cosf
+  //   0x0057077A  fstp dword ptr [esi]        <- the scalar lane
+  //   0x0057077C  mov  eax, esi               <- the return value: the output
+  //   0x0057077E  fld  dword ptr [edi]        <- the axis
+  //   0x00570788  fstp dword ptr [esi + 4]    <- axis.x * sin
+  //   0x00570790  fstp dword ptr [esi + 8]    <- axis.y * sin
+  //   0x00570796  fstp dword ptr [esi + 0xc]  <- axis.z * sin
+  //   0x0057079C  ret 4                       <- the argument is popped
+  //
+  // So: the axis in EDI, the output quaternion in ESI, the roll as the first
+  // stack argument (the retail pops it itself), and the return value is the
+  // output pointer. The quaternion is written as [w, x, y, z].
+  //
+  // The engine's `msvc8::sinf` / `msvc8::cosf` are the retail's own
+  // `fld; fsin` / `fld; fcos`, and the scale is applied on the x87 stack
+  // with one float store per lane, so the lane products are the retail's.
+
+  struct EulerIn
+  {
+    Wm3::Vector3f axis;
+    float roll;
+  };
+
+  struct EulerOut
+  {
+    Wm3::Quatf quat;
+    std::uint32_t returnedDest;
+  };
+
+  void GenEuler(Rng& rng, void* in, const DrawKind kind)
+  {
+    EulerIn& typed = *static_cast<EulerIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      GenUnitVec3(rng, lanes);
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 30) {
+        // the corners of the roll: the half-turn, the quarter turn and the
+        // multiples of pi
+        lanes[0] = 0.0f;
+        lanes[1] = 0.0f;
+        lanes[2] = 1.0f;
+      } else if (mode < 55) {
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else {
+        GenVec3(rng, lanes);
+      }
+    }
+    typed.axis = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+
+    if (kind == DrawKind::Ordinary) {
+      typed.roll = static_cast<float>(rng.Range(-6.0, 6.0));
+    } else {
+      switch (rng.Below(14)) {
+      case 0:
+        typed.roll = 0.0f;
+        break;
+      case 1:
+        typed.roll = -0.0f;
+        break;
+      case 2:
+        typed.roll = FromBits(0x40490FDBu); // pi
+        break;
+      case 3:
+        typed.roll = FromBits(0x40490FDBu + 1u); // pi + 1 ulp
+        break;
+      case 4:
+        typed.roll = FromBits(0x40490FDBu - 1u); // pi - 1 ulp
+        break;
+      case 5:
+        typed.roll = FromBits(0x3FC90FDBu); // pi/2
+        break;
+      case 6:
+        typed.roll = FromBits(0xBFC90FDBu); // -pi/2
+        break;
+      case 7:
+        typed.roll = FromBits(0x40C90FDBu); // 2pi
+        break;
+      case 8:
+        typed.roll = FromBits(0x7FC00000u); // NaN
+        break;
+      case 9:
+        typed.roll = FromBits(0x7F800000u); // +inf
+        break;
+      case 10:
+        typed.roll = FromBits(0xFF800000u); // -inf
+        break;
+      case 11:
+        typed.roll = FromBits(0x00000001u); // the smallest denormal
+        break;
+      case 12:
+        typed.roll = FromBits(0x7F7FFFFFu); // FLT_MAX
+        break;
+      default:
+        typed.roll = static_cast<float>(rng.Range(-20.0, 20.0));
+        break;
+      }
+    }
+  }
+
+  __declspec(naked) void RetailEulerRollToQuat(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      lea  edi, [ebp]           // the retail's axis
+      lea  esi, [ebx]           // the retail's output quaternion
+      push dword ptr [ebp + 12] // the roll, the first stack argument
+      mov  eax, 0x00570750
+      call eax
+      // the retail pops its own argument (`ret 4`), so the stack is already
+      // back where it was
+      cmp  eax, ebx             // the retail returns the output pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax      // 1 when it does
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursEulerRollToQuat(const void* in, void* out)
+  {
+    const EulerIn& typedIn = *static_cast<const EulerIn*>(in);
+    EulerOut& typedOut = *static_cast<EulerOut*>(out);
+    Wm3::Quatf* const result =
+      moho::EulerRollToQuat(&typedIn.axis, &typedOut.quat, typedIn.roll);
+    typedOut.returnedDest = (result == &typedOut.quat) ? 1u : 0u;
+  }
+
+  // --- IsValidVector3f - retail 0x005657F0 -------------------------------
+  //
+  //   0x005657F0  push ebp / mov ebp, esp / and esp, 0xffffffc0
+  //   0x005657F6  fld  dword ptr [esi]        <- the lane, as a float
+  //   0x005657FB  fstp qword ptr [esp]        <- widened to a double
+  //   0x005657FE  call 0x00A83F03             <- the CRT's _isnan
+  //   0x00565806  test eax, eax / jne         <- a NaN lane rejects
+  //   ...        (the same for the y and the z lane)
+  //   0x00565834  mov  eax, 1                 <- the answer
+  //   0x0056583D  xor  eax, eax
+  //
+  // So: the vector in ESI, and the answer (0 or 1) in EAX. A NaN in any lane
+  // rejects; an infinity does not.
+  //
+  // This is a **weak witness**: a boolean only says "the lane is not a NaN",
+  // so it cannot witness the arithmetic behind it. The generator therefore
+  // puts the lanes on the NaN boundary itself (the largest finite float, the
+  // infinities, the smallest NaN, the quiet NaNs with payloads, the signed
+  // zeros and the denormals), because that is the only place the answer can
+  // change.
+
+  struct Valid3In
+  {
+    Wm3::Vector3f value;
+  };
+
+  struct Valid3Out
+  {
+    std::uint32_t valid;
+  };
+
+  // A lane drawn from the neighbourhood of the NaN boundary: the infinities,
+  // the quiet NaNs, the signed zeros, the denormals and the largest finite
+  // float.
+  [[nodiscard]] float GenNaNBoundaryLane(Rng& rng) noexcept
+  {
+    switch (rng.Below(14)) {
+    case 0:
+      return FromBits(0x7F7FFFFFu); // FLT_MAX
+    case 1:
+      return FromBits(0xFF7FFFFFu); // -FLT_MAX
+    case 2:
+      return FromBits(0x7F800000u); // +inf
+    case 3:
+      return FromBits(0xFF800000u); // -inf
+    case 4:
+      return FromBits(0x7FC00000u); // the quiet NaN
+    case 5:
+      return FromBits(0xFFC00000u); // the quiet NaN, negative
+    case 6:
+      return FromBits(0x7FC12345u); // a quiet NaN with a payload
+    case 7:
+      return FromBits(0x7F800001u); // the smallest NaN
+    case 8:
+      return FromBits(0x00000000u); // +0
+    case 9:
+      return FromBits(0x80000000u); // -0
+    case 10:
+      return FromBits(0x00000001u); // the smallest denormal
+    case 11:
+      return FromBits(0x007FFFFFu); // the largest denormal
+    case 12:
+      return FromBits(0x00800000u); // FLT_MIN
+    default:
+      return GenPlain(rng, 100.0f);
+    }
+  }
+
+  void GenValid3(Rng& rng, void* in, const DrawKind kind)
+  {
+    Valid3In& typed = *static_cast<Valid3In*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      for (int k = 0; k < 3; ++k) {
+        lanes[k] = GenOrdinaryLane(rng);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 45) {
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenNaNBoundaryLane(rng);
+        }
+      } else if (mode < 70) {
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else {
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenPlain(rng, 100.0f);
+        }
+      }
+    }
+    typed.value = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+  }
+
+  __declspec(naked) void RetailIsValidVector3f(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  esi, [esp + 20]      // the retail's vector
+      mov  eax, 0x005657F0
+      call eax
+      mov  [ebx], eax           // 0 or 1
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursIsValidVector3f(const void* in, void* out)
+  {
+    const Valid3In& typedIn = *static_cast<const Valid3In*>(in);
+    Valid3Out& typedOut = *static_cast<Valid3Out*>(out);
+    typedOut.valid = moho::IsValidVector3f(typedIn.value) ? 1u : 0u;
+  }
+
+  // --- IsUnitLengthVector3f - retail 0x0069A1D0 --------------------------
+  //
+  //   0x0069A1D0  movss xmm2, [eax]          <- x
+  //   0x0069A1E1  mulss xmm3, xmm2           <- x*x
+  //   0x0069A1E8  mulss xmm2, xmm1           <- y*y
+  //   0x0069A1EC  addss xmm3, xmm2           <- x*x + y*y
+  //   0x0069A1F3  mulss xmm1, xmm0           <- z*z
+  //   0x0069A1F7  addss xmm3, xmm1           <- + z*z
+  //   0x0069A1FB  subss xmm3, [0x00DFEC20]   <- - 1.0f
+  //   0x0069A209  call 0x0040DAB0            <- the retail's fabs
+  //   0x0069A20E  fld  dword ptr [0x00DFF0AC] <- 0.001f
+  //   0x0069A217  fcompi st(1)
+  //   0x0069A21B  jb  0x0069A223             <- greater: reject
+  //   0x0069A21D  mov  eax, 1                <- the answer
+  //
+  // So: the vector in EAX, and the answer (0 or 1) in EAX. The squared
+  // length is summed in storage order, and the unordered case (a NaN lane)
+  // rejects.
+  //
+  // This is a **weak witness** as well, but the epsilon is the interesting
+  // part: the answer flips when the squared length sits exactly on 0.001f
+  // from one. The generator therefore constructs the squared lengths that sit
+  // on that boundary - 1.001f and its two neighbours, 1.0f and its two
+  // neighbours, and 0.999f - instead of leaving them to chance.
+
+  struct UnitLenIn
+  {
+    Wm3::Vector3f value;
+  };
+
+  struct UnitLenOut
+  {
+    std::uint32_t unit;
+  };
+
+  // Builds a vector whose squared length is exactly `target`, as the engine
+  // computes it: (x*x + y*y) + z*z, in float.
+  //
+  // Two shapes are tried: (t, 0, 0), whose squared length is t*t, and
+  // (1, t, 0), whose squared length is 1 + t*t - the second one has a much
+  // finer grid near one and is what reaches the 1.001f boundary.
+  [[nodiscard]] bool MakeSquaredLength(const float target, float* lanes) noexcept
+  {
+    {
+      const double approx = std::sqrt(static_cast<double>(target));
+      if (approx > 0.0 && std::isfinite(approx)) {
+        const std::uint32_t base = Bits(static_cast<float>(approx));
+        for (std::uint32_t k = 0; k < 8192u; ++k) {
+          for (int side = 0; side < 2; ++side) {
+            const std::uint32_t bits = (side == 0) ? (base + k) : (base - k);
+            if ((side == 0 && base + k < base) || (side == 1 && base < k)) {
+              continue;
+            }
+            const float t = FromBits(bits);
+            volatile float squared = t * t;
+            if (squared == target) {
+              lanes[0] = t;
+              lanes[1] = 0.0f;
+              lanes[2] = 0.0f;
+              return true;
+            }
+          }
+        }
+      }
+    }
+    {
+      const double approx = std::sqrt(static_cast<double>(target) - 1.0);
+      if (approx > 0.0 && std::isfinite(approx)) {
+        const std::uint32_t base = Bits(static_cast<float>(approx));
+        for (std::uint32_t k = 0; k < 8192u; ++k) {
+          for (int side = 0; side < 2; ++side) {
+            const std::uint32_t bits = (side == 0) ? (base + k) : (base - k);
+            if ((side == 0 && base + k < base) || (side == 1 && base < k)) {
+              continue;
+            }
+            const float t = FromBits(bits);
+            volatile float squared = 1.0f + t * t;
+            if (squared == target) {
+              lanes[0] = 1.0f;
+              lanes[1] = t;
+              lanes[2] = 0.0f;
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  // The squared lengths that sit on the epsilon: 0.001f from one, and one
+  // ulp either side of each of them.
+  [[nodiscard]] const std::vector<float>& UnitLengthTargets()
+  {
+    static const std::vector<float> targets = [] {
+      std::vector<float> list;
+      const float one = 1.0f;
+      const float eps = 0.001f;
+      const float above = FromBits(Bits(one + eps) + 1u); // one ulp above 1.001f
+      const float below = FromBits(Bits(one + eps) - 1u); // one ulp below 1.001f
+      const float unitAbove = FromBits(Bits(one) + 1u);
+      const float unitBelow = FromBits(Bits(one) - 1u);
+      const float under = FromBits(Bits(one - eps) + 1u); // 0.999f + 1 ulp
+      const float underOne = one - eps;                  // 0.999f
+      for (const float value : {one, unitAbove, unitBelow, one + eps, above, below, underOne, under}) {
+        list.push_back(value);
+      }
+      return list;
+    }();
+    return targets;
+  }
+
+  void GenUnitLen(Rng& rng, void* in, const DrawKind kind)
+  {
+    UnitLenIn& typed = *static_cast<UnitLenIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      // a vector whose length is near one, and one whose length is not
+      if (rng.Chance(50)) {
+        GenUnitVec3(rng, lanes);
+      } else {
+        GenVec3(rng, lanes);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 40) {
+        // the squared lengths that sit on the epsilon
+        const std::vector<float>& targets = UnitLengthTargets();
+        const float target = targets[rng.Below(static_cast<std::uint32_t>(targets.size()))];
+        if (!MakeSquaredLength(target, lanes)) {
+          GenUnitVec3(rng, lanes);
+        }
+      } else if (mode < 60) {
+        // NaN, infinity and denormal lanes: the squared length is unordered
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else if (mode < 80) {
+        GenUnitVec3(rng, lanes);
+      } else {
+        GenVec3(rng, lanes);
+      }
+    }
+    typed.value = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+  }
+
+  __declspec(naked) void RetailIsUnitLengthVector3f(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  eax, [esp + 20]      // the retail's vector
+      mov  ecx, 0x0069A1D0
+      call ecx
+      mov  [ebx], eax           // 0 or 1
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursIsUnitLengthVector3f(const void* in, void* out)
+  {
+    const UnitLenIn& typedIn = *static_cast<const UnitLenIn*>(in);
+    UnitLenOut& typedOut = *static_cast<UnitLenOut*>(out);
+    typedOut.unit = moho::IsUnitLengthVector3f(typedIn.value) ? 1u : 0u;
+  }
+
+  // --- IsValidVector2f - retail 0x005657B0 -------------------------------
+  //
+  //   0x005657B0  fld  dword ptr [esi]        <- the x lane
+  //   0x005657B5  fstp qword ptr [esp]        <- widened to a double
+  //   0x005657B8  call 0x00A83F03             <- the CRT's _isnan
+  //   0x005657C0  test eax, eax / jne         <- a NaN lane rejects
+  //   0x005657C4  fld  dword ptr [esi + 4]    <- the y lane, the same again
+  //   0x005657D9  mov  eax, 1                 <- the answer
+  //   0x005657DF  xor  eax, eax
+  //
+  // So: the vector in ESI, and the answer (0 or 1) in EAX. As above, this is
+  // a weak witness; the generator puts the lanes on the NaN boundary.
+
+  struct Valid2In
+  {
+    Wm3::Vector2f value;
+  };
+
+  struct Valid2Out
+  {
+    std::uint32_t valid;
+  };
+
+  void GenValid2(Rng& rng, void* in, const DrawKind kind)
+  {
+    Valid2In& typed = *static_cast<Valid2In*>(in);
+    float lanes[2];
+    if (kind == DrawKind::Ordinary) {
+      for (int k = 0; k < 2; ++k) {
+        lanes[k] = GenOrdinaryLane(rng);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 45) {
+        for (int k = 0; k < 2; ++k) {
+          lanes[k] = GenNaNBoundaryLane(rng);
+        }
+      } else if (mode < 70) {
+        for (int k = 0; k < 2; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else {
+        for (int k = 0; k < 2; ++k) {
+          lanes[k] = GenPlain(rng, 100.0f);
+        }
+      }
+    }
+    typed.value = Wm3::Vector2f(lanes[0], lanes[1]);
+  }
+
+  __declspec(naked) void RetailIsValidVector2f(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebx, [esp + 24]      // out
+      mov  esi, [esp + 20]      // the retail's vector
+      mov  eax, 0x005657B0
+      call eax
+      mov  [ebx], eax           // 0 or 1
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursIsValidVector2f(const void* in, void* out)
+  {
+    const Valid2In& typedIn = *static_cast<const Valid2In*>(in);
+    Valid2Out& typedOut = *static_cast<Valid2Out*>(out);
+    typedOut.valid = moho::IsValidVector2f(typedIn.value) ? 1u : 0u;
+  }
+
   const std::vector<Target> kTargets = {
     {
       "NormalizeVectorInto",
@@ -1138,6 +2214,96 @@ namespace
       &GenCrossAdd,
       &RetailQuatCrossAdd,
       &OursQuatCrossAdd,
+    },
+    {
+      "Vector4fAssign",
+      0x0046FB20u,
+      "src/moho/math/Vector4f.cpp:84",
+      sizeof(V4AssignIn),
+      sizeof(V4AssignOut),
+      &GenV4Assign,
+      &RetailVector4fAssign,
+      &OursVector4fAssign,
+    },
+    {
+      "VEC_LargestAxis",
+      0x005382E0u,
+      "src/moho/math/Vector3f.cpp:116",
+      sizeof(LargestAxisIn),
+      sizeof(LargestAxisOut),
+      &GenLargestAxis,
+      &RetailVECLargestAxis,
+      &OursVECLargestAxis,
+    },
+    {
+      "VecSetLength",
+      0x005B1C90u,
+      "src/moho/math/Vector3f.cpp:149",
+      sizeof(SetLengthIn),
+      sizeof(SetLengthOut),
+      &GenSetLength,
+      &RetailVecSetLength,
+      &OursVecSetLength,
+    },
+    {
+      "VecSetLengthTo",
+      0x0069A360u,
+      "src/moho/math/Vector3f.cpp:200",
+      sizeof(SetLengthToIn),
+      sizeof(SetLengthToOut),
+      &GenSetLengthTo,
+      &RetailVecSetLengthTo,
+      &OursVecSetLengthTo,
+    },
+    {
+      "VEC_HeadingFromXZ",
+      0x00565A10u,
+      "src/moho/math/Vector3f.cpp:137",
+      sizeof(HeadingIn),
+      sizeof(HeadingOut),
+      &GenHeading,
+      &RetailVECHeadingFromXZ,
+      &OursVECHeadingFromXZ,
+    },
+    {
+      "EulerRollToQuat",
+      0x00570750u,
+      "src/moho/math/Vector3f.cpp:311",
+      sizeof(EulerIn),
+      sizeof(EulerOut),
+      &GenEuler,
+      &RetailEulerRollToQuat,
+      &OursEulerRollToQuat,
+    },
+    {
+      "IsValidVector3f",
+      0x005657F0u,
+      "src/moho/math/Vector3f.cpp:12",
+      sizeof(Valid3In),
+      sizeof(Valid3Out),
+      &GenValid3,
+      &RetailIsValidVector3f,
+      &OursIsValidVector3f,
+    },
+    {
+      "IsUnitLengthVector3f",
+      0x0069A1D0u,
+      "src/moho/math/Vector3f.cpp:73",
+      sizeof(UnitLenIn),
+      sizeof(UnitLenOut),
+      &GenUnitLen,
+      &RetailIsUnitLengthVector3f,
+      &OursIsUnitLengthVector3f,
+    },
+    {
+      "IsValidVector2f",
+      0x005657B0u,
+      "src/moho/math/Vector2f.cpp:8",
+      sizeof(Valid2In),
+      sizeof(Valid2Out),
+      &GenValid2,
+      &RetailIsValidVector2f,
+      &OursIsValidVector2f,
     },
   };
 }  // namespace

@@ -4,17 +4,29 @@
 在仓库根目录的 `AGENTS.md`；`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另一个 harness
 的指引。
 
-**当前状态：表里有十条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
-（零售 `0x0044F7E0`，`moho::NormalizeVectorInto`）与
-`src/moho/math/QuaternionMath.cpp`（八条四元数比对项：`moho::MatrixToQuat`、
-`moho::RotateQuatByAngle`、`moho::QuatLERP`、`moho::SLERP`、
+**当前状态：表里有十九条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
+（八条：零售 `0x0044F7E0` 的 `moho::NormalizeVectorInto`，以及
+`moho::VEC_LargestAxis`、`moho::VecSetLength`、`moho::VecSetLengthTo`、
+`moho::VEC_HeadingFromXZ`、`moho::EulerRollToQuat`、`moho::IsValidVector3f`、
+`moho::IsUnitLengthVector3f`）与 `src/moho/math/QuaternionMath.cpp`（八条四元数比对项：
+`moho::MatrixToQuat`、`moho::RotateQuatByAngle`、`moho::QuatLERP`、`moho::SLERP`、
 `moho::NormalizeQuatInPlace`、`moho::QuatsNearEqual`、`moho::QuatFromVecRot`、
-`moho::QuatToAxisAndAngle`），外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
+`moho::QuatToAxisAndAngle`），外加 `src/moho/math/Vector4f.cpp`（一条：
+`moho::Vector4f::operator=`）与 `src/moho/math/Vector2f.cpp`（一条：
+`moho::IsValidVector2f`），再外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
 `moho::QuatCrossAdd`（`extract.json`；见下文“复制的闭环”）；它们带的依赖 TU 是
-`src/legacy/math/X87Math.cpp`（`msvc8::` x87 助手的实现）与 Wild Magic 的
+`src/legacy/math/X87Math.cpp`（`msvc8::` x87 助手的实现）、
+`src/gpg/core/containers/String.cpp`（`gpg::STR_Printf`）、
+`src/legacy/containers/String.cpp`（`msvc8::string`）与 Wild Magic 的
 `Foundation/System/Wm3System.cpp`（`Wm3::Quaternion` 的拷贝赋值调用
 `Wm3::System::Memcpy`）。逐条证据在 `tools/fafdiff/README.md`，覆盖账本在
 `tools/fafdiff/COVERAGE.md`。
+
+**零售的格式化路径在本 harness 里跑不起来。** `moho::ToString`
+（零售 `0x004ECED0`）在账本里记为 `不适用`：调用进入零售的
+`gpg::STR_Va`（`0x00938E00`）之后不再返回，探针（`FAFDIFF_INT3_AT`）显示
+`0x00938E0E` 的 `mov dword ptr fs:[0], esp` 装上的零售自己的 SEH 帧吞掉了
+故障，展开再也没完成 ⇒ ⇒ 详见 `README.md` 的那一节。
 
 ## 术语：中文一律叫“比对项”
 

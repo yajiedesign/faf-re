@@ -51,11 +51,24 @@ set(FAFDIFF_SOURCES
   # moho::SLERP, moho::NormalizeQuatInPlace, moho::QuatsNearEqual,
   # moho::QuatFromVecRot and moho::QuatToAxisAndAngle).
   "${CMAKE_SOURCE_DIR}/src/moho/math/QuaternionMath.cpp"
-  # A dependency of the TU above, not a unit under test: Wm3::Quaternion's
-  # copy assignment (used by QuatLERP's `*out = *q2` and by SLERP's lane
-  # copies) calls Wm3::System::Memcpy, whose body lives in Wild Magic's
-  # Foundation/System/Wm3System.cpp. It is compiled with the engine's own
-  # switches as well, so the copy behaves in the harness exactly as it does
+  # src/moho/math/Vector4f.cpp is the third unit under test (the row for
+  # Moho::Vector4f::operator=).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/Vector4f.cpp"
+  # src/moho/math/Vector2f.cpp is the fourth unit under test (the row for
+  # moho::IsValidVector2f).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/Vector2f.cpp"
+  # A dependency of the TU above, not a unit under test: Vector4f.cpp's
+  # Moho::ToString formats its lanes with gpg::STR_Printf, whose body lives in
+  # src/gpg/core/containers/String.cpp.
+  "${CMAKE_SOURCE_DIR}/src/gpg/core/containers/String.cpp"
+  # A dependency of the TU above: gpg::STR_Printf returns an msvc8::string, and
+  # that class's body lives in src/legacy/containers/String.cpp.
+  "${CMAKE_SOURCE_DIR}/src/legacy/containers/String.cpp"
+  # A dependency of the QuaternionMath.cpp TU above, not a unit under test:
+  # Wm3::Quaternion's copy assignment (used by QuatLERP's `*out = *q2` and by
+  # SLERP's lane copies) calls Wm3::System::Memcpy, whose body lives in Wild
+  # Magic's Foundation/System/Wm3System.cpp. It is compiled with the engine's
+  # own switches as well, so the copy behaves in the harness exactly as it does
   # in the engine.
   "${WM3_ROOT}/Foundation/System/Wm3System.cpp")
 

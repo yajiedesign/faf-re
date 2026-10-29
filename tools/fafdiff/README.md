@@ -84,14 +84,21 @@ declared in `src/targets.h`.
 
 ## State
 
-**The table has ten rows.** Two translation units are under test:
-`src/moho/math/Vector3f.cpp` (the row for `moho::NormalizeVectorInto`, retail
-0x0044F7E0) and `src/moho/math/QuaternionMath.cpp` (the nine quaternion rows
-below), both compiled into the harness with the engine's own switches. The
-dependencies they bring with them are `src/legacy/math/X87Math.cpp` (the
-`msvc8::` x87 helpers both of them call) and Wild Magic's
+**The table has nineteen rows.** Four translation units are under test:
+`src/moho/math/Vector3f.cpp` (the row for `moho::NormalizeVectorInto` plus
+the seven vector rows below), `src/moho/math/QuaternionMath.cpp` (the eight
+quaternion rows), `src/moho/math/Vector4f.cpp` (the row for
+`moho::Vector4f::operator=`) and `src/moho/math/Vector2f.cpp` (the row for
+`moho::IsValidVector2f`), all compiled into the harness with the engine's own
+switches. The dependencies they bring with them are
+`src/legacy/math/X87Math.cpp` (the `msvc8::` x87 helpers), Wild Magic's
 `Foundation/System/Wm3System.cpp` (`Wm3::Quaternion`'s copy assignment calls
-`Wm3::System::Memcpy`).
+`Wm3::System::Memcpy`), `src/gpg/core/containers/String.cpp` (`Vector4f.cpp`
+formats through `gpg::STR_Printf`) and `src/legacy/containers/String.cpp`
+(the `msvc8::string` body). The function extracted out of
+`src/moho/sim/Sim.cpp` by line number is `moho::QuatCrossAdd` (`extract.json`;
+see below). The per-row evidence is in this file, the coverage ledger is
+`tools/fafdiff/COVERAGE.md`.
 
 ```bash
 ./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
@@ -106,6 +113,15 @@ dependencies they bring with them are `src/legacy/math/X87Math.cpp` (the
 # QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606   in[32B] out[16B]
 # QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673   in[16B] out[16B]
 # QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286             in[36B] out[20B]
+# Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84          in[16B] out[20B]
+# VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116         in[12B] out[4B]
+# VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149         in[16B] out[16B]
+# VecSetLengthTo     0x0069A360 src/moho/math/Vector3f.cpp:200         in[24B] out[16B]
+# VEC_HeadingFromXZ  0x00565A10 src/moho/math/Vector3f.cpp:137         in[12B] out[4B]
+# EulerRollToQuat    0x00570750 src/moho/math/Vector3f.cpp:311         in[16B] out[20B]
+# IsValidVector3f    0x005657F0 src/moho/math/Vector3f.cpp:12          in[12B] out[4B]
+# IsUnitLengthVector3f 0x0069A1D0 src/moho/math/Vector3f.cpp:73       in[12B] out[4B]
+# IsValidVector2f    0x005657B0 src/moho/math/Vector2f.cpp:8           in[8B] out[4B]
 ```
 
 ### One extracted function, and why
@@ -650,6 +666,459 @@ struct CrossAddOut { Wm3::Quaternionf quat; std::uint32_t returnedDest; };      
 | mutation: the degenerate test is inverted | `[FAIL] 992817 mismatches in 1000000 iterations` |
 | restore | `[PASS] 1000000/1000000` |
 
+## The vector rows
+
+Nine rows, one per function of the vector surface that the coverage ledger
+listed as 未匹配. Every retail convention below was **measured** from the
+image with `.tmp/disasm.py <va>` and cross-read against a caller that sets the
+registers up; none of them is read off a header.
+
+### `Vector4fAssign` -- retail `0x0046FB20`
+
+`src/moho/math/Vector4f.cpp:84`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| destination | `EAX` |
+| source | `ECX` |
+| return value | `EAX` = the destination pointer (`EAX` is never written) |
+| arguments | none on the stack |
+
+The body is four `fld` / `fstp` pairs: `fld dword ptr [ecx]` /
+`fstp dword ptr [eax]`, then the same for the lanes at +4, +8 and +0xC. The
+copy goes through the x87 stack, so a quiet NaN keeps its payload and only a
+signalling NaN would be quieted by the load.
+
+**The typed shapes**
+
+```cpp
+struct V4AssignIn  { moho::Vector4f rhs; };            // 16 bytes
+struct V4AssignOut { moho::Vector4f dest;               // 16 bytes
+                     std::uint32_t returnedDest; };     //  4 bytes
+```
+
+`returnedDest` answers the question the return value answers: is it the
+destination pointer? 1 = yes.
+
+**The generator**
+
+* `Ordinary`: four finite, normal, non-zero lanes.
+* `WithExtremes`: 40% the full float mixture (NaN, infinity, denormal,
+  signed zero), 25% the edge lanes (which carry the signed zeros), 20%
+  axis-aligned lanes with signed zeros, 15% plain lanes.
+
+The lanes are written through the members, **not** through a
+`moho::Vector4f` temporary: the copy assignment is the function under test,
+and a temporary would be assigned into the input with it -- which would
+quietly normalise the input with the code under test. (The first mutation
+check caught exactly that: with the temporary in place, the mutation was
+invisible.)
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xA5A5A5A5`, `0xC0FFEE01`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: `x = rhs.x` -> `x = rhs.x + 0.0f` (a `-0.0` lane becomes `+0.0`) | `[FAIL] 31474 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `VEC_LargestAxis` -- retail `0x005382E0`
+
+`src/moho/math/Vector3f.cpp:116`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `ECX` |
+| return value | `EAX` = the axis index (0 = x, 1 = y, 2 = z) |
+
+The body takes `|y|` and `|x|` onto the x87 stack and compares them with
+`fcompi` + `jbe` (0x005382F3..0x005382F7): only an **ordered** `|y| > |x|`
+picks y. It then compares `|z|` against the winner's magnitude with `fcompi`
++ `ja` (0x0053830F..0x00538313), so a NaN lane never wins: the x/y winner
+survives and a NaN z keeps it.
+
+**The typed shapes**
+
+```cpp
+struct LargestAxisIn  { Wm3::Vector3f value; };   // 12 bytes
+struct LargestAxisOut { std::uint32_t axis; };    //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: finite, normal lanes.
+* `WithExtremes`: 25% **ties** (two lanes of exactly the same magnitude, with
+  a third lane either equal again or a NaN -- the tie-break is the whole
+  point of this row), 25% the full float mixture, 25% the mixed vector draw,
+  25% axis-aligned lanes.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the x/y test `fabs(y) > fabs(x)` -> `>=` (the tie now picks y) | `[FAIL] 78101 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `VecSetLength` -- retail `0x005B1C90`
+
+`src/moho/math/Vector3f.cpp:149`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `ESI` (modified in place) |
+| target length | the first stack argument (the caller pops it: the epilogue is `add esp, 8 / ret`) |
+| return value | `AL` (0 or 1) |
+
+The squared length is formed in SSE float (`(x*x + y*y) + z*z`) and tested with
+`comiss` against `0.0f` + `jbe` (0x005B1CC1..0x005B1CCD), so a NaN length
+fails. The scale `targetLength / sqrt(lengthSq)` stays on the x87 stack
+(`fld; call 0x0040EAF0` -- the retail's own sqrt -- `fdivr`) across the three
+multiplies, with one float store per lane.
+
+**The typed shapes**
+
+```cpp
+struct SetLengthIn  { Wm3::Vector3f vector; float targetLength; };  // 16 bytes
+struct SetLengthOut { Wm3::Vector3f vector; std::uint32_t accepted; }; // 16 bytes
+```
+
+The retail works in place, so the row copies the input vector into the
+output buffer first and hands the retail that buffer; `accepted` is the
+retail's `AL`.
+
+**The generator**
+
+* `Ordinary`: a unit vector and a target length in `[0.25, 10]`.
+* `WithExtremes`: 25% the degenerate vector (no positive squared length, with
+  signed zeros), 20% denormal lanes (the squared length underflows), 20%
+  NaN/infinity lanes (the length is unordered), 35% the mixed vector draw; and
+  a target length from the edge table (0, -0, the smallest denormal, +-inf,
+  NaN, FLT_MAX, FLT_MIN, a negative length, ...).
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the degenerate test `lengthSq > 0.0f` -> `>= 0.0f` | `[FAIL] 462201 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `VecSetLengthTo` -- retail `0x0069A360`
+
+`src/moho/math/Vector3f.cpp:200`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| destination | `EAX` |
+| source vector | `ECX` |
+| target length vector | `EDX` |
+| return value | `EAX` = the destination pointer |
+
+The source's squared length is formed in SSE float and tested with `comiss`
+against `0.0f` + `jbe` (0x0069A397..0x0069A3A3); when it is not positive
+(or unordered) the **target** is copied into the destination instead. In the
+other branch the target's squared length, the division by the source's
+squared length and the `fsqrt` all stay on the x87 stack, and the three
+source lanes are scaled with one float store each.
+
+**The typed shapes**
+
+```cpp
+struct SetLengthToIn  { Wm3::Vector3f target; Wm3::Vector3f source; }; // 24 bytes
+struct SetLengthToOut { Wm3::Vector3f dest; std::uint32_t returnedDest; }; // 16 bytes
+```
+
+**The generator**
+
+* `Ordinary`: two independent unit vectors.
+* `WithExtremes`: 25% the degenerate source (no positive squared length),
+  20% denormal source lanes, 20% NaN/infinity source lanes, the rest the
+  mixed vector draw; the target is drawn from the same mixture.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the degenerate test `sourceLengthSq > 0.0f` -> `>= 0.0f` | `[FAIL] 462861 mismatches in 1000000 iterations` (+1 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+### `VEC_HeadingFromXZ` -- retail `0x00565A10`
+
+`src/moho/math/Vector3f.cpp:137`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `EAX` |
+| return value | **on the x87 stack** -- the retail's `atan2` (0x004E9DF0, `fld y; fld x; fpatan`) does not spill it |
+
+The retail pushes `z` first and `x` second and calls `atan2(y = x, x = z)`,
+so the answer is the planar heading `atan2(x, z)`. The harness rounds the
+returned x87 value to a float exactly once (`fstp dword ptr [ebx]`), which is
+what the engine's own `msvc8::atan2` does as well (its `fstp result`).
+
+**The typed shapes**
+
+```cpp
+struct HeadingIn  { Wm3::Vector3f value; };  // 12 bytes
+struct HeadingOut { float heading; };        //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a unit vector.
+* `WithExtremes`: 30% the corners of `atan2` (the origin, the four axis
+  corners, `-0.0` in x, `-0.0` in z), 25% NaN/infinity/denormal lanes (the
+  quadrant is unordered), 45% the mixed vector draw.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: `atan2(value->x, value->z)` -> `atan2(value->x + 0.0f, value->z)` (a `-0.0` x lane becomes `+0.0`, and the quadrant flips) | `[FAIL] 52262 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `EulerRollToQuat` -- retail `0x00570750`
+
+`src/moho/math/Vector3f.cpp:311`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| axis | `EDI` |
+| output quaternion | `ESI` |
+| roll | the first stack argument (the retail pops it itself: the epilogue is `ret 4`) |
+| return value | `EAX` = the output pointer |
+
+The retail computes `roll * 0.5f` on the x87 stack, calls the retail's own
+`sinf` (0x005734E0, `fld; fsin`) and `cosf` (0x005734D0, `fld; fcos`), writes
+the scalar lane first and then scales the three axis lanes on the x87 stack
+with one float store each. The quaternion is written as `[w, x, y, z]`.
+
+The engine's `msvc8::sinf` / `msvc8::cosf` are those same `fld; fsin` /
+`fld; fcos` sequences, and the scale is applied by `msvc8::ScaleVectorX87`,
+which is the same x87 sequence the retail uses -- so the lane products are
+the retail's, down to the denormal product.
+
+**The typed shapes**
+
+```cpp
+struct EulerIn  { Wm3::Vector3f axis; float roll; };      // 16 bytes
+struct EulerOut { Wm3::Quatf quat; std::uint32_t returnedDest; }; // 20 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a unit axis and a roll in `[-6, 6]`.
+* `WithExtremes`: 30% the axis corner `(0, 0, 1)`, 25% the full float
+  mixture for the axis, 45% the mixed vector draw; and a roll from the edge
+  table (0, -0, pi, pi +- 1 ulp, pi/2, -pi/2, 2pi, NaN, +-inf, the smallest
+  denormal, FLT_MAX).
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the scalar lane takes `sinf(halfRoll)` instead of `cosf(halfRoll)` | `[FAIL] 642987 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `IsValidVector3f` -- retail `0x005657F0`
+
+`src/moho/math/Vector3f.cpp:12`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `ESI` |
+| return value | `EAX` = 0 or 1 |
+
+The retail loads each lane as a float, widens it to a double
+(`fld dword ptr [esi]; fstp qword ptr [esp]`) and calls the CRT's `_isnan`
+(0x00A83F03) on it; a NaN in any lane rejects, an infinity does not.
+
+**This is a weak witness**: a boolean only says "this lane is not a NaN", so
+it cannot witness the arithmetic behind it. The generator therefore puts the
+lanes **on the NaN boundary itself**: FLT_MAX, the infinities, the quiet NaNs
+(with and without a payload), the smallest NaN, the signed zeros, the
+denormals and FLT_MIN -- that is the only place where the answer can change.
+
+**The typed shapes**
+
+```cpp
+struct Valid3In  { Wm3::Vector3f value; };  // 12 bytes
+struct Valid3Out { std::uint32_t valid; };  //  4 bytes
+```
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the x lane's test `!isnan(x)` -> `isfinite(x)` (the infinity now rejects) | `[FAIL] 35115 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `IsUnitLengthVector3f` -- retail `0x0069A1D0`
+
+`src/moho/math/Vector3f.cpp:73`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `EAX` |
+| return value | `EAX` = 0 or 1 |
+
+The squared length is summed in storage order in SSE float
+(`((x*x + y*y) + z*z)`), `1.0f` is subtracted, the retail's `fabs`
+(0x0040DAB0) is applied, and the result is compared with `0.001f`
+(0x00DFF0AC) by `fcompi` + `jb`: the vector is unit length when
+`|sqLen - 1| <= 0.001f`, and the unordered case (a NaN lane) rejects.
+
+**This is a weak witness as well**, but the epsilon is the interesting part:
+the answer flips when the squared length sits exactly on `0.001f` from one.
+The generator therefore **constructs** those squared lengths instead of
+leaving them to chance: it searches the float grid for a lane `t` with
+`(1.0f + t*t)` (or `t*t`) exactly equal to a chosen target -- `1.001f` and
+its two neighbours, `1.0f` and its two neighbours, `0.999f` and its
+neighbour -- and builds the vector `(1, t, 0)` (or `(t, 0, 0)`) from it.
+
+**The typed shapes**
+
+```cpp
+struct UnitLenIn  { Wm3::Vector3f value; };  // 12 bytes
+struct UnitLenOut { std::uint32_t unit; };   //  4 bytes
+```
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the epsilon `0.001f` -> `0.0010001f` | `[FAIL] 49853 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `IsValidVector2f` -- retail `0x005657B0`
+
+`src/moho/math/Vector2f.cpp:8`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| vector | `ESI` |
+| return value | `EAX` = 0 or 1 |
+
+The same shape as the three-lane version: each lane is widened to a double
+and handed to the CRT's `_isnan` (0x00A83F03); a NaN in either lane rejects.
+
+**The typed shapes**
+
+```cpp
+struct Valid2In  { Wm3::Vector2f value; };  //  8 bytes
+struct Valid2Out { std::uint32_t valid; };  //  4 bytes
+```
+
+The generator puts the two lanes on the NaN boundary, as above.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| mutation: the x lane's test `!isnan(x)` -> `isfinite(x)` | `[FAIL] 48806 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+## The candidate that could not be paired: `Moho::ToString`
+
+`src/moho/math/Vector4f.cpp:11`, retail `0x004ECED0`. The ledger records it
+as 不适用, and this is what is at that address:
+
+```
+0x004ECED0  push ecx
+0x004ECED1  fld  dword ptr [eax + 0xc]   <- w, widened to a double
+0x004ECED4  sub  esp, 0x20
+0x004ECED7  fstp qword ptr [esp + 0x18]
+0x004ECEE3  fld  dword ptr [eax + 8]    <- z
+0x004ECEEA  fld  dword ptr [eax + 4]    <- y
+0x004ECEF1  fld  dword ptr [eax]        <- x
+0x004ECEF6  push 0x00E0BC70             <- "x=%f,y=%f,z=%f,w=%f"
+0x004ECEFB  push esi                    <- the destination string object
+0x004ECEFC  call 0x00938F10             <- gpg::STR_Printf
+0x004ECF01  mov  eax, esi               <- the return value: the string
+```
+
+So the retail's `ToString` **writes into** a string object the caller owns
+(ESI) and returns that pointer, while the rebuild's
+`moho::ToString(const Vector4f&)` returns one by value. The formatted text is
+the same operation, and the retail's string object layout was measured (STR_Va
+at 0x00938E00 initialises the destination it is handed with
+`mov dword ptr [edi + 0x18], 0xf` -- the capacity 15 --
+`mov dword ptr [edi + 0x14], ebx` -- the length 0 -- and
+`mov byte ptr [edi + 4], bl` -- the inline terminator: the object is
+{cookie at +0, the 16-byte buffer at +4, the length at +20, the capacity at
++24}, exactly the layout `msvc8::string` has).
+
+**The retail side cannot be driven in this harness, though.** The call goes
+into `gpg::STR_Va` (0x00938E00) and never comes back. The probes
+(`FAFDIFF_INT3_AT`) pin the place down: the flow reaches 0x00938E00,
+0x00938E02, 0x00938E07, 0x00938E0D and 0x00938E0E (each of them fires the
+breakpoint), and the next instruction, 0x00938E15, never runs. 0x00938E0E is
+`mov dword ptr fs:[0], esp` -- the instruction that installs the retail's
+own SEH frame -- and the fault it raises is swallowed by the handler that
+instruction just installed, so the unwind never completes and the harness
+hangs there. Nothing downstream of that point can be compared, so this
+candidate is recorded as 不适用 rather than as a comparison row.
+
+(The difference is not in `ToString`: the rebuild formats through
+`gpg::STR_Printf`, which reaches the *host* C runtime's `vsnprintf`, while the
+retail reaches the MSVC8 CRT's own `_vsnprintf` (0x00AAA764). Even if the
+call were reachable, the two runtimes spell a non-finite double differently
+(`1.#INF` / `1.#QNAN` against `inf` / `nan`), so a full-domain row would
+diverge there for a reason that belongs to the C runtime and not to the
+function under test.)
+
 ## The NaN-payload differences
 
 Two rows (`MatrixToQuat` and `QuatFromVecRot`) report differences under
@@ -674,10 +1143,19 @@ the symbol names and the file header lines removed):
 
 | translation unit | result |
 |---|---|
-| `src/moho/math/Vector3f.cpp` | identical (386 instruction lines) |
-| `src/moho/math/QuaternionMath.cpp` | identical (2908 instruction lines) |
-| `src/legacy/math/X87Math.cpp` | identical (1811 instruction lines) |
-| the extracted `QuatCrossAdd` (`Sim.cpp` vs `generated/sim_quat_cross_add.cpp`) | identical (172 instruction lines) |
+| `src/moho/math/Vector3f.cpp` | identical (316 instruction lines) |
+| `src/moho/math/QuaternionMath.cpp` | identical (2537 instruction lines) |
+| `src/legacy/math/X87Math.cpp` | identical (1599 instruction lines) |
+| `src/moho/math/Vector4f.cpp` | identical (136 instruction lines) |
+| `src/moho/math/Vector2f.cpp` | identical (70 instruction lines) |
+| `src/gpg/core/containers/String.cpp` | identical (3913 instruction lines) |
+| `src/legacy/containers/String.cpp` | identical (3149 instruction lines) |
+| the extracted `QuatCrossAdd` (`Sim.cpp` vs `generated/sim_quat_cross_add.cpp`) | identical (263 instruction lines) |
+
+The counts are the disassembled instruction lines of `llvm-objdump -d`
+(LLVM 23.1.3). The first three rows were counted with an earlier objdump,
+which counted its whole output; they were re-taken with the same measure
+here, and the identity verdict did not change.
 
 The engine's x86 `/FIplatform/X87SqrtCall.h` changes none of them:
 `faf_codegen` already keeps `sqrt` a call on x86
