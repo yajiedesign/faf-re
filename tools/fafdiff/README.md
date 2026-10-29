@@ -48,8 +48,38 @@ It is `EXCLUDE_FROM_ALL`: the engine build does not depend on it.
 
 ```bash
 ./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
-./build/clang-x86-release/tools/fafdiff/fafdiff.exe --iters 1000000 --seed 0x5EED2007
-./build/clang-x86-release/tools/fafdiff/fafdiff.exe --iters 1000000 --filter "SomeName"
+# name               retail VA  our source                                           typed layout
+# NormalizeVectorInto 0x0044F7E0 src/moho/math/Vector3f.cpp:25                        in[12B] out[16B]
+# MatrixToQuat       0x004EB3F0 src/moho/math/QuaternionMath.cpp:256                 in[36B] out[20B]
+# RotateQuatByAngle  0x004EB740 src/moho/math/QuaternionMath.cpp:557                 in[20B] out[20B]
+# QuatLERP           0x004EBA80 src/moho/math/QuaternionMath.cpp:408                 in[36B] out[20B]
+# SLERP              0x004EBC00 src/moho/math/QuaternionMath.cpp:466                 in[36B] out[20B]
+# NormalizeQuatInPlace 0x004EDAA0 src/moho/math/QuaternionMath.cpp:220                 in[16B] out[16B]
+# QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201                 in[32B] out[4B]
+# QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606                 in[32B] out[16B]
+# QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673                 in[16B] out[16B]
+# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286                            in[36B] out[20B]
+# Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84                        in[16B] out[20B]
+# VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116                       in[12B] out[4B]
+# VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149                       in[16B] out[16B]
+# VecSetLengthTo     0x0069A360 src/moho/math/Vector3f.cpp:200                       in[24B] out[16B]
+# VEC_HeadingFromXZ  0x00565A10 src/moho/math/Vector3f.cpp:137                       in[12B] out[4B]
+# EulerRollToQuat    0x00570750 src/moho/math/Vector3f.cpp:311                       in[16B] out[20B]
+# IsValidVector3f    0x005657F0 src/moho/math/Vector3f.cpp:12                        in[12B] out[4B]
+# IsUnitLengthVector3f 0x0069A1D0 src/moho/math/Vector3f.cpp:73                        in[12B] out[4B]
+# IsValidVector2f    0x005657B0 src/moho/math/Vector2f.cpp:8                         in[8B] out[4B]
+# MatrixRowsToQuatCanonical 0x004F0CB0 src/moho/math/QuaternionMath.cpp:317                 in[36B] out[20B]
+# MatrixColumnsToQuatCanonical 0x004F0AE0 src/moho/math/QuaternionMath.cpp:391                 in[36B] out[20B]
+# NormalizeAngleSignedRadians 0x0062FB50 src/moho/math/QuaternionMath.cpp:117                 in[4B] out[4B]
+# QuatFromAxisAngleVector 0x00697360 src/moho/math/QuaternionMath.cpp:719                 in[12B] out[20B]
+# BuildRotationMatrixEulerHPR 0x006D1E30 src/moho/math/QuaternionMath.cpp:840                 in[12B] out[40B]
+# BuildTiltShortestArcDelta 0x0050CB50 src/moho/math/QuaternionMath.cpp:983                 in[24B] out[20B]
+# BlendOrientationDeltaByMaxAngle 0x004EB830 src/moho/math/QuaternionMath.cpp:739                 in[36B] out[24B]
+# msvc8_atan2f       0x004E9DF0 src/legacy/math/X87Math.cpp:465                      in[8B] out[4B]
+# msvc8_cosf         0x005734D0 src/legacy/math/X87Math.cpp:431                      in[4B] out[4B]
+# msvc8_sinf         0x005734E0 src/legacy/math/X87Math.cpp:413                      in[4B] out[4B]
+# msvc8_frexp        0x00A8DA05 src/legacy/math/X87Math.cpp:291                      in[8B] out[16B]
+# msvc8_asin         0x00A8DE20 src/legacy/math/X87Math.cpp:773                      in[8B] out[8B]
 ```
 
 Options: `--iters N`, `--seed S`, `--filter NAME` (comma-separated substrings),
@@ -84,44 +114,57 @@ declared in `src/targets.h`.
 
 ## State
 
-**The table has nineteen rows.** Four translation units are under test:
+**The table has thirty-one rows.** Five translation units are under test:
 `src/moho/math/Vector3f.cpp` (the row for `moho::NormalizeVectorInto` plus
 the seven vector rows below), `src/moho/math/QuaternionMath.cpp` (the eight
-quaternion rows), `src/moho/math/Vector4f.cpp` (the row for
-`moho::Vector4f::operator=`) and `src/moho/math/Vector2f.cpp` (the row for
-`moho::IsValidVector2f`), all compiled into the harness with the engine's own
-switches. The dependencies they bring with them are
-`src/legacy/math/X87Math.cpp` (the `msvc8::` x87 helpers), Wild Magic's
-`Foundation/System/Wm3System.cpp` (`Wm3::Quaternion`'s copy assignment calls
-`Wm3::System::Memcpy`), `src/gpg/core/containers/String.cpp` (`Vector4f.cpp`
-formats through `gpg::STR_Printf`) and `src/legacy/containers/String.cpp`
-(the `msvc8::string` body). The function extracted out of
-`src/moho/sim/Sim.cpp` by line number is `moho::QuatCrossAdd` (`extract.json`;
-see below). The per-row evidence is in this file, the coverage ledger is
-`tools/fafdiff/COVERAGE.md`.
+quaternion rows plus the seven rows of the second batch),
+`src/moho/math/Vector4f.cpp` (the row for
+`moho::Vector4f::operator=`), `src/moho/math/Vector2f.cpp` (the row for
+`moho::IsValidVector2f`) and `src/legacy/math/X87Math.cpp` (the five x87
+helper rows of the second batch), all compiled into the harness with the
+engine's own switches. The dependencies they bring with them are Wild
+Magic's `Foundation/System/Wm3System.cpp` (`Wm3::Quaternion`'s copy
+assignment calls `Wm3::System::Memcpy`), `src/gpg/core/containers/String.cpp`
+(`Vector4f.cpp` formats through `gpg::STR_Printf`) and
+`src/legacy/containers/String.cpp` (the `msvc8::string` body). The function
+extracted out of `src/moho/sim/Sim.cpp` by line number is `moho::QuatCrossAdd`
+(`extract.json`; see below). The per-row evidence is in this file, the
+coverage ledger is `tools/fafdiff/COVERAGE.md`.
 
 ```bash
 ./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
-# name               retail VA  our source                     typed layout
-# NormalizeVectorInto 0x0044F7E0 src/moho/math/Vector3f.cpp:25  in[12B] out[16B]
-# MatrixToQuat       0x004EB3F0 src/moho/math/QuaternionMath.cpp:256   in[36B] out[20B]
-# RotateQuatByAngle  0x004EB740 src/moho/math/QuaternionMath.cpp:557   in[20B] out[20B]
-# QuatLERP           0x004EBA80 src/moho/math/QuaternionMath.cpp:408   in[36B] out[20B]
-# SLERP              0x004EBC00 src/moho/math/QuaternionMath.cpp:466   in[36B] out[20B]
-# NormalizeQuatInPlace 0x004EDAA0 src/moho/math/QuaternionMath.cpp:220 in[16B] out[16B]
-# QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201   in[32B] out[4B]
-# QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606   in[32B] out[16B]
-# QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673   in[16B] out[16B]
-# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286             in[36B] out[20B]
-# Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84          in[16B] out[20B]
-# VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116         in[12B] out[4B]
-# VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149         in[16B] out[16B]
-# VecSetLengthTo     0x0069A360 src/moho/math/Vector3f.cpp:200         in[24B] out[16B]
-# VEC_HeadingFromXZ  0x00565A10 src/moho/math/Vector3f.cpp:137         in[12B] out[4B]
-# EulerRollToQuat    0x00570750 src/moho/math/Vector3f.cpp:311         in[16B] out[20B]
-# IsValidVector3f    0x005657F0 src/moho/math/Vector3f.cpp:12          in[12B] out[4B]
-# IsUnitLengthVector3f 0x0069A1D0 src/moho/math/Vector3f.cpp:73       in[12B] out[4B]
-# IsValidVector2f    0x005657B0 src/moho/math/Vector2f.cpp:8           in[8B] out[4B]
+# name               retail VA  our source                                           typed layout
+# NormalizeVectorInto 0x0044F7E0 src/moho/math/Vector3f.cpp:25                        in[12B] out[16B]
+# MatrixToQuat       0x004EB3F0 src/moho/math/QuaternionMath.cpp:256                 in[36B] out[20B]
+# RotateQuatByAngle  0x004EB740 src/moho/math/QuaternionMath.cpp:557                 in[20B] out[20B]
+# QuatLERP           0x004EBA80 src/moho/math/QuaternionMath.cpp:408                 in[36B] out[20B]
+# SLERP              0x004EBC00 src/moho/math/QuaternionMath.cpp:466                 in[36B] out[20B]
+# NormalizeQuatInPlace 0x004EDAA0 src/moho/math/QuaternionMath.cpp:220                 in[16B] out[16B]
+# QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201                 in[32B] out[4B]
+# QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606                 in[32B] out[16B]
+# QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673                 in[12B] out[20B]
+# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286                            in[36B] out[20B]
+# Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84                        in[16B] out[20B]
+# VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116                       in[12B] out[4B]
+# VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149                       in[16B] out[16B]
+# VecSetLengthTo     0x0069A360 src/moho/math/Vector3f.cpp:200                       in[24B] out[16B]
+# VEC_HeadingFromXZ  0x00565A10 src/moho/math/Vector3f.cpp:137                       in[12B] out[4B]
+# EulerRollToQuat    0x00570750 src/moho/math/Vector3f.cpp:311                       in[16B] out[20B]
+# IsValidVector3f    0x005657F0 src/moho/math/Vector3f.cpp:12                        in[12B] out[4B]
+# IsUnitLengthVector3f 0x0069A1D0 src/moho/math/Vector3f.cpp:73                        in[12B] out[4B]
+# IsValidVector2f    0x005657B0 src/moho/math/Vector2f.cpp:8                         in[8B] out[4B]
+# MatrixRowsToQuatCanonical 0x004F0CB0 src/moho/math/QuaternionMath.cpp:317                 in[36B] out[20B]
+# MatrixColumnsToQuatCanonical 0x004F0AE0 src/moho/math/QuaternionMath.cpp:391                 in[36B] out[20B]
+# NormalizeAngleSignedRadians 0x0062FB50 src/moho/math/QuaternionMath.cpp:117                 in[4B] out[4B]
+# QuatFromAxisAngleVector 0x00697360 src/moho/math/QuaternionMath.cpp:719                 in[12B] out[20B]
+# BuildRotationMatrixEulerHPR 0x006D1E30 src/moho/math/QuaternionMath.cpp:840                 in[12B] out[40B]
+# BuildTiltShortestArcDelta 0x0050CB50 src/moho/math/QuaternionMath.cpp:983                 in[24B] out[20B]
+# BlendOrientationDeltaByMaxAngle 0x004EB830 src/moho/math/QuaternionMath.cpp:739                 in[36B] out[24B]
+# msvc8_atan2f       0x004E9DF0 src/legacy/math/X87Math.cpp:465                      in[8B] out[4B]
+# msvc8_cosf         0x005734D0 src/legacy/math/X87Math.cpp:431                      in[4B] out[4B]
+# msvc8_sinf         0x005734E0 src/legacy/math/X87Math.cpp:413                      in[4B] out[4B]
+# msvc8_frexp        0x00A8DA05 src/legacy/math/X87Math.cpp:291                      in[8B] out[16B]
+# msvc8_asin         0x00A8DE20 src/legacy/math/X87Math.cpp:773                      in[8B] out[8B]
 ```
 
 ### One extracted function, and why
@@ -1070,6 +1113,624 @@ The generator puts the two lanes on the NaN boundary, as above.
 | mutation: the x lane's test `!isnan(x)` -> `isfinite(x)` | `[FAIL] 48806 mismatches in 1000000 iterations` |
 | restore | `[PASS] 1000000/1000000` |
 
+## The second batch of rows
+
+Twelve more rows: seven more from `src/moho/math/QuaternionMath.cpp` and five
+from `src/legacy/math/X87Math.cpp` (which used to be a dependency TU only --
+it is now a unit under test in its own right). Every retail convention below
+was **measured** from the image with `.tmp/disasm.py <va>`; none of them is
+read off a header.
+
+### `MatrixRowsToQuatCanonical` -- retail `0x004F0CB0`
+
+`src/moho/math/QuaternionMath.cpp:317`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| matrix | the first stack argument (a pointer to a PACKED 3x3: three rows of three floats, 12 bytes each) |
+| destination | `ECX` |
+| return value | `EAX` = the destination pointer (`mov eax, edi` at 0x004F0D4C) |
+| epilogue | `ret 4` -- the argument is popped by the retail |
+
+The trace is the diagonal (`m00 + m11 + m22`, read at +0, +0x10 and +0x20 of
+the packed matrix), tested against `0.0f` with `comiss` + `jbe`. The trace
+branch takes the retail's own square root (0x00452FC0, an x87 `fsqrt`), keeps
+the float copy in `[esp+0x28]` and puts `sqrt * 0.5f` (still on the x87
+stack) into the scalar lane; the inverse root is `0.5f / sqrt` in SSE float.
+
+The dominant-axis branch reads the shuffle table at `0x00F3D2B4` (`{1, 2, 0}`)
+and forms the root as `(m_d - m_S(d)) - m_S2(d) + 1.0f` -- the two
+subtractions are separate instructions (0x004F0D91 and 0x004F0D9B), which is
+why the engine's source subtracts them one at a time.
+
+**The typed shapes**
+
+```cpp
+struct MatQuatIn  { Wm3::Vector3f rows[3]; };      // 36 bytes (packed)
+struct MatQuatOut { Wm3::Quaternionf quat;         // 16 bytes
+                    std::uint32_t returnedDest; }; //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a well-formed rotation matrix -- the trace branch and the
+  dominant-axis branch are both reached.
+* `WithExtremes`: 40% rotation matrices, 20% plain (non-orthonormal)
+  matrices, 20% singular ones (a zero row, a rank-one matrix, the identity)
+  and 20% rows whose lanes come from the full float mixture (NaN, infinity,
+  denormal), which drive the trace test and the square root into their
+  unordered branches.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[FAIL] 765 mismatches` -- **NaN-payload only** (see below) |
+| mutation: the x lane's sign (`lane(2, 1) - lane(1, 2)` -> the other way round) | `[FAIL] 526666 mismatches in 1000000 iterations` (+830 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+### `MatrixColumnsToQuatCanonical` -- retail `0x004F0AE0`
+
+`src/moho/math/QuaternionMath.cpp:391`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| columns | the first stack argument (a pointer to three packed columns) |
+| destination | `ECX` |
+| return value | `EAX` = the destination pointer (the inner call's value, which the transpose wrapper does not touch) |
+| epilogue | `ret 4` -- the argument is popped by the retail |
+
+The body transposes the nine lanes into a packed 3x3 on the stack (each lane
+is copied through the x87 stack, so the copy is exact) and then calls the
+canonical row conversion (0x004F0CB0) with the transposed rows.
+
+**The typed shapes** -- the same `MatQuatIn` / `MatQuatOut` as the row above
+(the three vectors are the matrix's *columns* here).
+
+**The generator** -- the same draw as the row above.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[FAIL] 772 mismatches` -- **NaN-payload only** |
+| mutation: the transpose (the first row's y lane and the second row's x lane are swapped) | `[FAIL] 971850 mismatches in 1000000 iterations` (+1255 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+### `NormalizeAngleSignedRadians` -- retail `0x0062FB50`
+
+`src/moho/math/QuaternionMath.cpp:117`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| angle | the first stack argument (a float at `[ebp + 8]`) |
+| return value | `XMM0` (a float) |
+| epilogue | `add esp, 8 / pop ebp / ret` -- the argument is **not** popped, the caller does it |
+
+```
+0x0062FB59  fld  dword ptr [ebp + 8]    <- the angle
+0x0062FB5C  fld  qword ptr [0x00E4F780]  <- 2pi as a double
+0x0062FB62  call 0x00A8E06A             <- the CRT's _CIfmod
+0x0062FB67  fst  dword ptr [esp + 4]    <- the float copy of the remainder
+0x0062FB6B  fld  dword ptr [0x00E4F77C]  <- -pi
+0x0062FB77  fcompi st(1) / fstp st(0) / jbe 0x0062FB89
+0x0062FB7D  addss xmm0, [0x00DFF08C]    <- + 2pi
+0x0062FB89  comiss xmm0, [0x00DFF088]   <- against +pi
+0x0062FB92  subss xmm0, [0x00DFF08C]    <- - 2pi
+```
+
+The two constants are the **float** 2pi (0x00DFF08C) and the widening of
+that same float to a double (0x00E4F780) -- the divisor of the fmod is
+therefore 6.2831854820251465, not the mathematical 2pi. The first test
+compares the **unrounded** remainder against -pi, the second one the
+**rounded** copy against +pi; the engine's source keeps that distinction.
+
+**The typed shapes**
+
+```cpp
+struct AngleIn  { float angle; };  // 4 bytes
+struct AngleOut { float angle; };  // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: an angle in [-10, 10].
+* `WithExtremes`: the edge table -- 0, -0, +-pi, pi +- 1 ulp, +-pi/2,
+  +-2pi, NaN, +-inf, the smallest denormal, FLT_MAX and random values in
+  [-12, 12]. These are exactly the values that sit on the wrap boundaries.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation: the first test `remainder < -kPi` -> `remainder <= -kPi` | `[FAIL] 62856 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `QuatFromAxisAngleVector` -- retail `0x00697360`
+
+`src/moho/math/QuaternionMath.cpp:719`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| quaternion | `ESI` (written in place) |
+| axis-angle vector | **by value** on the stack -- twelve bytes, the first stack argument |
+| return value | `EAX` = the quaternion pointer (`mov eax, esi` at 0x00697391) |
+| epilogue | `add esp, 0xc / ret` -- the argument is **not** popped, the caller does it |
+
+```
+0x00697363  lea  ecx, [esp + 0xc]      <- the axis-angle vector, by value
+0x00697367  call 0x00452AF0            <- Wm3::Vector3f::Normalize
+0x0069736C  fmul dword ptr [0x00E4F724] <- * 0.5f (the half angle)
+0x0069737A  call 0x005734E0            <- the retail's sinf
+0x0069738A  call 0x005734D0            <- the retail's cosf
+0x0069738F  fstp dword ptr [esi]       <- the scalar lane
+0x0069739D  fstp dword ptr [esi + 4]   <- axis.x * sin
+```
+
+The retail normalises **its own copy** of the vector (the caller's stack
+slot), and the three lane products stay on the x87 stack until the one
+float store each.
+
+**The typed shapes**
+
+```cpp
+struct AxisAngleVecIn  { Wm3::Vector3f axisAngle; };      // 12 bytes
+struct AxisAngleVecOut { Wm3::Quaternionf quat;           // 16 bytes
+                         std::uint32_t returnedDest; };   //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a unit direction with a magnitude in [0, 6].
+* `WithExtremes`: 25% the zero vector (the branch that cannot normalise),
+  20% the full float mixture, 20% denormal lanes (the squared length
+  underflows) and the rest the mixed vector draw.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation: the half angle `angle * 0.5f` -> `angle * 0.25f` | `[FAIL] 435728 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `BuildRotationMatrixFromEulerHPR` -- retail `0x006D1E30`
+
+`src/moho/math/QuaternionMath.cpp:840`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| output matrix | `ESI` (three `Wm3::Vector3f` rows, i.e. 36 packed bytes) |
+| heading, pitch, roll | the three stack arguments (in that order) |
+| return value | `EAX` = the output pointer (`mov eax, esi` at 0x006D1FA0) |
+| epilogue | `ret 0xc` -- the arguments are popped by the retail |
+
+The body builds three packed 3x3 matrices on the stack -- the heading
+(`{ch, 0, sh}, {0, 1, 0}, {-sh, 0, ch}`), the pitch (`{1, 0, 0}, {0, cp,
+-sp}, {0, sp, cp}`) and the roll (`{cr, -sr, 0}, {sr, cr, 0}, {0, 0, 1}`) --
+and multiplies them with the retail's own `Multiply3x3RowMatrices`
+(0x006D2680): the first product is `pitch * roll`, the second
+`heading * (pitch * roll)`. The retail's multiply sums `product + accumulator`
+starting from a `+0.0f` accumulator, exactly like the engine's own multiply;
+the final 36 bytes are copied to the output with a `memcpy`.
+
+**The typed shapes**
+
+```cpp
+struct EulerHprIn  { float heading; float pitch; float roll; };  // 12 bytes
+struct EulerHprOut { Wm3::Vector3f rows[3];                       // 36 bytes
+                     std::uint32_t returnedDest; };              //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: the three angles in [-3.2, 3.2].
+* `WithExtremes`: the three angles from the edge table (0, -0, +-pi, pi +-
+  1 ulp, +-pi/2, +-2pi, NaN, +-inf, the smallest denormal, FLT_MAX and
+  random values).
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[FAIL] 42733 mismatches` -- **NaN-payload only** (the retail's `fcos`/`fsin` answer with the x87 "real indefinite", the engine's SSE product keeps the incoming payload) |
+| mutation: the heading matrix's `-sh` -> `sh` | `[FAIL] 405357 mismatches in 1000000 iterations` (+42733 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+### `BuildTiltShortestArcDelta` -- retail `0x0050CB50`
+
+`src/moho/math/QuaternionMath.cpp:983`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| current up vector | `ESI` |
+| target normal | `EAX` |
+| output delta | `EDI` (written in place) |
+| return value | `EAX` = the output pointer (`mov eax, edi` at 0x0050CC39) |
+| arguments | none on the stack |
+
+The half vector is `currentUp + targetNormal` (the y and z lanes are added in
+the other order -- `targetNormal.y + currentUp.y` -- which only shows up in a
+NaN payload), it is normalised (`Wm3::Vector3f::Normalize`, 0x00452AF0), and
+the scalar is `(currentUp.z * half.z + currentUp.x * half.x) +
+currentUp.y * half.y`.
+
+The degenerate branch is taken when the `ucomiss` against `0.0f` sets ZF --
+that is, when the scalar is zero **or unordered**: the `lahf` / `test ah,
+0x44` / `jnp` sequence is the "jump if equal or unordered" idiom, and the
+bit 0x04 of AH is the constant 1 that LAHF puts there, so the test reduces
+to "ZF is set". The branch calls the retail's own `fabs` (0x0050D140) and
+`1/sqrt` (0x0050D150) helpers and picks the perpendicular axis by comparing
+`|currentUp.x|` against `|currentUp.y|` with `fcompi` + `jb` (an unordered
+pair takes the `x = 0` branch as well).
+
+**The typed shapes**
+
+```cpp
+struct TiltIn  { Wm3::Vector3f targetNormal;   // 12 bytes
+                 Wm3::Vector3f currentUp; };    // 12 bytes
+struct TiltOut { Wm3::Quaternionf quat;         // 16 bytes
+                 std::uint32_t returnedDest; }; //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: two independent unit vectors.
+* `WithExtremes`: 30% **exactly opposed** pairs (the half vector is
+  degenerate and the scalar is zero -- the degenerate branch), 15% the zero
+  vectors, 20% NaN and infinity lanes (the scalar is unordered) and the rest
+  the mixed vector draw.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[FAIL] 948 mismatches` -- **NaN-payload only** |
+| mutation: the x lane's cross product `a - b` -> `a + b` | `[FAIL] 294199 mismatches in 1000000 iterations` (+948 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+### `BlendOrientationDeltaByMaxAngle` -- retail `0x004EB830`
+
+`src/moho/math/QuaternionMath.cpp:739`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| goal orientation | `EBX` |
+| output orientation | `EDI` (written in place) |
+| current orientation | the first stack argument (a **pointer**) |
+| turn step | the second stack argument (a float) |
+| "no step" flag | the third stack argument (a `char*`) |
+| return value | `EAX` = the output pointer (`mov eax, edi` at 0x004EBA4D) |
+| epilogue | the arguments are **not** popped, the caller does it |
+
+The delta is `goal * conjugate(current)` -- the conjugate keeps lane 0 and
+forms lanes 1..3 as `-0.0f - lane`, which is why the engine's source writes
+`-t.x` rather than negating the product. The delta is then clamped with the
+retail's own `RotateQuatByAngle` (0x004EB740); if that rejects the step, the
+retail copies the **goal** into the output and sets `*outNoStep = 1`,
+otherwise it writes `current * delta` and sets `*outNoStep = 0`.
+
+The retail reuses the first stack argument's slot as scratch for the goal's
+scalar lane (0x004EB85F) -- which is why the rejected branch can still read
+the goal's scalar lane back (0x004EBA5C). The flag is written as a **byte**
+(`mov byte ptr [eax], 0` / `mov byte ptr [ecx], 1`), so the row's flag slot is
+a byte as well.
+
+The flag on its own would be a weak witness -- a boolean only says "the step
+was rejected or not", and it would not witness the arithmetic behind it.
+This row is not that weak: it compares the four quaternion lanes as well,
+and those lanes are the product `current * delta`, so the row witnesses the
+Hamilton product and the clamp, not just the branch.
+
+**The typed shapes**
+
+```cpp
+struct BlendIn  { Wm3::Quaternionf goal;      // 16 bytes
+                  Wm3::Quaternionf current;   // 16 bytes
+                  float turnStep; };          //  4 bytes
+struct BlendOut { Wm3::Quaternionf quat;      // 16 bytes
+                  std::uint8_t noStep;        //  1 byte (the retail writes a byte)
+                  std::uint32_t returnedDest; }; // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: two unit quaternions and a turn step in [0, 3].
+* `WithExtremes`: the full quaternion mixture (unit, unnormalized, zero,
+  denormal and NaN lanes) and the angle edge table (0, -0, pi, pi +- 1 ulp,
+  pi/2, -pi/2, 2pi, NaN, +-inf, the smallest denormal, FLT_MAX) -- the turn
+  steps that make `RotateQuatByAngle` reject are exactly what the rejected
+  branch needs.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation: the rejected-step test is inverted (`if (!RotateQuatByAngle(...))` -> `if (RotateQuatByAngle(...))`) | `[FAIL] 1000000 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### The x87 helper rows
+
+These five are the engine's own re-implementations of the MSVC8 CRT's float
+math. Each one has a retail body at the address its source comment quotes,
+and each retail body is the CRT's own: the argument comes in on the stack
+(or, for the CRT's `_CIasin`, on the x87 stack) and the answer comes back on
+the x87 stack, **unspilled**. The harness rounds it to a float exactly once,
+which is what the engine's own helpers do with their `fstp result`.
+
+### `msvc8::atan2f` -- retail `0x004E9DF0`
+
+`src/legacy/math/X87Math.cpp:465`.
+
+| | |
+|---|---|
+| y | the first stack argument (`[ebp + 8]`) |
+| x | the second stack argument (`[ebp + 0xc]`) |
+| return value | **on the x87 stack** (`fpatan`, not spilled) |
+
+```
+0x004E9DF6  fld  dword ptr [ebp + 8]    <- y
+0x004E9DF9  fld  dword ptr [ebp + 0xc]  <- x
+0x004E9DFC  fpatan
+```
+
+`fpatan` computes `atan(st1/st0)`, so the answer is `atan2(y, x)`. The engine's
+helper is the same three instructions with a `fstp result` on top.
+
+**The typed shapes**
+
+```cpp
+struct Atan2In  { float y; float x; };  // 8 bytes
+struct Atan2Out { float result; };      // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: `y` and `x` in [-100, 100].
+* `WithExtremes`: 35% the corners of `atan2` (the origin, the four axis
+  corners and the signed zeros), 30% the full float mixture and the rest
+  plain lanes.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation: the two operands of `fpatan` are swapped | `[FAIL] 895934 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `msvc8::cosf` -- retail `0x005734D0` and `msvc8::sinf` -- retail `0x005734E0`
+
+`src/legacy/math/X87Math.cpp:431` and `:415`.
+
+| | |
+|---|---|
+| argument | the first stack argument (`[ebp + 8]`) |
+| return value | **on the x87 stack** (`fcos` / `fsin`, not spilled) |
+
+```
+0x005734D0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+0x005734D6  fld  dword ptr [ebp + 8]
+0x005734D9  fcos
+0x005734DB  mov  esp, ebp / pop ebp / ret
+```
+
+The engine's `msvc8::cosf` / `msvc8::sinf` are exactly these sequences with
+the `fstp result` added, so the row compares the retail's `fcos`/`fsin`
+against the engine's.
+
+**The typed shapes**
+
+```cpp
+struct TrigIn  { float x; };   // 4 bytes
+struct TrigOut { float result; };  // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: the argument in [-20, 20].
+* `WithExtremes`: the edge table -- 0, -0, +-pi, +-pi/2, +-inf, NaN, the
+  smallest denormal, FLT_MAX, 2^64, 2^-64 and random values in [-1e6, 1e6].
+  The huge ones are what put the x87 argument reduction under pressure.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` (both rows) |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` (both rows) |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five (both rows) |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five (both rows) |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation (`cosf`): `fcos` -> `fsin` | `[FAIL] 625319 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+| mutation (`sinf`): `fsin` -> `fcos` | `[FAIL] 624854 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `msvc8::frexp` -- retail `0x00A8DA05`
+
+`src/legacy/math/X87Math.cpp:291`.
+
+| | |
+|---|---|
+| value | the first stack argument (a double at `[ebp + 8]`) |
+| exponent | the second stack argument (an `int*` at `[ebp + 0x10]`) |
+| return value | **on the x87 stack** (the mantissa) |
+
+```
+0x00A8DA0C  mov  edi, dword ptr [ebp + 0x10]   <- the exponent pointer
+0x00A8DA11  cmp  edi, ebx / jne 0x00A8DA34     <- a null pointer raises
+0x00A8DA45  fld  qword ptr [ebp + 8]           <- the value
+0x00A8DA4E  and  ax, 0x7ff0                    <- the exponent field
+0x00A8DA52  cmp  ax, 0x7ff0 / jne 0x00A8DABD  <- not inf/NaN
+0x00A8DA5A  or   dword ptr [edi], 0xffffffff   <- the special case
+0x00A8DAC3  call 0x00A99F05                    <- the general case
+0x00A8DAD4  fld  qword ptr [ebp - 8]            <- the mantissa
+```
+
+The engine's `msvc8::frexp` reproduces the special cases (a non-finite value
+sets the exponent to -1 and answers the x87 indefinite for an infinity, the
+NaN itself for a NaN; a zero value sets the exponent to 0 and answers **+0**)
+and defers to the host CRT otherwise.
+
+**The typed shapes**
+
+```cpp
+struct FrexpIn  { double value; };             // 8 bytes
+struct FrexpOut { double mantissa;             // 8 bytes
+                  std::int32_t exponent; };     // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a value in [-1e6, 1e6].
+* `WithExtremes`: +0, -0, the smallest denormal, the smallest normal, +-
+  1e300, +-1e-300, +-inf, NaN, a random power of two over the whole exponent
+  range, and plain values.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation: the zero case sets the exponent to 1 instead of 0 | `[FAIL] 166873 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `msvc8::asin` -- retail `0x00A8DE20` (the CRT's `_CIasin`)
+
+`src/legacy/math/X87Math.cpp:773`.
+
+| | |
+|---|---|
+| argument | **on the x87 stack** (`fstp qword ptr [esp]` at 0x00AA7D59) -- not in a register and not on the memory stack |
+| return value | **on the x87 stack** |
+
+```
+0x00A8DE20  cmp  dword ptr [0x01107030], 0   <- global_mode_sse2
+0x00A8DE27  je   0x00A8DE5B                 <- the x87 lane
+0x00A8DE41  fnstcw word ptr [esp]
+0x00A8DE4C  cmp  ax, 0x7f / jne 0x00A8DE5B
+0x00A8DE56  jmp  0x00AA7D50                 <- the SSE2 lane
+0x00A8DE5B  sub  esp, 0xc / fst qword ptr [esp] / call 0x00AA7C48
+```
+
+The harness seeds the retail's `global_mode_sse2` (0x01107030) with 1 and
+runs with MXCSR 0x1F80 and the x87 control word 0x007F, so the retail takes
+its SSE2 lane -- exactly the lane the engine's `msvc8::asin` takes (its own
+`global_mode_sse2` is 1 as well, and the engine's copy of the flag is the
+same word).
+
+**The typed shapes**
+
+```cpp
+struct AsinIn  { double value; };   // 8 bytes
+struct AsinOut { double result; };  // 8 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a value in [-1, 1].
+* `WithExtremes`: +0, -0, +-1, just outside the domain, +-2, NaN, +inf, a
+  denormal, and plain values in [-1, 1]. The values outside the domain are
+  what drive the CRT's errno lane.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep, 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (+7 NaN-payload-only) |
+| mutation: the SSE2 dispatch is bypassed (`TakesSse2Lane(...)` -> `false`), so the engine takes its x87 lane while the retail takes the SSE2 one | `[FAIL] 83442 mismatches in 1000000 iterations` (+7 NaN-payload-only) |
+| restore | `[PASS] 1000000/1000000` |
+
+## The candidates that could not be paired as rows
+
+`moho::CoordsAbsFloat` (retail `0x0050D140`), `moho::CoordsScaleByInvSqrt`
+(retail `0x0050D150`) and `moho::QuaternionToRotationMatrix3x3` (retail
+`0x00A3AD70`) are recorded as 不适用 in the ledger. All three live in an
+anonymous namespace in `src/moho/math/QuaternionMath.cpp` and the compiler
+inlines them: the engine's `QuaternionMath.cpp.obj` has **no symbol** for any
+of them (`llvm-nm` finds none), so the harness has no code of its own to
+compare against the retail, and no extraction was made for them (an
+extraction would not be the engine's build either -- the engine never emits
+these bodies). The reasons are spelled out per address in
+`tools/fafdiff/data/coverage_status.json`; in short:
+
+* **`0x0050D140`** is the retail's `fld dword ptr [ebp + 8]; fabs`: it answers
+  with the 80-bit extended value, where the engine's copy answers with a
+  `double`. The retail's behaviour is witnessed by the
+  `BuildTiltShortestArcDelta` row -- the retail's 0x0050CB50 is the function
+  that calls 0x0050D140.
+* **`0x0050D150`** is the retail's `1/sqrt(x)`. The engine's
+  `CoordsScaleByInvSqrt` is a different contract altogether: four arguments
+  (the squared length, two lanes and two output references) and two outputs,
+  with the reciprocal and the two products fused together, because a float
+  return would round the reciprocal into the float range first (one ulp on
+  denormal outputs). The retail's behaviour -- the reciprocal and both
+  products stay on the x87 stack until the lane stores -- is witnessed by the
+  `BuildTiltShortestArcDelta` row too.
+* **`0x00A3AD70`** is a real retail body (a double quaternion expanded into a
+  3x3 double rotation matrix), but the engine's copy is an unused
+  anonymous-namespace function the compiler discards -- and it would not
+  match anyway: the retail computes the whole chain on the x87 (a 24-bit
+  significand under the simulation's `_PC_24`, not binary64), while the
+  engine's source is plain binary64 double arithmetic.
+
 ## The candidate that could not be paired: `Moho::ToString`
 
 `src/moho/math/Vector4f.cpp:11`, retail `0x004ECED0`. The ledger records it
@@ -1121,14 +1782,17 @@ function under test.)
 
 ## The NaN-payload differences
 
-Two rows (`MatrixToQuat` and `QuatFromVecRot`) report differences under
-`--strict-nan` that are **NaN payloads only**: both sides produce a NaN in
-the same lane, and only the payload bits differ (for example the retail
-writes `7FC00000` where the rebuild writes `7FC12345`, the payload of the NaN
-that came in). The count is 1614 and 3747 lanes per million iterations
-respectively, i.e. 0.16% and 0.37% of the iterations, and both come from the
-same mechanism: the retail's x87 path quiets a NaN into the default one
-while the rebuild propagates the payload (or the other way round).
+Six rows report differences under `--strict-nan` that are **NaN payloads
+only**: both sides produce a NaN in the same lane, and only the payload bits
+differ (for example the retail writes `7FC00000` where the rebuild writes
+`7FC12345`, the payload of the NaN that came in). The counts per million
+iterations are 1614 (`MatrixToQuat`), 3747 (`QuatFromVecRot`), 765
+(`MatrixRowsToQuatCanonical`), 772 (`MatrixColumnsToQuatCanonical`), 42733
+(`BuildRotationMatrixEulerHPR`) and 948 (`BuildTiltShortestArcDelta`), i.e.
+between 0.08% and 4.3% of the iterations, and they come from the same class
+of mechanism: the retail's x87 path quiets a NaN into the default one (or
+the x87 "real indefinite", `FFC00000`) while the rebuild propagates the
+payload, or the SSE product keeps the payload while the x87 path does not.
 
 The harness's default is to **tally** such differences rather than fail on
 them (`--strict-nan` turns them into failures); the numbers are listed above
@@ -1145,7 +1809,7 @@ the symbol names and the file header lines removed):
 |---|---|
 | `src/moho/math/Vector3f.cpp` | identical (316 instruction lines) |
 | `src/moho/math/QuaternionMath.cpp` | identical (2537 instruction lines) |
-| `src/legacy/math/X87Math.cpp` | identical (1599 instruction lines) |
+| `src/legacy/math/X87Math.cpp` | identical (1599 instruction lines) -- it is a unit under test in its own right now, not only a dependency |
 | `src/moho/math/Vector4f.cpp` | identical (136 instruction lines) |
 | `src/moho/math/Vector2f.cpp` | identical (70 instruction lines) |
 | `src/gpg/core/containers/String.cpp` | identical (3913 instruction lines) |

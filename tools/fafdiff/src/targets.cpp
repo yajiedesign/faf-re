@@ -4,9 +4,11 @@
 #include "moho/math/Vector2f.h"
 #include "moho/math/Vector3f.h"
 #include "moho/math/Vector4f.h"
+#include "legacy/math/X87Math.h"
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace fafdiff
@@ -2114,6 +2116,1171 @@ namespace
     typedOut.valid = moho::IsValidVector2f(typedIn.value) ? 1u : 0u;
   }
 
+  // ---------------------------------------------------------------------
+  // The second batch of comparison rows.
+  //
+  // Every retail convention below was measured from the image with
+  // `.tmp/disasm.py <va>`; none of them is read off a header.
+
+  // --- MatrixRowsToQuatCanonical - retail 0x004F0CB0 ---------------------
+  //
+  //   0x004F0CB0  sub  esp, 0x10 / push ebx / push ebp / push esi
+  //   0x004F0CB6  mov  esi, [esp + 0x20]   <- the matrix (the first argument)
+  //   0x004F0CBA  movss xmm2, [esi]        <- m00
+  //   0x004F0CBE  movss xmm1, [esi + 0x10] <- m11
+  //   0x004F0CC3  movss xmm3, [esi + 0x20] <- m22
+  //   0x004F0CC8  movaps xmm0, xmm2
+  //   0x004F0CCC  addss xmm0, xmm1 / addss xmm0, xmm3   <- the trace
+  //   0x004F0CD6  comiss xmm0, [0x00E4F6E0] <- against 0.0f
+  //   0x004F0CE1  jbe  0x004F0D58           <- the dominant-axis branch
+  //   0x004F0CD0  mov  edi, ecx             <- the destination
+  //   0x004F0D4C  mov  eax, edi             <- the return value: the destination
+  //   0x004F0D55  ret  4                    <- the argument is popped
+  //
+  // The matrix is a PACKED 3x3 (three rows of three floats, 12 bytes each):
+  // the diagonal is at +0, +0x10 and +0x20, i.e. 12*row + 4*col.
+  //
+  // The trace branch: the square root is the retail's own (0x00452FC0, an x87
+  // `fsqrt`), the float copy of it is rounded by `fst dword ptr [esp+0x28]`,
+  // the scalar lane is `sqrt * 0.5f` on the x87 stack, and the inverse root
+  // is `0.5f / sqrt` in SSE float.
+  //
+  // The dominant-axis branch reads the shuffle table at 0x00F3D2B4 ({1, 2, 0})
+  // and forms the root as `(m_d - m_S(d)) - m_S2(d) + 1.0f` - the two
+  // subtractions are separate (0x004F0D91 and 0x004F0D9B), which is what the
+  // engine's source does too.
+
+  // The matrix draw for the canonical matrix-to-quaternion rows: rotation
+  // matrices, plain (non-orthonormal) matrices, singular ones (a zero row, a
+  // repeated row - the dominant-axis branch and its square root are the
+  // interesting part) and the full float mixture.
+  void GenMatQuatCanonical(Rng& rng, void* in, const DrawKind kind)
+  {
+    MatQuatIn& typed = *static_cast<MatQuatIn*>(in);
+    if (kind == DrawKind::Ordinary) {
+      // Ordinary: a well-formed rotation matrix - every lane finite and
+      // normal.
+      GenRotationRows(rng, typed.rows);
+      return;
+    }
+    const std::uint32_t mode = rng.Below(100);
+    if (mode < 40) {
+      GenRotationRows(rng, typed.rows);
+    } else if (mode < 60) {
+      // A plain matrix: the trace is an arbitrary sum of three lanes.
+      for (int row = 0; row < 3; ++row) {
+        float lanes[3];
+        for (int col = 0; col < 3; ++col) {
+          lanes[col] = GenPlain(rng, 1.0f);
+        }
+        typed.rows[row] = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+      }
+    } else if (mode < 80) {
+      // Singular matrices: a zero row, a repeated row, a rank-one matrix.
+      // The dominant-axis branch and its square root are what is at stake.
+      const std::uint32_t which = rng.Below(4);
+      for (int row = 0; row < 3; ++row) {
+        float lanes[3];
+        for (int col = 0; col < 3; ++col) {
+          lanes[col] = GenPlain(rng, 1.0f);
+        }
+        if (which == 0) {
+          if (row == 1) {
+            lanes[0] = 0.0f;
+            lanes[1] = 0.0f;
+            lanes[2] = 0.0f;
+          }
+        } else if (which == 1) {
+          if (row == 2) {
+            lanes[0] = lanes[0];
+            lanes[1] = lanes[1];
+            lanes[2] = lanes[2];
+          }
+        } else if (which == 2) {
+          // a rank-one matrix: every row is a multiple of the first one
+          if (row != 0) {
+            lanes[0] *= static_cast<float>(row);
+            lanes[1] *= static_cast<float>(row);
+            lanes[2] *= static_cast<float>(row);
+          }
+        } else {
+          // the identity with one lane changed: the trace branch and the
+          // dominant-axis branch disagree right at the boundary
+          if (row == 0) {
+            lanes[0] = 1.0f;
+            lanes[1] = 0.0f;
+            lanes[2] = 0.0f;
+          } else if (row == 1) {
+            lanes[0] = 0.0f;
+            lanes[1] = 1.0f;
+            lanes[2] = 0.0f;
+          } else {
+            lanes[0] = 0.0f;
+            lanes[1] = 0.0f;
+            lanes[2] = 1.0f;
+          }
+        }
+        typed.rows[row] = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+      }
+    } else {
+      for (int row = 0; row < 3; ++row) {
+        float lanes[3];
+        GenExtremeRow(rng, lanes);
+        typed.rows[row] = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+      }
+    }
+  }
+
+  __declspec(naked) void RetailMatrixRowsToQuatCanonical(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push ebp                  // the matrix: the retail's first stack argument
+      mov  esi, [esp]           // the retail's matrix
+      mov  ecx, ebx             // the retail's destination
+      mov  eax, 0x004F0CB0
+      call eax
+      // the retail pops its own argument (`ret 4`)
+      cmp  eax, ebx             // the retail returns the destination pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursMatrixRowsToQuatCanonical(const void* in, void* out)
+  {
+    const MatQuatIn& typedIn = *static_cast<const MatQuatIn*>(in);
+    MatQuatOut& typedOut = *static_cast<MatQuatOut*>(out);
+    typedOut.returnedDest =
+      (moho::MatrixRowsToQuatCanonical(&typedIn.rows[0], &typedOut.quat) == &typedOut.quat) ? 1u : 0u;
+  }
+
+  // --- MatrixColumnsToQuatCanonical - retail 0x004F0AE0 -------------------
+  //
+  //   0x004F0AE0  sub  esp, 0x28
+  //   0x004F0AE3  mov  edx, [esp + 0x2c]   <- the columns (the first argument)
+  //   0x004F0B10  fld  dword ptr [edx - 8]  <- the transposed lanes
+  //   0x004F0B2F  lea  eax, [esp + 4]       <- the transposed rows
+  //   0x004F0B33  push eax
+  //   0x004F0B34  call 0x004F0CB0           <- the canonical row conversion
+  //   0x004F0B39  add  esp, 0x28
+  //   0x004F0B3C  ret  4
+  //
+  // So: the columns as the first stack argument (the retail pops it), the
+  // destination in ECX, and the return value is the destination pointer (the
+  // inner call's EAX, which the transpose wrapper does not touch).
+  //
+  // The transpose itself copies the nine lanes through the x87 stack, so it is
+  // exact - the only interesting part is the canonical conversion.
+
+  __declspec(naked) void RetailMatrixColumnsToQuatCanonical(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push ebp                  // the columns: the retail's first stack argument
+      mov  ecx, ebx             // the retail's destination
+      mov  eax, 0x004F0AE0
+      call eax
+      // the retail pops its own argument (`ret 4`)
+      cmp  eax, ebx             // the retail returns the destination pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursMatrixColumnsToQuatCanonical(const void* in, void* out)
+  {
+    const MatQuatIn& typedIn = *static_cast<const MatQuatIn*>(in);
+    MatQuatOut& typedOut = *static_cast<MatQuatOut*>(out);
+    typedOut.returnedDest =
+      (moho::MatrixColumnsToQuatCanonical(&typedIn.rows[0], &typedOut.quat) == &typedOut.quat) ? 1u : 0u;
+  }
+
+  // --- NormalizeAngleSignedRadians - retail 0x0062FB50 --------------------
+  //
+  //   0x0062FB50  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x0062FB56  sub  esp, 8
+  //   0x0062FB59  fld  dword ptr [ebp + 8]   <- the angle
+  //   0x0062FB5C  fld  qword ptr [0x00E4F780] <- 2pi as a double
+  //   0x0062FB62  call 0x00A8E06A            <- the CRT's _CIfmod
+  //   0x0062FB67  fst  dword ptr [esp + 4]   <- the float copy of the remainder
+  //   0x0062FB6B  fld  dword ptr [0x00E4F77C] <- -pi
+  //   0x0062FB71  movss xmm0, dword ptr [esp + 4]
+  //   0x0062FB77  fcompi st(1) / fstp st(0) / jbe 0x0062FB89
+  //   0x0062FB7D  addss xmm0, [0x00DFF08C]   <- + 2pi
+  //   0x0062FB89  comiss xmm0, [0x00DFF088]  <- against +pi
+  //   0x0062FB92  subss xmm0, [0x00DFF08C]   <- - 2pi
+  //
+  // So: the angle is the first stack argument (the retail does not pop it),
+  // and the answer comes back in XMM0 as a float.
+  //
+  // The two constants are the *float* 2pi (0x00DFF08C) and the *double*
+  // widening of that same float (0x00E4F780) - the divisor of the fmod is
+  // therefore 6.2831854820251465, not the mathematical 2pi.
+  //
+  // The first test compares the UNROUNDED remainder against -pi, the second
+  // one the ROUNDED copy against +pi; the engine's source keeps that
+  // distinction.
+
+  struct AngleIn
+  {
+    float angle;
+  };
+
+  struct AngleOut
+  {
+    float angle;
+  };
+
+  // The angles that sit on the wrap boundaries: the multiples of pi, the
+  // half-turns, and the values just either side of them.
+  float GenSignedAngle(Rng& rng)
+  {
+    switch (rng.Below(16)) {
+    case 0:
+      return 0.0f;
+    case 1:
+      return -0.0f;
+    case 2:
+      return FromBits(0x40490FDBu); // pi
+    case 3:
+      return FromBits(0xC0490FDBu); // -pi
+    case 4:
+      return FromBits(0x40490FDBu + 1u); // pi + 1 ulp
+    case 5:
+      return FromBits(0x40490FDBu - 1u); // pi - 1 ulp
+    case 6:
+      return FromBits(0x3FC90FDBu); // pi/2
+    case 7:
+      return FromBits(0xBFC90FDBu); // -pi/2
+    case 8:
+      return FromBits(0x40C90FDBu); // 2pi
+    case 9:
+      return FromBits(0xC0C90FDBu); // -2pi
+    case 10:
+      return FromBits(0x7FC00000u); // NaN
+    case 11:
+      return FromBits(0x7F800000u); // +inf
+    case 12:
+      return FromBits(0xFF800000u); // -inf
+    case 13:
+      return FromBits(0x00000001u); // the smallest denormal
+    case 14:
+      return FromBits(0x7F7FFFFFu); // FLT_MAX
+    default:
+      return static_cast<float>(rng.Range(-12.0, 12.0));
+    }
+  }
+
+  void GenAngleIn(Rng& rng, void* in, const DrawKind kind)
+  {
+    AngleIn& typed = *static_cast<AngleIn*>(in);
+    typed.angle = (kind == DrawKind::Ordinary) ? static_cast<float>(rng.Range(-10.0, 10.0))
+                                               : GenSignedAngle(rng);
+  }
+
+  __declspec(naked) void RetailNormalizeAngleSignedRadians(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push dword ptr [ebp]      // the angle: the retail's first stack argument
+      mov  eax, 0x0062FB50
+      call eax
+      add  esp, 4                // the retail does not pop its argument
+      movss [ebx], xmm0          // the answer comes back in XMM0
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursNormalizeAngleSignedRadians(const void* in, void* out)
+  {
+    const AngleIn& typedIn = *static_cast<const AngleIn*>(in);
+    AngleOut& typedOut = *static_cast<AngleOut*>(out);
+    typedOut.angle = moho::NormalizeAngleSignedRadians(typedIn.angle);
+  }
+
+  // --- QuatFromAxisAngleVector - retail 0x00697360 ------------------------
+  //
+  //   0x00697360  sub  esp, 8
+  //   0x00697363  lea  ecx, [esp + 0xc]     <- the axis-angle vector, BY VALUE
+  //   0x00697367  call 0x00452AF0           <- Wm3::Vector3f::Normalize
+  //   0x0069736C  fmul dword ptr [0x00E4F724] <- * 0.5f (the half angle)
+  //   0x00697372  push ecx / fst dword [esp+4] / fstp dword [esp]
+  //   0x0069737A  call 0x005734E0           <- the retail's sinf
+  //   0x00697387  fstp dword [esp] / call 0x005734D0  <- the retail's cosf
+  //   0x0069738F  fstp dword [esi]          <- the scalar lane
+  //   0x00697391  mov  eax, esi             <- the return value: the quaternion
+  //   0x00697393  fld dword [esp+8] / fld dword [esp+0x10] / fmul st(1)
+  //   0x0069739D  fstp dword [esi + 4]      <- axis.x * sin
+  //   0x006973A9  fmul dword [esp+0x18] / fstp dword [esi + 0xc]
+  //
+  // So: the quaternion in ESI, the axis-angle vector BY VALUE on the stack
+  // (twelve bytes, the first argument), and the return value is the
+  // quaternion pointer. The retail normalises its own copy of the vector on
+  // the stack, and the three lane products stay on the x87 stack.
+
+  struct AxisAngleVecIn
+  {
+    Wm3::Vector3f axisAngle;
+  };
+
+  struct AxisAngleVecOut
+  {
+    Wm3::Quaternionf quat;
+    std::uint32_t returnedDest;
+  };
+
+  void GenAxisAngleVector(Rng& rng, void* in, const DrawKind kind)
+  {
+    AxisAngleVecIn& typed = *static_cast<AxisAngleVecIn*>(in);
+    float lanes[3];
+    if (kind == DrawKind::Ordinary) {
+      // A unit direction with an angle in [0, 6].
+      GenUnitVec3(rng, lanes);
+      const double magnitude = rng.Range(0.0, 6.0);
+      for (int k = 0; k < 3; ++k) {
+        lanes[k] = static_cast<float>(lanes[k] * magnitude);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 25) {
+        // The zero vector: the normalise branch that cannot normalise, and
+        // the half angle that comes out of it.
+        lanes[0] = 0.0f;
+        lanes[1] = 0.0f;
+        lanes[2] = 0.0f;
+        if (rng.Chance(40)) {
+          lanes[rng.Below(3)] = -0.0f;
+        }
+      } else if (mode < 45) {
+        // The full float mixture: NaN, infinity, denormal lanes.
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = GenFloat(rng);
+        }
+      } else if (mode < 60) {
+        // Denormal lanes: the squared length underflows, so the length is
+        // zero or denormal.
+        for (int k = 0; k < 3; ++k) {
+          lanes[k] = FromBits(0x00000001u + rng.Below(0x007FFFFFu));
+        }
+      } else {
+        GenVec3(rng, lanes);
+      }
+    }
+    typed.axisAngle = Wm3::Vector3f(lanes[0], lanes[1], lanes[2]);
+  }
+
+  __declspec(naked) void RetailQuatFromAxisAngleVector(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      // the axis-angle vector goes on the stack BY VALUE: three floats, the
+      // last lane first.
+      push dword ptr [ebp + 8]  // z
+      push dword ptr [ebp + 4]  // y
+      push dword ptr [ebp]      // x
+      mov  esi, ebx             // the retail's quaternion
+      mov  eax, 0x00697360
+      call eax
+      add  esp, 12              // the retail does not pop its arguments
+      cmp  eax, ebx             // the retail returns the quaternion pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursQuatFromAxisAngleVector(const void* in, void* out)
+  {
+    const AxisAngleVecIn& typedIn = *static_cast<const AxisAngleVecIn*>(in);
+    AxisAngleVecOut& typedOut = *static_cast<AxisAngleVecOut*>(out);
+    typedOut.returnedDest =
+      (moho::QuatFromAxisAngleVector(&typedOut.quat, typedIn.axisAngle) == &typedOut.quat) ? 1u : 0u;
+  }
+
+  // --- BuildRotationMatrixFromEulerHPR - retail 0x006D1E30 ----------------
+  //
+  //   0x006D1E30  sub  esp, 0x98
+  //   0x006D1E36  fld  dword ptr [esp + 0x9c]  <- heading (the first argument)
+  //   0x006D1E41  call 0x005734D0            <- the retail's cosf
+  //   0x006D1E54  call 0x005734E0            <- the retail's sinf
+  //   ...        (the three matrices are laid out on the stack, packed)
+  //   0x006D1F81  call 0x006D2680            <- Multiply3x3RowMatrices
+  //   0x006D1F90  call 0x006D2680            <- and once more
+  //   0x006D1F9B  call 0x00A48F30            <- memcpy(out, result, 36)
+  //   0x006D1FA0  mov  eax, esi
+  //   0x006D1FA8  ret  0xc                   <- the arguments are popped
+  //
+  // So: the output matrix in ESI, the three angles as the stack arguments
+  // (the retail pops them itself), and the return value is the output
+  // pointer.
+  //
+  // The two matrix products are `pitch * roll` and then `heading * that` -
+  // the argument order of 0x006D2680 puts the matrix pushed LAST in the "a"
+  // slot, so the first product is pitch*roll and the second heading*(pitch*roll).
+  //
+  // The retail's multiply (0x006D2680) sums `product + accumulator` starting
+  // from a +0.0f accumulator, exactly like the engine's own multiply.
+
+  struct EulerHprIn
+  {
+    float heading;
+    float pitch;
+    float roll;
+  };
+
+  struct EulerHprOut
+  {
+    Wm3::Vector3f rows[3];
+    std::uint32_t returnedDest;
+  };
+
+  void GenEulerHpr(Rng& rng, void* in, const DrawKind kind)
+  {
+    EulerHprIn& typed = *static_cast<EulerHprIn*>(in);
+    if (kind == DrawKind::Ordinary) {
+      typed.heading = static_cast<float>(rng.Range(-3.2, 3.2));
+      typed.pitch = static_cast<float>(rng.Range(-3.2, 3.2));
+      typed.roll = static_cast<float>(rng.Range(-3.2, 3.2));
+      return;
+    }
+    const float angles[3] = {GenSignedAngle(rng), GenSignedAngle(rng), GenSignedAngle(rng)};
+    typed.heading = angles[0];
+    typed.pitch = angles[1];
+    typed.roll = angles[2];
+  }
+
+  __declspec(naked) void RetailBuildRotationMatrixFromEulerHPR(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push dword ptr [ebp + 8]  // roll: the third stack argument
+      push dword ptr [ebp + 4]  // pitch: the second stack argument
+      push dword ptr [ebp]      // heading: the first stack argument
+      mov  esi, ebx             // the retail's output matrix
+      mov  eax, 0x006D1E30
+      call eax
+      // the retail pops its own arguments (`ret 0xc`)
+      cmp  eax, ebx             // the retail returns the output pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 36], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursBuildRotationMatrixFromEulerHPR(const void* in, void* out)
+  {
+    const EulerHprIn& typedIn = *static_cast<const EulerHprIn*>(in);
+    EulerHprOut& typedOut = *static_cast<EulerHprOut*>(out);
+    typedOut.returnedDest = (moho::BuildRotationMatrixFromEulerHPR(
+                               &typedOut.rows[0], typedIn.heading, typedIn.pitch, typedIn.roll)
+                             == &typedOut.rows[0])
+      ? 1u
+      : 0u;
+  }
+
+  // --- BuildTiltShortestArcDelta - retail 0x0050CB50 ----------------------
+  //
+  //   0x0050CB50  sub  esp, 0x1c
+  //   0x0050CB53  movss xmm0, [esi]        <- currentUp.x
+  //   0x0050CB57  movss xmm1, [eax + 4]    <- targetNormal.y
+  //   0x0050CB62  addss xmm0, [eax]        <- currentUp.x + targetNormal.x
+  //   0x0050CB8F  lea  ecx, [esp + 0x10]   <- the half vector
+  //   0x0050CB9F  call 0x00452AF0          <- Wm3::Vector3f::Normalize
+  //   0x0050CBC4  mulss xmm1, xmm5         <- currentUp.x * half.x
+  //   0x0050CBA6  movss xmm4, [esp + 0x18] <- half.z
+  //   0x0050CBDE  ucomiss xmm0, [0x00E4F6E0]  <- the scalar against 0.0f
+  //   0x0050CBE5  lahf / test ah, 0x44 / jnp 0x0050CC3F
+  //   0x0050CC3F  fld dword [esi] / call 0x0050D140   <- the retail's fabs
+  //   0x0050CC87  call 0x0050D150                      <- the retail's inv_sqrt
+  //
+  // So: ESI = the current up vector, EAX = the target normal, EDI = the
+  // output delta quaternion, and the return value is the output pointer.
+  //
+  // The scalar is `(currentUp.z * half.z + currentUp.x * half.x) +
+  // currentUp.y * half.y`, and the degenerate branch is taken when the
+  // `ucomiss` sets ZF - that is, when the scalar is zero **or unordered**
+  // (the `lahf`/`test ah, 0x44` sequence is the "jump if equal or unordered"
+  // idiom MSVC emits for `== 0.0f` on a NaN-producing expression).
+
+  struct TiltIn
+  {
+    Wm3::Vector3f targetNormal;
+    Wm3::Vector3f currentUp;
+  };
+
+  struct TiltOut
+  {
+    Wm3::Quaternionf quat;
+    std::uint32_t returnedDest;
+  };
+
+  void GenTilt(Rng& rng, void* in, const DrawKind kind)
+  {
+    TiltIn& typed = *static_cast<TiltIn*>(in);
+    float target[3];
+    float current[3];
+    if (kind == DrawKind::Ordinary) {
+      GenUnitVec3(rng, target);
+      GenUnitVec3(rng, current);
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 30) {
+        // exactly opposed: the half vector is degenerate and the scalar is
+        // zero - the branch that picks the perpendicular axis
+        GenUnitVec3(rng, current);
+        for (int k = 0; k < 3; ++k) {
+          target[k] = -current[k];
+        }
+      } else if (mode < 45) {
+        // the zero vectors
+        for (int k = 0; k < 3; ++k) {
+          target[k] = 0.0f;
+          current[k] = 0.0f;
+        }
+      } else if (mode < 65) {
+        // NaN and infinity lanes: the scalar is unordered
+        for (int k = 0; k < 3; ++k) {
+          target[k] = GenFloat(rng);
+          current[k] = GenFloat(rng);
+        }
+      } else {
+        GenVec3(rng, target);
+        GenVec3(rng, current);
+      }
+    }
+    typed.targetNormal = Wm3::Vector3f(target[0], target[1], target[2]);
+    typed.currentUp = Wm3::Vector3f(current[0], current[1], current[2]);
+  }
+
+  __declspec(naked) void RetailBuildTiltShortestArcDelta(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      lea  esi, [ebp + 12]      // the retail's current up vector
+      mov  edi, ebx             // the retail's output quaternion
+      lea  eax, [ebp]           // the retail's target normal
+      mov  ecx, 0x0050CB50
+      call ecx
+      cmp  eax, ebx             // the retail returns the output pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 16], eax
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursBuildTiltShortestArcDelta(const void* in, void* out)
+  {
+    const TiltIn& typedIn = *static_cast<const TiltIn*>(in);
+    TiltOut& typedOut = *static_cast<TiltOut*>(out);
+    typedOut.returnedDest = (moho::BuildTiltShortestArcDelta(
+                               typedIn.targetNormal, &typedOut.quat, typedIn.currentUp)
+                             == &typedOut.quat)
+      ? 1u
+      : 0u;
+  }
+
+  // --- BlendOrientationDeltaByMaxAngle - retail 0x004EB830 -----------------
+  //
+  //   0x004EB830  sub  esp, 0x28
+  //   0x004EB83B  fld  dword ptr [esp + 0x30]  <- the turn step (the second
+  //                                               stack argument)
+  //   0x004EB83F  movss xmm7, [ebx]           <- the goal (EBX)
+  //   0x004EB851  mov  ebp, [esp + 0x30]      <- the current (the first stack
+  //                                               argument)
+  //   0x004EB85A  subss xmm1, [ebp + 4]        <- the conjugate of the current
+  //   0x004EB946  lea  esi, [esp + 0x14]       <- the delta quaternion
+  //   0x004EB93F  fstp dword ptr [esp]         <- the turn step, for the call
+  //   0x004EB956  call 0x004EB740              <- RotateQuatByAngle
+  //   0x004EB95E  test al, al / je 0x004EBA55  <- the rejected step
+  //   0x004EBA38  mov  byte ptr [eax], 0       <- *outNoStep = false
+  //   0x004EBA4D  mov  eax, edi                <- the return value: the output
+  //   0x004EBA6C  mov  byte ptr [ecx], 1       <- *outNoStep = true
+  //
+  // So: EBX = the goal orientation, EDI = the output orientation, EBP = the
+  // current orientation (the first stack argument), the turn step (the second
+  // stack argument), the "no step" flag (the third stack argument), and the
+  // return value is the output pointer. The retail does not pop its
+  // arguments.
+  //
+  // The retail reuses the first stack argument's slot as scratch for the
+  // goal's scalar lane (0x004EB85F), which is why the rejected branch can
+  // still read the goal's scalar lane back (0x004EBA5C).
+
+  struct BlendIn
+  {
+    Wm3::Quaternionf goal;
+    Wm3::Quaternionf current;
+    float turnStep;
+  };
+
+  struct BlendOut
+  {
+    Wm3::Quaternionf quat;
+    // The retail writes the "no step" flag as a BYTE (0x004EBA38 `mov byte
+    // ptr [eax], 0` and 0x004EBA6C `mov byte ptr [ecx], 1`), and so does the
+    // engine (its `bool*` is a byte). The slot is therefore a byte, and the
+    // three bytes above it stay at the canary on both sides.
+    std::uint8_t noStep;
+    std::uint32_t returnedDest;
+  };
+
+  void GenBlend(Rng& rng, void* in, const DrawKind kind)
+  {
+    BlendIn& typed = *static_cast<BlendIn*>(in);
+    float goal[4];
+    float current[4];
+    if (kind == DrawKind::Ordinary) {
+      GenOrdinaryQuat(rng, goal);
+      GenOrdinaryQuat(rng, current);
+      typed.turnStep = static_cast<float>(rng.Range(0.0, 3.0));
+    } else {
+      GenQuat(rng, goal);
+      GenQuat(rng, current);
+      typed.turnStep = GenAngle(rng);
+    }
+    typed.goal = Wm3::Quaternionf(goal[0], goal[1], goal[2], goal[3]);
+    typed.current = Wm3::Quaternionf(current[0], current[1], current[2], current[3]);
+  }
+
+  __declspec(naked) void RetailBlendOrientationDeltaByMaxAngle(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  esi, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      mov  edi, ebx             // the retail's output orientation
+      lea  eax, [ebx + 16]      // the "no step" flag
+      push eax                  // the third stack argument
+      push dword ptr [esi + 32] // the turn step: the second stack argument
+      lea  eax, [esi + 16]      // the address of the current orientation
+      push eax                  // the first stack argument
+      lea  ebx, [esi]           // the retail's goal orientation
+      lea  ebp, [esi + 16]      // the retail's current orientation
+      mov  ecx, 0x004EB830
+      call ecx
+      add  esp, 12              // the retail does not pop its arguments
+      cmp  eax, edi             // the retail returns the output pointer
+      sete al
+      movzx eax, al
+      mov  [edi + 20], eax      // EDI is the retail's output pointer
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursBlendOrientationDeltaByMaxAngle(const void* in, void* out)
+  {
+    const BlendIn& typedIn = *static_cast<const BlendIn*>(in);
+    BlendOut& typedOut = *static_cast<BlendOut*>(out);
+    typedOut.returnedDest = (moho::BlendOrientationDeltaByMaxAngle(
+                               typedIn.goal, typedIn.current, typedIn.turnStep,
+                               reinterpret_cast<bool*>(&typedOut.noStep), &typedOut.quat)
+                             == &typedOut.quat)
+      ? 1u
+      : 0u;
+  }
+
+  // ---------------------------------------------------------------------
+  // The x87 helper rows.
+  //
+  // These four are the engine's own re-implementations of the MSVC8 CRT's
+  // float math, and each one has a retail body at the address the source
+  // comment quotes. The retail bodies are the CRT's own: the argument comes
+  // in on the stack (or, for the CRT's `_CIasin`, on the x87 stack) and the
+  // answer comes back on the x87 stack, unspilled.
+
+  // --- msvc8::atan2f - retail 0x004E9DF0 ---------------------------------
+  //
+  //   0x004E9DF0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x004E9DF6  fld  dword ptr [ebp + 8]    <- y (the first argument)
+  //   0x004E9DF9  fld  dword ptr [ebp + 0xc]  <- x (the second argument)
+  //   0x004E9DFC  fpatan
+  //   0x004E9DFE  mov  esp, ebp / pop ebp / ret
+  //
+  // So: y is the first stack argument, x the second, and the answer comes
+  // back on the x87 stack, unspilled - the harness rounds it to a float
+  // exactly once, which is what the engine's own `msvc8::atan2f` does with
+  // its `fstp result`.
+
+  struct Atan2In
+  {
+    float y;
+    float x;
+  };
+
+  struct Atan2Out
+  {
+    float result;
+  };
+
+  void GenAtan2(Rng& rng, void* in, const DrawKind kind)
+  {
+    Atan2In& typed = *static_cast<Atan2In*>(in);
+    if (kind == DrawKind::Ordinary) {
+      typed.y = static_cast<float>(rng.Range(-100.0, 100.0));
+      typed.x = static_cast<float>(rng.Range(-100.0, 100.0));
+      return;
+    }
+    const std::uint32_t mode = rng.Below(100);
+    if (mode < 35) {
+      // the corners of atan2: the origin, the four axis corners and the
+      // signed zeros
+      static constexpr float kLane[][2] = {
+        { 0.0f, 0.0f },  { 1.0f, 0.0f },  { -1.0f, 0.0f }, { 0.0f, 1.0f },
+        { 0.0f, -1.0f }, { -0.0f, 0.0f }, { 0.0f, -0.0f }, { -0.0f, -0.0f },
+      };
+      const std::uint32_t which = rng.Below(8);
+      typed.y = kLane[which][0];
+      typed.x = kLane[which][1];
+    } else if (mode < 65) {
+      typed.y = GenFloat(rng);
+      typed.x = GenFloat(rng);
+    } else {
+      typed.y = GenPlain(rng, 1000.0f);
+      typed.x = GenPlain(rng, 1000.0f);
+    }
+  }
+
+  __declspec(naked) void RetailAtan2f(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push dword ptr [ebp + 4]  // x: the second stack argument
+      push dword ptr [ebp]      // y: the first stack argument
+      mov  eax, 0x004E9DF0
+      call eax
+      add  esp, 8                // the retail does not pop its arguments
+      fstp dword ptr [ebx]       // the answer comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursAtan2f(const void* in, void* out)
+  {
+    const Atan2In& typedIn = *static_cast<const Atan2In*>(in);
+    Atan2Out& typedOut = *static_cast<Atan2Out*>(out);
+    typedOut.result = msvc8::atan2f(typedIn.y, typedIn.x);
+  }
+
+  // --- msvc8::cosf / msvc8::sinf - retail 0x005734D0 / 0x005734E0 --------
+  //
+  //   0x005734D0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x005734D6  fld  dword ptr [ebp + 8]   <- the argument
+  //   0x005734D9  fcos
+  //   0x005734DB  mov  esp, ebp / pop ebp / ret
+  //
+  //   0x005734E0  ... fld dword ptr [ebp + 8] / fsin ...
+  //
+  // So: the argument is the first stack argument, and the answer comes back
+  // on the x87 stack, unspilled. The harness rounds it to a float exactly
+  // once, which is what the engine's own `msvc8::cosf` / `msvc8::sinf` do
+  // with their `fstp result`.
+
+  struct TrigIn
+  {
+    float x;
+  };
+
+  struct TrigOut
+  {
+    float result;
+  };
+
+  // The arguments that stress the transcendental: the huge ones (the
+  // argument reduction), the exact multiples of pi/2, and the specials.
+  float GenTrigArgument(Rng& rng)
+  {
+    switch (rng.Below(16)) {
+    case 0:
+      return 0.0f;
+    case 1:
+      return -0.0f;
+    case 2:
+      return FromBits(0x40490FDBu); // pi
+    case 3:
+      return FromBits(0xC0490FDBu); // -pi
+    case 4:
+      return FromBits(0x3FC90FDBu); // pi/2
+    case 5:
+      return FromBits(0xBFC90FDBu); // -pi/2
+    case 6:
+      return FromBits(0x7F800000u); // +inf
+    case 7:
+      return FromBits(0xFF800000u); // -inf
+    case 8:
+      return FromBits(0x7FC00000u); // NaN
+    case 9:
+      return FromBits(0x00000001u); // the smallest denormal
+    case 10:
+      return FromBits(0x7F7FFFFFu); // FLT_MAX
+    case 11:
+      return FromBits(0xFF7FFFFFu); // -FLT_MAX
+    case 12:
+      return FromBits(0x5F800000u); // 2^64
+    case 13:
+      return FromBits(0x1F800000u); // 2^-64
+    case 14:
+      return static_cast<float>(rng.Range(-100.0, 100.0));
+    default:
+      return static_cast<float>(rng.Range(-1.0e6, 1.0e6));
+    }
+  }
+
+  void GenTrig(Rng& rng, void* in, const DrawKind kind)
+  {
+    TrigIn& typed = *static_cast<TrigIn*>(in);
+    typed.x = (kind == DrawKind::Ordinary) ? static_cast<float>(rng.Range(-20.0, 20.0))
+                                           : GenTrigArgument(rng);
+  }
+
+  __declspec(naked) void RetailCosf(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push dword ptr [ebp]      // the argument: the retail's first argument
+      mov  eax, 0x005734D0
+      call eax
+      add  esp, 4                // the retail does not pop its argument
+      fstp dword ptr [ebx]       // the answer comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursCosf(const void* in, void* out)
+  {
+    const TrigIn& typedIn = *static_cast<const TrigIn*>(in);
+    TrigOut& typedOut = *static_cast<TrigOut*>(out);
+    typedOut.result = msvc8::cosf(typedIn.x);
+  }
+
+  __declspec(naked) void RetailSinf(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      push dword ptr [ebp]      // the argument: the retail's first argument
+      mov  eax, 0x005734E0
+      call eax
+      add  esp, 4                // the retail does not pop its argument
+      fstp dword ptr [ebx]       // the answer comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursSinf(const void* in, void* out)
+  {
+    const TrigIn& typedIn = *static_cast<const TrigIn*>(in);
+    TrigOut& typedOut = *static_cast<TrigOut*>(out);
+    typedOut.result = msvc8::sinf(typedIn.x);
+  }
+
+  // --- msvc8::frexp - retail 0x00A8DA05 -----------------------------------
+  //
+  //   0x00A8DA05  push ebp / mov ebp, esp
+  //   0x00A8DA0C  mov  edi, dword ptr [ebp + 0x10]   <- the exponent pointer
+  //   0x00A8DA11  cmp  edi, ebx / jne 0x00A8DA34     <- a null pointer raises
+  //   0x00A8DA45  fld  qword ptr [ebp + 8]           <- the value
+  //   0x00A8DA4E  and  ax, 0x7ff0                    <- the exponent field
+  //   0x00A8DA52  cmp  ax, 0x7ff0 / jne 0x00A8DABD  <- not inf/NaN
+  //   0x00A8DA5A  or   dword ptr [edi], 0xffffffff   <- the special case
+  //   0x00A8DAC3  call 0x00A99F05                    <- the general case
+  //   0x00A8DACF  push dword ptr [ebp + 0x10] / call 0x00A9A813
+  //   0x00A8DAD4  fld  qword ptr [ebp - 8]            <- the mantissa
+  //   0x00A8DADE  ret
+  //
+  // So: the value is the first stack argument (a double), the exponent
+  // pointer the second, and the mantissa comes back on the x87 stack. The
+  // engine's `msvc8::frexp` reproduces the special cases (a non-finite value
+  // sets the exponent to -1, a zero value to 0 and answers +0) and defers to
+  // the host CRT otherwise.
+
+  struct FrexpIn
+  {
+    double value;
+  };
+
+  struct FrexpOut
+  {
+    double mantissa;
+    std::int32_t exponent;
+  };
+
+  void GenFrexp(Rng& rng, void* in, const DrawKind kind)
+  {
+    FrexpIn& typed = *static_cast<FrexpIn*>(in);
+    if (kind == DrawKind::Ordinary) {
+      typed.value = rng.Range(-1.0e6, 1.0e6);
+      return;
+    }
+    switch (rng.Below(12)) {
+    case 0:
+      typed.value = 0.0;
+      break;
+    case 1:
+      typed.value = -0.0;
+      break;
+    case 2:
+      typed.value = std::ldexp(1.0, -1074); // the smallest denormal
+      break;
+    case 3:
+      typed.value = std::ldexp(1.0, -1022); // the smallest normal
+      break;
+    case 4:
+      typed.value = 1.0e300;
+      break;
+    case 5:
+      typed.value = -1.0e300;
+      break;
+    case 6:
+      typed.value = 1.0e-300;
+      break;
+    case 7:
+      typed.value = std::numeric_limits<double>::infinity();
+      break;
+    case 8:
+      typed.value = -std::numeric_limits<double>::infinity();
+      break;
+    case 9:
+      typed.value = std::numeric_limits<double>::quiet_NaN();
+      break;
+    case 10:
+      typed.value = std::ldexp(rng.Range(1.0, 2.0), static_cast<int>(rng.Below(2200)) - 1100);
+      break;
+    default:
+      typed.value = rng.Range(-1.0e6, 1.0e6);
+      break;
+    }
+  }
+
+  __declspec(naked) void RetailFrexp(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      lea  eax, [ebx + 8]       // the exponent slot
+      push eax                  // the second stack argument
+      push dword ptr [ebp + 4]  // the value, high word
+      push dword ptr [ebp]      // the value, low word
+      mov  eax, 0x00A8DA05
+      call eax
+      add  esp, 12              // the retail does not pop its arguments
+      fstp qword ptr [ebx]       // the mantissa comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursFrexp(const void* in, void* out)
+  {
+    const FrexpIn& typedIn = *static_cast<const FrexpIn*>(in);
+    FrexpOut& typedOut = *static_cast<FrexpOut*>(out);
+    typedOut.mantissa = msvc8::frexp(typedIn.value, &typedOut.exponent);
+  }
+
+  // --- msvc8::asin - retail 0x00A8DE20 (the CRT's _CIasin) ----------------
+  //
+  //   0x00A8DE20  cmp  dword ptr [0x01107030], 0   <- global_mode_sse2
+  //   0x00A8DE27  je   0x00A8DE5B                 <- the x87 lane
+  //   0x00A8DE41  fnstcw word ptr [esp]
+  //   0x00A8DE4C  cmp  ax, 0x7f / jne 0x00A8DE5B
+  //   0x00A8DE56  jmp  0x00AA7D50                 <- the SSE2 lane
+  //   0x00A8DE5B  sub  esp, 0xc / fst qword ptr [esp] / call 0x00AA7C48
+  //
+  // The argument arrives ON THE X87 STACK (0x00AA7D59 `fstp qword ptr
+  // [esp]`), not in a register and not on the memory stack, and the answer
+  // comes back the same way.
+  //
+  // The harness seeds the retail's `global_mode_sse2` (0x01107030) with 1 and
+  // runs with MXCSR 0x1F80 and the x87 control word 0x007F, so the retail
+  // takes its SSE2 lane - exactly the lane the engine's `msvc8::asin` takes
+  // (its own `global_mode_sse2` is 1 as well).
+
+  struct AsinIn
+  {
+    double value;
+  };
+
+  struct AsinOut
+  {
+    double result;
+  };
+
+  void GenAsin(Rng& rng, void* in, const DrawKind kind)
+  {
+    AsinIn& typed = *static_cast<AsinIn*>(in);
+    if (kind == DrawKind::Ordinary) {
+      typed.value = rng.Range(-1.0, 1.0);
+      return;
+    }
+    switch (rng.Below(12)) {
+    case 0:
+      typed.value = 0.0;
+      break;
+    case 1:
+      typed.value = -0.0;
+      break;
+    case 2:
+      typed.value = 1.0;
+      break;
+    case 3:
+      typed.value = -1.0;
+      break;
+    case 4:
+      typed.value = 1.0 + std::ldexp(rng.Range(1.0, 2.0), -52); // just outside
+      break;
+    case 5:
+      typed.value = -1.0 - std::ldexp(rng.Range(1.0, 2.0), -52);
+      break;
+    case 6:
+      typed.value = 2.0;
+      break;
+    case 7:
+      typed.value = -2.0;
+      break;
+    case 8:
+      typed.value = std::numeric_limits<double>::quiet_NaN();
+      break;
+    case 9:
+      typed.value = std::numeric_limits<double>::infinity();
+      break;
+    case 10:
+      typed.value = std::ldexp(rng.Range(1.0, 2.0), -1100); // a denormal
+      break;
+    default:
+      typed.value = rng.Range(-1.0, 1.0);
+      break;
+    }
+  }
+
+  __declspec(naked) void RetailAsin(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      fld  qword ptr [ebp]      // the argument arrives on the x87 stack
+      mov  eax, 0x00A8DE20
+      call eax
+      fstp qword ptr [ebx]       // the answer comes back on the x87 stack
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursAsin(const void* in, void* out)
+  {
+    const AsinIn& typedIn = *static_cast<const AsinIn*>(in);
+    AsinOut& typedOut = *static_cast<AsinOut*>(out);
+    typedOut.result = msvc8::asin(typedIn.value);
+  }
+
   const std::vector<Target> kTargets = {
     {
       "NormalizeVectorInto",
@@ -2304,6 +3471,126 @@ namespace
       &GenValid2,
       &RetailIsValidVector2f,
       &OursIsValidVector2f,
+    },
+    {
+      "MatrixRowsToQuatCanonical",
+      0x004F0CB0u,
+      "src/moho/math/QuaternionMath.cpp:317",
+      sizeof(MatQuatIn),
+      sizeof(MatQuatOut),
+      &GenMatQuatCanonical,
+      &RetailMatrixRowsToQuatCanonical,
+      &OursMatrixRowsToQuatCanonical,
+    },
+    {
+      "MatrixColumnsToQuatCanonical",
+      0x004F0AE0u,
+      "src/moho/math/QuaternionMath.cpp:391",
+      sizeof(MatQuatIn),
+      sizeof(MatQuatOut),
+      &GenMatQuatCanonical,
+      &RetailMatrixColumnsToQuatCanonical,
+      &OursMatrixColumnsToQuatCanonical,
+    },
+    {
+      "NormalizeAngleSignedRadians",
+      0x0062FB50u,
+      "src/moho/math/QuaternionMath.cpp:117",
+      sizeof(AngleIn),
+      sizeof(AngleOut),
+      &GenAngleIn,
+      &RetailNormalizeAngleSignedRadians,
+      &OursNormalizeAngleSignedRadians,
+    },
+    {
+      "QuatFromAxisAngleVector",
+      0x00697360u,
+      "src/moho/math/QuaternionMath.cpp:719",
+      sizeof(AxisAngleVecIn),
+      sizeof(AxisAngleVecOut),
+      &GenAxisAngleVector,
+      &RetailQuatFromAxisAngleVector,
+      &OursQuatFromAxisAngleVector,
+    },
+    {
+      "BuildRotationMatrixEulerHPR",
+      0x006D1E30u,
+      "src/moho/math/QuaternionMath.cpp:840",
+      sizeof(EulerHprIn),
+      sizeof(EulerHprOut),
+      &GenEulerHpr,
+      &RetailBuildRotationMatrixFromEulerHPR,
+      &OursBuildRotationMatrixFromEulerHPR,
+    },
+    {
+      "BuildTiltShortestArcDelta",
+      0x0050CB50u,
+      "src/moho/math/QuaternionMath.cpp:983",
+      sizeof(TiltIn),
+      sizeof(TiltOut),
+      &GenTilt,
+      &RetailBuildTiltShortestArcDelta,
+      &OursBuildTiltShortestArcDelta,
+    },
+    {
+      "BlendOrientationDeltaByMaxAngle",
+      0x004EB830u,
+      "src/moho/math/QuaternionMath.cpp:739",
+      sizeof(BlendIn),
+      sizeof(BlendOut),
+      &GenBlend,
+      &RetailBlendOrientationDeltaByMaxAngle,
+      &OursBlendOrientationDeltaByMaxAngle,
+    },
+    {
+      "msvc8_atan2f",
+      0x004E9DF0u,
+      "src/legacy/math/X87Math.cpp:465",
+      sizeof(Atan2In),
+      sizeof(Atan2Out),
+      &GenAtan2,
+      &RetailAtan2f,
+      &OursAtan2f,
+    },
+    {
+      "msvc8_cosf",
+      0x005734D0u,
+      "src/legacy/math/X87Math.cpp:431",
+      sizeof(TrigIn),
+      sizeof(TrigOut),
+      &GenTrig,
+      &RetailCosf,
+      &OursCosf,
+    },
+    {
+      "msvc8_sinf",
+      0x005734E0u,
+      "src/legacy/math/X87Math.cpp:413",
+      sizeof(TrigIn),
+      sizeof(TrigOut),
+      &GenTrig,
+      &RetailSinf,
+      &OursSinf,
+    },
+    {
+      "msvc8_frexp",
+      0x00A8DA05u,
+      "src/legacy/math/X87Math.cpp:291",
+      sizeof(FrexpIn),
+      sizeof(FrexpOut),
+      &GenFrexp,
+      &RetailFrexp,
+      &OursFrexp,
+    },
+    {
+      "msvc8_asin",
+      0x00A8DE20u,
+      "src/legacy/math/X87Math.cpp:773",
+      sizeof(AsinIn),
+      sizeof(AsinOut),
+      &GenAsin,
+      &RetailAsin,
+      &OursAsin,
     },
   };
 }  // namespace

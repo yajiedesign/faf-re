@@ -4,18 +4,24 @@
 在仓库根目录的 `AGENTS.md`；`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另一个 harness
 的指引。
 
-**当前状态：表里有十九条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
+**当前状态：表里有三十一条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
 （八条：零售 `0x0044F7E0` 的 `moho::NormalizeVectorInto`，以及
 `moho::VEC_LargestAxis`、`moho::VecSetLength`、`moho::VecSetLengthTo`、
 `moho::VEC_HeadingFromXZ`、`moho::EulerRollToQuat`、`moho::IsValidVector3f`、
-`moho::IsUnitLengthVector3f`）与 `src/moho/math/QuaternionMath.cpp`（八条四元数比对项：
-`moho::MatrixToQuat`、`moho::RotateQuatByAngle`、`moho::QuatLERP`、`moho::SLERP`、
-`moho::NormalizeQuatInPlace`、`moho::QuatsNearEqual`、`moho::QuatFromVecRot`、
-`moho::QuatToAxisAndAngle`），外加 `src/moho/math/Vector4f.cpp`（一条：
-`moho::Vector4f::operator=`）与 `src/moho/math/Vector2f.cpp`（一条：
-`moho::IsValidVector2f`），再外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
+`moho::IsUnitLengthVector3f`）与 `src/moho/math/QuaternionMath.cpp`（十五条：
+八条四元数比对项 —— `moho::MatrixToQuat`、`moho::RotateQuatByAngle`、
+`moho::QuatLERP`、`moho::SLERP`、`moho::NormalizeQuatInPlace`、
+`moho::QuatsNearEqual`、`moho::QuatFromVecRot`、`moho::QuatToAxisAndAngle` ——
+外加第二批的七条：`moho::MatrixRowsToQuatCanonical`、
+`moho::MatrixColumnsToQuatCanonical`、`moho::NormalizeAngleSignedRadians`、
+`moho::QuatFromAxisAngleVector`、`moho::BuildRotationMatrixFromEulerHPR`、
+`moho::BuildTiltShortestArcDelta`、`moho::BlendOrientationDeltaByMaxAngle`），
+外加 `src/moho/math/Vector4f.cpp`（一条：`moho::Vector4f::operator=`）、
+`src/moho/math/Vector2f.cpp`（一条：`moho::IsValidVector2f`）与
+`src/legacy/math/X87Math.cpp`（五条 x87 助手：`msvc8::atan2f`、`msvc8::cosf`、
+`msvc8::sinf`、`msvc8::frexp`、`msvc8::asin` —— 它原来只是依赖 TU，现在本身也是
+被测 TU），再外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
 `moho::QuatCrossAdd`（`extract.json`；见下文“复制的闭环”）；它们带的依赖 TU 是
-`src/legacy/math/X87Math.cpp`（`msvc8::` x87 助手的实现）、
 `src/gpg/core/containers/String.cpp`（`gpg::STR_Printf`）、
 `src/legacy/containers/String.cpp`（`msvc8::string`）与 Wild Magic 的
 `Foundation/System/Wm3System.cpp`（`Wm3::Quaternion` 的拷贝赋值调用

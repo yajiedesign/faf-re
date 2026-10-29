@@ -14,7 +14,7 @@
       "why": ""
     },
     "0x004E9DF0": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x004EB3F0": {
@@ -26,7 +26,7 @@
       "why": ""
     },
     "0x004EB830": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x004EBA80": {
@@ -50,11 +50,11 @@
       "why": ""
     },
     "0x004F0AE0": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x004F0CB0": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x004FE130": {
@@ -66,16 +66,16 @@
       "why": ""
     },
     "0x0050CB50": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x0050D140": {
-      "status": "未匹配",
-      "why": ""
+      "status": "不适用",
+      "why": "零售有对应体：0x0050D140 是 `fld dword ptr [ebp + 8]; fabs` —— 取一个 float 的绝对值，答案留在 x87 栈上（没有落到内存）。但重建版的 moho::CoordsAbsFloat 在 src/moho/math/QuaternionMath.cpp 的匿名 namespace 里、只有 BuildTiltShortestArcDelta 一个调用点，编译器把它内联进去了：engine 的 QuaternionMath.cpp.obj 里根本没有这个符号（llvm-nm 查不到），harness 无法单独调用它，所以它不能作为一条独立比对项。契约也不同：零售那一侧返回的是 80 位扩展精度（st(0)），重建版返回 double（先舍入到 binary64）。零售这一侧的行为由 0x0050CB50 那一行覆盖 —— 零售的 BuildTiltShortestArcDelta 正是调用 0x0050D140 的那个函数。"
     },
     "0x0050D150": {
-      "status": "未匹配",
-      "why": ""
+      "status": "不适用",
+      "why": "零售有对应体：0x0050D150 是 `fld dword ptr [ebp + 8]; fsqrt; fld1; fdivrp` —— 1/sqrt(x)，答案留在 x87 栈上。但重建版的 moho::CoordsScaleByInvSqrt 不是它的对应物：那是一个重建版自造的复合助手（四个参数：lengthSq、a、b 和两个输出引用），把倒数与两个乘积融在一起做（源码注释写明：float 返回值会把倒数先舍入到 float 范围，denormal 输出上会差一个 ulp）。契约不同（零售是单参数、返回 st(0)；重建版是四参数、两个输出），而且它同样在匿名 namespace 里被内联进 BuildTiltShortestArcDelta，engine 的 .obj 里没有独立符号。零售那一侧对应的行为（倒数与两个乘积都留在 x87 栈上、直到 lane 存储才舍入）由 0x0050CB50 那一行覆盖。"
     },
     "0x005382E0": {
       "status": "已匹配",
@@ -98,11 +98,11 @@
       "why": ""
     },
     "0x005734D0": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x005734E0": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x005B1C90": {
@@ -110,7 +110,7 @@
       "why": ""
     },
     "0x0062FB50": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x0066D1D0": {
@@ -118,7 +118,7 @@
       "why": ""
     },
     "0x00697360": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x0069A1D0": {
@@ -138,19 +138,19 @@
       "why": ""
     },
     "0x006D1E30": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x00A3AD70": {
-      "status": "未匹配",
-      "why": ""
+      "status": "不适用",
+      "why": "零售有对应体：0x00A3AD70 确实是一个把四个 double 组成的四元数 lane 展开成 3x3 double 旋转矩阵的函数（ECX = 四元数 lane，EAX = 九个 double 的输出）。但重建版的 moho::QuaternionToRotationMatrix3x3 在 src/moho/math/QuaternionMath.cpp 的匿名 namespace 里、没有任何调用点，编译器根本没有生成它 —— engine 的 QuaternionMath.cpp.obj 里没有这个符号（llvm-nm 查不到），harness 里不存在可比的代码。而且两边的算术本来也不一样：零售那一侧整条链走 x87（在模拟的 _PC_24 下是 24 位尾数，不是 binary64），重建源码写的是普通 double 运算（binary64），即使能调用也不会逐位相同。"
     },
     "0x00A8DA05": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     },
     "0x00A8DE20": {
-      "status": "未匹配",
+      "status": "已匹配",
       "why": ""
     }
   }
