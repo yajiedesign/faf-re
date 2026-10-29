@@ -169,8 +169,8 @@ namespace moho
    * Writes the scalar-first shortest-arc quaternion rotating normalised `v1`
    * onto normalised `v2` (half-vector construction). When the half-vector
    * degenerates (opposed inputs, or NaN) it writes a half turn about the
-   * normalised `fallbackAxis` instead. Defined in `Sim.cpp`, next to its
-   * `CDebugCanvas` callers.
+   * normalised `fallbackAxis` instead. Defined in `QuaternionMath.cpp`, next
+   * to `QuatFromVecRot`, which calls it.
    */
   Wm3::Quaternionf* QuatCrossAdd(
     Wm3::Quaternionf* dest, Wm3::Vector3f v1, Wm3::Vector3f v2, const Wm3::Vector3f& fallbackAxis

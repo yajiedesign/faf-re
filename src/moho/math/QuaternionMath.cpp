@@ -1,6 +1,6 @@
 #include "QuaternionMath.h"
 #include "legacy/math/X87Math.h"
-
+#include "moho/math/Vector3f.h"
 #include <cstddef>
 #include <cmath>
 
@@ -1051,5 +1051,77 @@ namespace moho
     outDelta->y = (currentUp.z * halfAxis.x) - (currentUp.x * halfAxis.z);
     outDelta->z = (currentUp.x * halfAxis.y) - (currentUp.y * halfAxis.x);
     return outDelta;
+  }
+
+  /**
+   * Address: 0x0044F880 (FUN_0044F880, Moho::QuatCrossAdd)
+   *
+   * What it does:
+   * Builds a quaternion that rotates normalized `v1` toward normalized `v2`.
+   *
+   * The half-vector construction: normalize v1 and v2, normalize their sum,
+   * and read the rotation off dot(add, v1) plus v1 x add. The scalar lands in
+   * memory lane 0 and the cross terms in lanes 1..3, which is `Wm3::Quaternionf`
+   * `.w` then `.x/.y/.z` -- the same scalar-first layout `QuatToMatrix`
+   * (0x00452FD0) consumes, where lane 0 is the term that appears in no
+   * diagonal.
+   *
+   * An earlier pass read `FUN_0044F880.c`'s `dest->x = <dot>` literally and put
+   * the scalar in `.x`. IDA's own struct for this type names offset 0 `x`, so
+   * that line is lane 0, not `Wm3`'s `.x` (which is `m_afTuple[1]`). Every
+   * caller feeds the result straight into `MultQuadVec` -- `AddWireCircle`
+   * below, `CD3DPrimBatcher::DRAW_Circle` -- so the shift rotated every
+   * debug/prim circle out of its own plane.
+   *
+   * Self-check: v1 == v2 gives add == v1, dot == 1 and a zero cross, i.e. the
+   * identity {1,0,0,0}. Under the shifted form it gave {0,1,0,0}, a
+   * half-turn about X for two identical vectors.
+   *
+   * Degenerate half-vector (v1 and v2 opposed): `fcompi` + `jbe` at 0x0044F8E1
+   * takes the fallback when `!(Normalize(add) > 0)`, so NaN takes it too. The
+   * fallback (0x0044F970..0x0044F9A3) is a half turn about a CALLER-SUPPLIED
+   * axis, passed in `edi`: `NormalizeVectorInto(&v1copy, *edi)`, then
+   * `{w = 0, x/y/z = that normalised axis}`. It is not a half turn about v1.
+   * Callers and their asm-proven fallback axes: `QuatFromVecRot` (0x0069AAF3,
+   * (0,1,0)); `CDebugCanvas::AddWireCircle` (0x00450050),
+   * `CDebugCanvas::AddWireSphere` (0x00450139), `DRAW_WireCircle`
+   * (0x00453EF0) and `DRAW_Circle` (0x00456220), all (1,0,0).
+   *
+   * It lives here, next to the rest of the quaternion math, because
+   * `QuatFromVecRot` (0x0069AA50) below calls it: the definition used to sit
+   * in `Sim.cpp`, next to its `CDebugCanvas` callers, which put a leaf math
+   * function behind a translation unit that no other math code could link
+   * against.
+   */
+  Wm3::Quaternionf* QuatCrossAdd(
+    Wm3::Quaternionf* const dest, Wm3::Vector3f v1, Wm3::Vector3f v2, const Wm3::Vector3f& fallbackAxis
+  )
+  {
+    Wm3::Vector3f::Normalize(&v1);
+    Wm3::Vector3f::Normalize(&v2);
+
+    Wm3::Vector3f add{
+      v2.x + v1.x,
+      v1.y + v2.y,
+      v1.z + v2.z,
+    };
+
+    if (!(Wm3::Vector3f::Normalize(&add) > 0.0f)) {
+      // Opposed inputs: a half turn about the caller's fallback axis - scalar 0,
+      // the normalised axis in the imaginary lanes.
+      (void)NormalizeVectorInto(&v1, fallbackAxis);
+      dest->x = v1.x;
+      dest->y = v1.y;
+      dest->z = v1.z;
+      dest->w = 0.0f;
+      return dest;
+    }
+
+    // 0x0044F920..0x0044F952 sums the dot as (z + y) + x.
+    dest->w = ((add.z * v1.z) + (v1.y * add.y)) + (add.x * v1.x);
+    dest->x = (add.z * v1.y) - (v1.z * add.y);
+    dest->y = (v1.z * add.x) - (add.z * v1.x);
+    dest->z = (add.y * v1.x) - (v1.y * add.x);
+    return dest;
   }
 } // namespace moho

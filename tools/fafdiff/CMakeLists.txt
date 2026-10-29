@@ -45,7 +45,19 @@ set(FAFDIFF_SOURCES
   # the msvc8:: x87 helpers, and their bodies live in src/legacy/math/
   # X87Math.cpp. It is compiled with the engine's own switches as well, so
   # the helpers behave in the harness exactly as they do in the engine.
-  "${CMAKE_SOURCE_DIR}/src/legacy/math/X87Math.cpp")
+  "${CMAKE_SOURCE_DIR}/src/legacy/math/X87Math.cpp"
+  # src/moho/math/QuaternionMath.cpp is the second unit under test (the rows
+  # for moho::MatrixToQuat, moho::RotateQuatByAngle, moho::QuatLERP,
+  # moho::SLERP, moho::NormalizeQuatInPlace, moho::QuatsNearEqual,
+  # moho::QuatFromVecRot and moho::QuatToAxisAndAngle).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/QuaternionMath.cpp"
+  # A dependency of the TU above, not a unit under test: Wm3::Quaternion's
+  # copy assignment (used by QuatLERP's `*out = *q2` and by SLERP's lane
+  # copies) calls Wm3::System::Memcpy, whose body lives in Wild Magic's
+  # Foundation/System/Wm3System.cpp. It is compiled with the engine's own
+  # switches as well, so the copy behaves in the harness exactly as it does
+  # in the engine.
+  "${WM3_ROOT}/Foundation/System/Wm3System.cpp")
 
 add_executable(fafdiff EXCLUDE_FROM_ALL ${FAFDIFF_SOURCES})
 set_target_properties(fafdiff PROPERTIES OUTPUT_NAME fafdiff)

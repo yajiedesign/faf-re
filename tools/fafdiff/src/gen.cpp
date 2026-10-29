@@ -172,4 +172,104 @@ namespace fafdiff
     }
     return GenFloat(rng);
   }
+
+  void GenQuat(Rng& rng, float* q)
+  {
+    const std::uint32_t mode = rng.Below(100);
+    if (mode < 40) { // a unit quaternion, scalar first
+      double d[4];
+      do {
+        for (double& x : d) {
+          x = rng.Range(-1, 1);
+        }
+      } while (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + d[3] * d[3] < 1e-6);
+      NormalizeD(d, 4);
+      for (int i = 0; i < 4; ++i) {
+        q[i] = static_cast<float>(d[i]);
+      }
+    } else if (mode < 55) { // the same, at a magnitude that is not one
+      double d[4];
+      do {
+        for (double& x : d) {
+          x = rng.Range(-1, 1);
+        }
+      } while (d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + d[3] * d[3] < 1e-6);
+      NormalizeD(d, 4);
+      const double scale = rng.Range(0.05, 8.0);
+      for (int i = 0; i < 4; ++i) {
+        q[i] = static_cast<float>(d[i] * scale);
+      }
+    } else if (mode < 65) { // the zero quaternion (and near-zero variants)
+      for (int i = 0; i < 4; ++i) {
+        q[i] = 0.0f;
+      }
+      if (rng.Chance(50)) {
+        q[rng.Below(4)] = -0.0f;
+      }
+      if (rng.Chance(35)) {
+        q[rng.Below(4)] = FromBits(0x00000001u + rng.Below(0x007FFFFFu));
+      }
+    } else if (mode < 80) { // arbitrary finite lanes
+      for (int i = 0; i < 4; ++i) {
+        q[i] = GenFloat(rng);
+      }
+    } else { // edges: NaN, infinity, denormals and the like
+      for (int i = 0; i < 4; ++i) {
+        q[i] = rng.Chance(50) ? GenEdge(rng) : GenPlain(rng, 1.0f);
+      }
+    }
+  }
+
+  void GenQuatPair(Rng& rng, float* q1, float* q2)
+  {
+    GenQuat(rng, q1);
+    const std::uint32_t mode = rng.Below(100);
+    if (mode < 25) { // two independent quaternions
+      GenQuat(rng, q2);
+      return;
+    }
+    if (mode < 40) { // exactly antipodal: the short-arc decision turns on this
+      for (int i = 0; i < 4; ++i) {
+        q2[i] = -q1[i];
+      }
+      return;
+    }
+    const double sign = mode < 65 ? 1.0 : -1.0;
+    const double scale =
+      rng.Chance(50) ? 1.0 : std::ldexp(rng.Range(1.0, 2.0), static_cast<int>(rng.Below(20)) - 10);
+    for (int i = 0; i < 4; ++i) {
+      q2[i] = static_cast<float>(sign * scale * q1[i] + Perturbation(rng));
+    }
+  }
+
+  float GenAngle(Rng& rng)
+  {
+    const std::uint32_t mode = rng.Below(12);
+    switch (mode) {
+    case 0:
+      return 0.0f;
+    case 1:
+      return FromBits(0x40490FDBu); // pi
+    case 2:
+      return FromBits(0x40490FDBu + 1u); // pi + 1 ulp
+    case 3:
+      return FromBits(0x40490FDBu - 1u); // pi - 1 ulp
+    case 4:
+      return FromBits(0x3FC90FDBu); // pi/2
+    case 5:
+      return FromBits(0x3FC90FDBu + 1u);
+    case 6:
+      return FromBits(0xBFC90FDBu); // -pi/2
+    case 7:
+      return FromBits(0x7FC00000u); // NaN
+    case 8:
+      return FromBits(0x7F800000u); // +inf
+    case 9:
+      return static_cast<float>(rng.Range(-4.0, 4.0));
+    case 10:
+      return static_cast<float>(rng.Range(-0.01, 0.01));
+    default:
+      return GenFloat(rng);
+    }
+  }
 } // namespace fafdiff

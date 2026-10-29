@@ -60,6 +60,16 @@ namespace fafdiff
   void GenVecPair(Rng& rng, float* v1, float* v2);
   /// A blend parameter in [0,1] (plus a few edges).
   float GenT(Rng& rng);
+  /// A quaternion lane set in the engine's scalar-first order (w, x, y, z):
+  /// unit quaternions, unnormalized ones, the zero quaternion, denormal and
+  /// NaN lanes.
+  void GenQuat(Rng& rng, float* q);
+  /// Two quaternions: independent ones, near-parallel ones, and exactly
+  /// antipodal ones (the short-arc decision in SLERP/QuatLERP turns on the
+  /// sign of the dot product).
+  void GenQuatPair(Rng& rng, float* q1, float* q2);
+  /// An angle in radians, including the ones that sit on the half-angle gate.
+  float GenAngle(Rng& rng);
 
   /// Which draw a typed row's generator should make.
   ///
