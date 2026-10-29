@@ -205,7 +205,7 @@ Which of the mismatching bodies the engine actually executes
 | `Math<float>::InvSqrt` (`0x0050D150`) | no | `grep -rn "InvSqrt" src/` → only `moho::CoordsScaleByInvSqrt` (`src/moho/math/QuaternionMath.cpp:972`), never `Wm3::Math<float>::InvSqrt` |
 | `DistLine3Segment3<float>` (`0x00A809A0`/`0x00A80DE0`) | no | `grep -rn "DistLine3Segment3" src/` → 0 hits |
 | `DistSegment3Segment3<float>` (`0x00A7E2A0`/`0x00A7E480`) | no | 0 hits (only a comment in `src/moho/math/Wm3Segment3FafExtras.h:8`) |
-| `DistVector2Box2<float>` (`0x00A6C730`/`0x00A6C880`) | no (not on the CPU) | the only hit is `src/moho/render/VisionShader.h:46`, a comment above a hand-written HLSL copy of the same maths (`VisionShader.h:49-68`) |
+| `DistVector2Box2<float>` (`0x00A6C730`/`0x00A6C880`) | **yes** - corrected | reached one level down: `Wm3IntrBox2Circle2.cpp:42` calls it from `IntrBox2Circle2f::Test()`, which the engine calls at `src/moho/vision/VisionDB.cpp:89` |
 | `GenerateOrthonormalBasis` (`0x00A3CF80`) | no | 0 hits; called only from `ContMinBox`, whose only caller is its own recursion |
 
 **`X87Math` is not a bypass.** `src/legacy/math/X87Math.*` reproduces the

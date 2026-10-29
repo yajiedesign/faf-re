@@ -135,7 +135,7 @@ full run's 34 rows are 17 ordinary + 17 extreme-input rows,
 | `DistVector3Segment3<float>` | `0x00A480E0`/`0x00A484F0` | **YES** | none | `src/moho/ui/CUIWorldView.cpp:276` — `Wm3::DistVector3Segment3f pointDistance(points[index], span);`; `src/moho/projectile/Projectile.cpp:1552` — `Wm3::DistVector3Segment3f targetDistance(target->mVarDat.mCurTransform.pos_, segment);` (both include `Wm3DistVector3Segment3.h`, e.g. `Projectile.cpp:22`, `CUIWorldView.cpp:13`) |
 | `DistLine3Segment3<float>` | `0x00A809A0`/`0x00A80DE0` | **NO** — no engine call site | none | `grep -rn "DistLine3Segment3" src/` → 0 hits |
 | `DistSegment3Segment3<float>` | `0x00A7E2A0`/`0x00A7E480` | **NO** — no engine call site | none | `grep -rn "DistSegment3Segment3" src/` → 0 hits (only a comment in `src/moho/math/Wm3Segment3FafExtras.h:8` listing the class) |
-| `DistVector2Box2<float>` | `0x00A6C730`/`0x00A6C880` | **NO** (not on the CPU) | none | `grep -rn "DistVector2Box2" src/` → only `src/moho/render/VisionShader.h:46`, a comment above a **hand-written HLSL re-implementation** of the same maths (`CircleMeetsBox`, `VisionShader.h:49-68`, `precise` float). The CPU never calls the WM3.8 body |
+| `DistVector2Box2<float>` | `0x00A6C730`/`0x00A6C880` | **YES** - corrected, see the note below | `Foundation/Intersection/Wm3IntrBox2Circle2.cpp:42` calls `DistVector2Box2f::Get()` from `IntrBox2Circle2f::Test()`; the engine calls that `Test()` at `src/moho/vision/VisionDB.cpp:89`. | The original verdict here was NO, based on `grep -rn "DistVector2Box2" src/` returning only the `VisionShader.h:46` comment. That grep is correct and irrelevant: the call is one level down, inside Wild Magic. |
 | `GenerateOrthonormalBasis` | `0x00A3CF80` | **NO** — no engine call site | none | `grep -rn "GenerateOrthonormalBasis\|Orthonormalize" src/` → 0 hits |
 
 ---
@@ -150,9 +150,16 @@ full run's 34 rows are 17 ordinary + 17 extreme-input rows,
    `moho::Vector3f` is literally `Wm3::Vector3f` (`src/moho/math/Vector3f.h:8`).
 
 2. **Which mismatches are invisible to the engine?**
-   Five of the eight, and only because the engine never calls them:
+   Four of the eight, and only because the engine never calls them:
    `Math<float>::InvSqrt`, `DistLine3Segment3<float>`, `DistSegment3Segment3<float>`,
-   `DistVector2Box2<float>` (the GPU has its own HLSL copy), `GenerateOrthonormalBasis`.
+   `GenerateOrthonormalBasis`.
+
+   **Correction (2026-10-29).**  This section first said five, counting
+   `DistVector2Box2<float>`.  The 156-row audit in `reachable.md` found the call
+   one level down: `IntrBox2Circle2f::Test()` calls it
+   (`Wm3IntrBox2Circle2.cpp:42`) and the engine calls that `Test()`
+   (`src/moho/vision/VisionDB.cpp:89`).  A direct-name grep cannot see a call
+   made inside the library - the same trap the double audit recorded.
 
 3. **Which mismatches still reach the game?**
    * `Vector3<float>::Dot` — via `Wm3::Vec3f::Dot` in `VTransform.h:284` (render camera
