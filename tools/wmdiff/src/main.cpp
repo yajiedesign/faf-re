@@ -639,7 +639,7 @@ int main(int argc, char** argv)
     DebugBreak();
   }
 
-  int passed = 0, failed = 0, ran = 0, skipped = 0;
+  int passed = 0, failed = 0, ran = 0, skipped = 0, vacuous = 0;
   // WMDIFF_INT3_AT=<va>[,<va>...] plants int3s in the retail image once it is
   // mapped, so a debugger attached to this process stops there with the
   // registers live. A breakpoint set from the debugger side cannot do this: the
@@ -683,7 +683,7 @@ int main(int argc, char** argv)
 
     Rng gen(gSeed ^ (0x9E3779B97F4A7C15ull * static_cast<u64>(i + 1)));
 
-    int mismatches = 0, nanPayloadOnly = 0;
+    int mismatches = 0, nanPayloadOnly = 0, extremeSkipped = 0;
     bool crashed = false;
 
     for (int iter = 0; iter < gIters; ++iter) {
@@ -709,6 +709,7 @@ int main(int argc, char** argv)
         }
       }
       if (gSkipExtreme && extreme) {
+        ++extremeSkipped;
         continue;
       }
 
@@ -775,7 +776,14 @@ int main(int argc, char** argv)
       }
     }
 
-    if (crashed) {
+    if (gSkipExtreme && extremeSkipped == gIters) {
+      // Nothing was compared: every draw had an extreme word.  Printing this as
+      // a pass is how rows with integer/bool/mask words in their input block
+      // reported 200000/200000 without running a single input.
+      ++vacuous;
+      std::printf("[SKIP] %-18s 0x%08X  0/%d run: every draw had an extreme word"
+                  " (not a pass)\n", t.name, t.va, gIters);
+    } else if (crashed) {
       ++failed;
       std::printf("[FAIL] %s crashed\n", t.name);
     } else if (mismatches > 0) {
@@ -786,13 +794,19 @@ int main(int argc, char** argv)
         mismatches, gIters, nanNote.c_str());
     } else {
       ++passed;
-      std::printf("[PASS] %-18s 0x%08X  %d/%d bit-identical\n", t.name, t.va, gIters, gIters);
+      std::printf("[PASS] %-18s 0x%08X  %d/%d bit-identical%s\n", t.name, t.va, gIters, gIters,
+        extremeSkipped ? (" (+" + std::to_string(extremeSkipped) + " extreme inputs skipped)").c_str()
+                       : "");
     }
   }
 
   if (skipped != 0) {
     std::printf("wmdiff: %d targets skipped (not executed by the engine; "
                 "--include-dead to run them)\n", skipped);
+  }
+  if (vacuous != 0) {
+    std::printf("wmdiff: %d targets skipped with no non-extreme input; a --skip-extreme "
+                "run says nothing about them\n", vacuous);
   }
   std::printf("wmdiff: %d/%d targets passed\n", passed, ran);
   return failed == 0 ? 0 : 1;

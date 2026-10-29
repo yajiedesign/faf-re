@@ -375,6 +375,14 @@ Useful flags: `--list`, `--filter NAME` (comma-separated), `--iters`, `--seed`,
 `--cw` (x87 control word, default `0x007F`), `--snan`, `--strict-nan`,
 `--skip-extreme`, `--include-dead`, `--max-mismatch`, `--image PATH`.
 
+`--skip-extreme` drops draws whose input words look like NaN, denormals or
+values beyond 2^63 **when read as floats**, so it measures ordinary-value
+behaviour only.  A row whose input block also carries counts, indices, bools
+or mask bytes never produces an ordinary draw: it is reported as
+`[SKIP] ... 0/N run: every draw had an extreme word (not a pass)` and counted
+separately, never as a pass.  A partly skipped row says how many draws went
+(`(+N extreme inputs skipped)`).
+
 **The suite runs the targets the engine executes.**  47 of the 156 rows are
 `double` instantiations that no `src/` call site reaches - `double-audit.md`
 verifies each one - and they are skipped by default, so a run reports

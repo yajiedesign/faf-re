@@ -232,9 +232,16 @@ every one of them `dead`:
 
 Two other items are open, and neither is a rebuild defect:
 
-* **The `--skip-extreme` measurement defect.**  The filter tests every word of
-  the input block as a float, so nine rows run **zero** inputs under it and
-  report a vacuous pass (`CONCLUSIONS.md` §3.5, §7).
+* **`--skip-extreme` classifies the wrong words.**  It tests every word of the
+  input block as a float, so any row whose block also carries counts, indices,
+  bools or mask bytes runs no ordinary inputs at all.  Since 2026-10-29 the
+  harness reports those rows as `[SKIP] ... 0/N run: every draw had an extreme
+  word (not a pass)` and counts them separately, so the vacuous pass is gone;
+  what remains is the coarse classification - a float-word mask per row would
+  let those rows run their ordinary inputs instead of being skipped.  Measured
+  under `--include-dead`: **21 rows** skip every draw (4 `ContAlignedBox`, six
+  `Query2`/`Query3` pairs, three `ConvexHull` constructors, both
+  `GenerateOrthonormalBasis`).
 * **The `Query2`/`Query3` OR-vs-AND source divergence.**  The retail combines
   the simplex signs with OR where the rebuild uses AND.  `src/` never names
   `Wm3::Query2` or `Wm3::Query3`, so it is recorded rather than scheduled.
