@@ -109,6 +109,34 @@ harness 自动跟上 ✓
 ⇒ ⇒ 脚本跑在**构建期**（`add_custom_command`，依赖 `extract.json` 与源文件），不是 configure
 阶段——configure 只跑一次，源文件改了不会触发它 ✓
 
+### 加一条提取项
+
+`tools/fafdiff/extract.json` 的 `files` 数组，每个 entry：
+
+| 字段 | 必填 | 含义 |
+|---|---|---|
+| `source` | ✓ | 源文件，仓库相对路径（正斜杠） |
+| `output` | ✓ | 生成文件名，落在 `<build>/tools/fafdiff/generated/<output>` |
+| `ranges` | ✓ | `[[首行, 末行], ...]`，1-based、闭区间、互不重叠；**人写** |
+| `includes` | ✓ | 生成文件的前导 `#include`；要够它单独编译（声明所在的头、用到的类型） |
+| `sourceSha256` | ✓ | 源文件整个的 sha256 |
+| `outputSha256` | ✓ | 生成文件的 sha256；**第一次留空**，由报错给出 |
+| `note` | | 说明这是哪个符号、零售地址、对应的比对项 |
+
+步骤：
+
+1. 在 `extract.json` 里写好 `source` / `output` / `ranges` / `includes`，两个哈希都留空 `""`；
+2. `cmake --build --preset clang-x86-release --target fafdiff` ⇒ 失败。第一轮报 `sourceSha256`
+   为空并给出实际值；填上再构建，第二轮才生成文件并报 `outputSha256` 为空、给出生成哈希；
+3. **打开生成文件**，确认 `ranges` 切的正是那个完整函数（不多不少），把 `outputSha256` 填回配置；
+4. 再构建 ⇒ 通过；然后把新 TU 的符号加进 `src/targets.cpp` 的比对项，`source` 字段写**源文件**的
+   `文件:行`（不是生成文件的）。
+
+⇒ ⇒ 生成文件在 build 目录里，**永远不要手改**：改了只会让 `outputSha256` 不符，下次构建失败 ✓
+
+⇒ ⇒ 行号可以带上函数的 Doxygen 注释，也可以只切函数体；只要 `ranges` 覆盖完整定义、且不含
+相邻函数即可 ✓
+
 ## 构建与运行
 
 ```bash
