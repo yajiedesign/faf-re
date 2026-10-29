@@ -35,9 +35,9 @@ file-local helpers that no remaining row named.  The harness has no
 `--include-dead` option any more: with the dead rows gone there is nothing to
 skip, and `--list` simply lists the 46 rows that are left.
 
-**They are recoverable from git history.**  The deletion commit's parent holds
-the full 156-row table and all the code that went with it (the parent is commit
-`03b738dfe8a83374d09a8940bb6c68a9d7a95d94`):
+**They are recoverable from git history.**  The deletion is commit
+`ef0a2856`; its parent holds the full 156-row table and all the code that went
+with it (the parent is commit `03b738dfe8a83374d09a8940bb6c68a9d7a95d94`):
 
 ```bash
 git show 03b738dfe8a83374d09a8940bb6c68a9d7a95d94:tools/wmdiff/src/wm3_coll_targets.cpp   # the 108 dead coll rows
