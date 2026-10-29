@@ -28,7 +28,8 @@ the 17 float rows that survive the harness's extreme filter:
 [FAIL] Wm3::DistLine3Segment3<float>::Get(float, const Vector3<float>&, const Vector3<float>&)          0x00A80A40  8557
 ```
 
-**How the counts reconcile.** The full run (no `--skip-extreme`) fails **34** float
+**How the counts reconcile.** *(These are the counts **before** the fixes;
+§8 gives the state after.)* The full run (no `--skip-extreme`) fails **34** float
 rows; `--skip-extreme` fails **17**. The other 17 are the extreme-input rows and
 are already attributed in `float-analysis-extreme.md` (whose §1 carries the full
 34-row list). The 17 rows here are the *distinct* ordinary-input failures, and
@@ -45,6 +46,11 @@ The only artefacts built for this analysis are read-only disassembly dumps and
 small Python models under `.tmp/floatord/`; they are a measuring instrument, not
 a fix. Every claim below is backed by a disassembly excerpt plus a numeric
 reproduction that matches the retail bits *exactly*.
+
+**This document is the record of how the causes were found, and it is kept as
+written.**  The fixes that followed are listed in **§8 Resolution**, one row per
+row: eight of the seventeen are fixed, nine are not, and every one of the nine
+is a row the engine never executes.
 
 ---
 
@@ -630,6 +636,8 @@ precision any game logic can observe.
 
 ---
 
+---
+
 ## 7. Reproduction
 
 The measuring instrument lives in `.tmp/floatord/` (scratch only; nothing in
@@ -658,3 +666,48 @@ The control-word experiment of §2.0:
 
 The extreme-input rows that complete the 34-row failure set are attributed in
 `float-analysis-extreme.md`.
+
+## 8. Resolution
+
+The 17 rows of §1, one by one, after the two submodule commits.  The
+measurement is the fresh `--include-dead` run at 20 000 draws
+(`./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 20000 --include-dead`);
+the reachable rows are also 46/46 at 1 000 000 draws on each of the five seeds.
+
+| # | row | retail addr | status | mechanism |
+|---|---|---|---|---|
+| 1 | `Vector3<float>::Dot(const Vector3<float>&, const Vector3<float>&)` | `0x00452AD0` | **fixed** in `59f1614` | the sum is now `(z·z' + y·y') + x·x'` with every product and partial sum at 24 bits, i.e. the retail's association and precision |
+| 2 | `Vector3<float>::Dot(const Vector3<float>&) const` | `0x00452AD0` | **fixed** in `59f1614` | same body, same change |
+| 3 | `Vector3<float>::LengthSq(const Vector3<float>&)` | `0x004757E0` | **fixed** in `59f1614` | the three squares and the running sum stay in the extended domain; only the final result is rounded to binary32 |
+| 4 | `Vector3<float>::SquaredLength() const` | `0x004757E0` | **fixed** in `59f1614` | same body, same change |
+| 5 | `Math<float>::InvSqrt(float)` | `0x0050D150` | **still failing** | the root path is untouched: the rebuild still takes a binary64 `sqrt` where the retail takes a 24-bit `FSQRT`.  The row is `dead` (`grep -rn "InvSqrt" src/` finds only the engine's own `CoordsScaleByInvSqrt`) |
+| 6 | `DistVector3Segment3<float>::GetSquared()` | `0x00A484F0` | **fixed** in `59f1614` | the segment parameter is the retail's inlined dot (x-first, 24 bits, stored back to binary32 at `0x00A4852E`); the squared distance is the x87 chain at `0x00A48688` |
+| 7 | `DistVector3Segment3<float>::Get()` | `0x00A480E0` | **fixed** in `59f1614` | inherits row 6's chain, then the CRT root |
+| 8 | `DistVector3Segment3<float>::GetSquared(fT, v0, v1)` | `0x00A48340` | **fixed** in `59f1614` | the swept movement arithmetic follows the retail's register-resident chain |
+| 9 | `DistVector3Segment3<float>::Get(fT, v0, v1)` | `0x00A48190` | **fixed** in `59f1614` | as row 8, plus the CRT root |
+| 10 | `DistVector2Box2<float>::GetSquared(fT, v0, v1)` | `0x00A6C880` | **still failing** | the double rounding in the movement prologue (`fT·velocity` rounded to binary32 by the rebuild's `mulss`) is untouched — 338 mismatches in 20 000 draws.  `dead` |
+| 11 | `DistVector2Box2<float>::Get(fT, v0, v1)` | `0x00A6C730` | **still failing** | inherits row 10's prologue — 344 in 20 000.  `dead` |
+| 12 | `DistSegment3Segment3<float>::GetSquared(fT, v0, v1)` | `0x00A7E480` | **still failing** | the retail's own association of the long `fSqrDist` sum was never pinned down (§5), so the body was not transcribed — 3 451 in 20 000.  `dead` |
+| 13 | `DistSegment3Segment3<float>::Get(fT, v0, v1)` | `0x00A7E2A0` | **still failing** | as row 12 — 2 674 in 20 000.  `dead` |
+| 14 | `DistLine3Segment3<float>::GetSquared()` | `0x00A80DE0` | **still failing** | the retail's association of the long `fSqrDist` sum was never pinned down (§5) — 4 587 in 20 000.  `dead` |
+| 15 | `DistLine3Segment3<float>::Get()` | `0x00A809A0` | **still failing** | inherits row 14, plus the CRT root — 3 757 in 20 000.  `dead` |
+| 16 | `DistLine3Segment3<float>::GetSquared(fT, v0, v1)` | `0x00A80C10` | **still failing** | as row 14, with the movement prologue — 4 671 in 20 000.  `dead` |
+| 17 | `DistLine3Segment3<float>::Get(fT, v0, v1)` | `0x00A80A40` | **still failing** | as rows 16 and 15 — 3 867 in 20 000.  `dead` |
+
+**Eight of the seventeen are fixed; nine are not.**  The eight are the ones the
+engine reaches or that the commits' scope covered: rows 1–4 and 6–9.  The nine
+that remain are all `dead` rows, so none of them can move the game.
+
+Two further `DistSegment3Segment3` rows that are **not** among the 17 (the
+*unswept* `GetSquared()` at `0x00A7E660` and `Get()` at `0x00A7E230`, which
+passed bit-exactly when this analysis was written) now fail as well — 4 448 and
+3 660 mismatches in 20 000 draws.  The commits did not touch that body; the
+inlined-dot change in `59f1614` altered which dot the core uses, and the
+retail's own association there is still unpinned.  They are `dead` rows.
+
+The mechanism behind every one of the eight fixes is the same, and it is the
+one §2.0 identified: the retail's intermediates live in the x87 register file
+(24-bit significand, 15-bit exponent) and are rounded to binary32 only where
+the body stores them.  The helper header that carries it is
+`Foundation/Math/Wm3X87.h` in the submodule (`RoundTo24` / `Mul24` / `Add24` /
+`Sub24` / `Div24`).

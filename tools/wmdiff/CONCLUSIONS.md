@@ -2,14 +2,17 @@
 
 Scope: the whole `wmdiff` comparison table for the Wild Magic 3.8 tree, as of
 2026-10-29. This document states what the table says, why, and where the
-remaining differences belong. It is a summary, not new evidence: every claim
-below carries the pointer to the document, file:line, address or bit pattern
-that supports it, and no new experiment was run to write it.
+remaining differences belong. The analysis (§3–§5) is a summary, not new
+evidence: every claim below carries the pointer to the document, file:line,
+address or bit pattern that supports it. The counts are given twice — the
+state **before** the x87 fixes (§2.1) and the state **after** them (§2.2) —
+because the analysis is the evidence for why the fixes look the way they do.
 
 The four source documents:
 
 * `tools/wmdiff/double-audit.md` — the 47 `double` targets, all **dead**.
-* `tools/wmdiff/float-analysis-ordinary.md` — the 17 ordinary-input float failures.
+* `tools/wmdiff/float-analysis-ordinary.md` — the 17 ordinary-input float
+  failures, and their per-row resolution.
 * `tools/wmdiff/float-analysis-extreme.md` — the 17 extreme-input failures.
 * `tools/wmdiff/x87math-usage.md` — what `src/legacy/math/X87Math` does and does not cover.
 
@@ -37,13 +40,27 @@ the rebuild's `bool` test compiles to `== 1`, and the harness's mode-4 generator
 feeds `0x80` bytes (`float-analysis-extreme.md` §3.2). Nothing else in the table
 points at a wrong algorithm.
 
+**The codegen differences have since been closed at the source.**  Two commits
+on the submodule's `my0` branch (`59f1614`, `9af34dc`) reproduce the retail's
+x87 chains; §6.1 lists what changed, row by row.  The live suite — the 46 rows
+the engine executes — is now 46/46 on all five seeds at 1 000 000 draws.  The
+sections below are kept as they were written, because they are the evidence for
+*why* the fixes look the way they do; the counts in §2 are given both before
+and after.
+
 ## 2. The numbers
+
+### 2.1 Before the fixes (historical)
+
+This is the state the analysis below was written against; it is kept because
+it is the evidence for *why* the fixes look the way they do.  The harness then
+ran 109 rows (it skipped only the 47 `double` rows).
 
 | quantity | count | evidence |
 |---|---:|---|
 | rows in the comparison table | **156** | `double-audit.md` §1 ("156 项中 75 过 81 败") |
 | of those, `double` rows | **47** | `double-audit.md` §1; **all 47 are `dead`** — no `src/` call site passes a `double` to a WM3 template |
-| rows the harness actually runs (default) | **109** | 156 − 47; the harness skips the dead ones unless `--include-dead` is given |
+| rows the harness actually ran (default, then) | **109** | 156 − 47; the harness skips the dead ones unless `--include-dead` is given |
 | of the 109: **pass** | **75** | bit-identical over the corpus |
 | of the 109: **fail** | **34** | the entire remainder of the failure set |
 | — ordinary-input failures | **17** | `float-analysis-ordinary.md` §1 — **all C (codegen)**; 9 of 17 reproduced bit-exactly, 8 attributed by inheritance |
@@ -62,7 +79,7 @@ The 17 ordinary rows split as: **2** evaluation order (`Dot`), **1** root path
 (`InvSqrt`), **14** precision / exponent range (four of which also carry an
 association difference) — **S 0, H 0** (`float-analysis-ordinary.md` §6).
 
-Command lines that produce these numbers:
+Command lines that produce those numbers:
 
 ```
 ./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 200000 --seed 0x5EED2007 --max-mismatch 0
@@ -72,7 +89,38 @@ Command lines that produce these numbers:
 Full run: 75/109 pass, 34 fail. With `--skip-extreme`: 92/109 pass, 17 fail
 (`float-analysis-extreme.md` §1).
 
+### 2.2 After the fixes (current)
+
+Measured on 2026-10-29 with the two submodule commits of §6 landed:
+
+| quantity | count | evidence |
+|---|---:|---|
+| rows in the comparison table | **156** | `wmdiff.exe --list` |
+| rows the engine executes | **46** | `reachable.md` — one row per target, with the quoted `src/` call site |
+| rows the engine never executes (`dead`) | **110** | `reachable.md`; the harness skips them unless `--include-dead` is given |
+| default run: **pass / fail** | **46 / 0** | `--iters 1000000` on each of the five seeds |
+| whole table (`--include-dead`, 20 000 draws): **pass / fail** | **85 / 71** | `--include-dead` |
+| of the 71 whole-table failures: rows the engine executes | **0** | every one is a `dead` row |
+| of the 71: `double` rows | **47** | `double-audit.md` |
+| of the 71: `float` rows | **24** | the `float` dead rows listed in `reachable.md` |
+
+Command lines that produce those numbers:
+
+```
+./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 1000000 --seed 0x5EED2007
+./build/clang-x86-release/tools/wmdiff/wmdiff.exe --iters 20000 --include-dead
+```
+
+**The engine-facing surface is clean.**  The default run is 46/46 on all five
+seeds (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`) at
+1 000 000 draws.  The 71 remaining failures are all rows the engine never
+executes.
+
 ## 3. The mechanisms
+
+*Each mechanism below was identified while the rows were still failing.  The
+ones that reach the engine have been fixed at the source (§6.1); the ones that
+do not are listed in §7.*
 
 ### 3.1 Evaluation order — `Vector3<float>::Dot` (`0x00452AD0`)
 
@@ -279,7 +327,7 @@ Note also that LLVM's x87 codegen is supported but legacy: open excess-precision
 miscompiles remain (LLVM #44218, #89885), so a long-term x87 rebuild is not a
 safe foundation either.
 
-## 6. Where the fix belongs
+## 6. Where the fix belongs — and what was done
 
 Differences converge in **the rebuilt source** or **in the retail-side wiring of
 the comparison** — never in compiler flags. That leaves the WM3.8 source:
@@ -304,11 +352,11 @@ the comparison** — never in compiler flags. That leaves the WM3.8 source:
 * **The `S` row**: `Query2::ToTriangle` / `Query3::ToTetrahedron` must combine
   the signs with OR, not AND (`Foundation/RationalArithmetic/Wm3Query2.inl:92`).
 
-This is why `dependencies/WildMagic3p8` now sits on branch **`my0`**
-(`3a00c5b`, "the authoritative WM 3.8 tree with the FAF patches applied")
-rather than on upstream `main` (`9baf054`): the branch exists precisely to carry
-these source changes. The patches under `dependencies/patches/` are applied on
-top of the tree and are not committed in the submodule.
+This is why `dependencies/WildMagic3p8` sits on branch **`my0`** (`3a00c5b`,
+"the authoritative WM 3.8 tree with the FAF patches applied") rather than on
+upstream `main` (`9baf054`): the branch exists precisely to carry these source
+changes. The patches under `dependencies/patches/` are applied on top of the
+tree and are not committed in the submodule.
 
 The **H** row is not a source problem at all: the retail tests the mask byte
 against 0, the rebuild's `bool` test is `== 1`, and the harness's generator
@@ -316,29 +364,84 @@ feeds `0x80`. The engine cannot produce a `bool` array containing `0x80`, so the
 row is engine-invisible; it is a harness-input question, not a rebuild
 question.
 
+### 6.1 What was changed
+
+**The work was done.**  Two commits on the submodule's `my0` branch carry it;
+neither touches the compiler options, the harness, or the engine's own `src/`.
+
+| function | retail address | mechanism | commit |
+|---|---|---|---|
+| `Vector3<float>::Dot` (static and instance) | `0x00452AD0` | x87 sum order `(z·z' + y·y') + x·x'`, every step at 24 bits | `59f1614` |
+| `Vector3<float>::LengthSq` / `SquaredLength` | `0x004757E0` | x87 squares and sum kept in the extended domain | `59f1614` |
+| `DistVector3Segment3<float>::GetSquared` / `Get` | `0x00A484F0` / `0x00A480E0` | the inlined dot chain, stored back to binary32 at the retail's `fstp` points | `59f1614` |
+| `DistVector3Segment3<float>::GetSquared(fT,v0,v1)` / `Get(fT,v0,v1)` | `0x00A48340` / `0x00A48190` | the swept movement arithmetic on the x87 | `59f1614` |
+| the callers the retail inlines with an x-first dot (`InBox`, `IntrLine3Box3`, `IntrSegment3Sphere3`, `DistVector3Box3`) | `0x00A3BC10`, `0x00A4FE60`, `0x00A471C0`, `0x00A45C00` | the dot products spelled out instead of going through the shared reverse-order `Vector3::Dot` | `59f1614` |
+| `IntrLine3Box3<float>::Test` | `0x00A4FE60` | slab right-hand sides and the direction cross product in the extended domain | `9af34dc` |
+| `IntrLine3Box3<float>::Clip` | `0x00A4FCC0` | clip product kept in the extended domain, quotient via `Div24`, point product rounded to 24 bits before the origin is added | `9af34dc` |
+| `IntrSegment3Box3<float>::Find` / `GetPoint` | `0x00A462A0` / `0x00A46300` | inherit `Clip`'s chain | `9af34dc` |
+| `IntrBox3Sphere3<float>::Test` | `0x00A41560` | inherits the inlined-dot chain of `59f1614` | `59f1614` |
+| `ContAlignedBox<float>(int, const Vector3<float>*, const bool*)` | `0x00A3AE40` | the mask byte is tested against **0** on the raw byte, not as a `bool` | `9af34dc` |
+
+The helper header is **`Foundation/Math/Wm3X87.h`** in the submodule:
+`RoundTo24` / `Mul24` / `Add24` / `Sub24` / `Div24` — one x87 arithmetic
+instruction emulated under `_PC_24`.  The value is carried in a binary64 whose
+significand is forced back to 24 bits after every operation; the wide exponent
+of the carrier is what keeps an intermediate product that leaves binary32's
+range alive until the next `FADD` cancels it again.
+
+The gate for both commits was the live suite: **46/46 at 1 000 000 draws** on
+each of the five seeds, and the engine still builds
+(`cmake --build --preset clang-x86-release`, exit 0).
+
 ## 7. Open items
 
-1. **The `--skip-extreme` defect** (`main.cpp:704-712`). Nine rows execute zero
-   inputs under that filter and report a vacuous pass. The filter must be
-   restricted to the words that are actually floats before the next full sweep.
-   Until then, "92/109 pass with `--skip-extreme`" is not a meaningful number
-   for those nine rows.
-2. **The four S rows** (`Query2::ToTriangle` ×2, `Query3::ToTetrahedron` ×2)
-   are **unreachable** from `src/` — recorded only. The source fix (OR instead
-   of AND) is known and cheap, but it changes code the engine never runs, so it
-   should not be scheduled ahead of the reachable rows.
-3. **The engine-reaching 1-ulp differences are not resolved.** `Dot`,
-   `LengthSq`/`SquaredLength` and `DistVector3Segment3` are called by name from
-   engine code and still differ from the retail. The mechanisms are known
-   (evaluation order for `Dot`; precision / exponent range for the other two),
-   but the source-side fix is not written. A 1-ulp dot-product difference is a
-   real behavioural difference and is exactly the kind of thing a lockstep
-   simulation can amplify into a desync — `wmdiff` cannot answer whether it
-   does, because that depends on which functions a given game actually walks.
-4. The **four `DistLine3Segment3` rows** are attributed but not reproduced
-   bit-for-bit: the retail's own association of the long `fSqrDist` sum was not
-   pinned down (`float-analysis-ordinary.md` §5). The same applies to the swept
-   `DistSegment3Segment3` bodies.
+**On the engine-facing surface there is nothing left.**  The 46 rows the engine
+executes are 46/46 at 1 000 000 draws on all five seeds.  What remains open is
+below the live surface.
+
+1. **The 71 `--include-dead` failures.**  Every one of them is a row the engine
+   never executes, so none of them can move the game:
+
+   * **47 `double` rows** — `double-audit.md`; `src/` passes no `double`
+     argument to a Wild Magic template anywhere.
+   * **24 `float` rows**, in four groups:
+     * the **`DistLine3Segment3` family** (4 rows) and the **`DistSegment3Segment3`
+       family** (4 rows) — the retail's association of the long `fSqrDist` sum
+       was never pinned down (`float-analysis-ordinary.md` §5), so the two
+       commits did not touch them;
+     * the **`DistVector2Box2` swept rows** (2) — the same double rounding in
+       the movement prologue, not fixed;
+     * the **capsule and swept-sphere intersectors** (`IntrSegment3Capsule3`
+       `Find`/`GetPoint`/`GetParameter`, `IntrLine3Capsule3::Find`,
+       `IntrSegment3Sphere3` swept `Test`/`Find`, `IntrSegment3Box3::Test`) —
+       8 rows;
+     * **`Math<float>::InvSqrt`** (root path), **`GenerateOrthonormalBasis`**,
+       the masked **2D `ContAlignedBox`**, and the four **`Query2`/`Query3`**
+       rows — see item 3.
+
+   These are recorded, not scheduled: fixing them changes code the game never
+   runs, and the rule of the harness is that a row the engine cannot reach does
+   not need a comparison entry.
+2. **The `--skip-extreme` measurement defect** (`main.cpp:704-712`), **still
+   open**.  The filter tests *every* word of the input block as a float, so the
+   rows that put non-float words there (the point count, the vertex indices,
+   the `bSolid`/`bUnitLengthW` flags, the mask bytes) run **zero** inputs and
+   report a vacuous `200000/200000 bit-identical`.  Nine rows are affected:
+   the four `ContAlignedBox` rows, both `Query2::ToTriangle` rows, both
+   `Query3::ToTetrahedron` rows and `GenerateOrthonormalBasis`.  The filter
+   must be restricted to the words that are actually floats before any
+   `--skip-extreme` number is quoted as evidence.
+3. **The `Query2`/`Query3` OR-vs-AND source divergence** is real and **still
+   unfixed**: the retail combines the simplex signs with **OR** where the
+   rebuild (and the WM4 text it was translated from) uses **AND**
+   (`Foundation/RationalArithmetic/Wm3Query2.inl:92`).  It is unreachable —
+   `src/` never names `Wm3::Query2` or `Wm3::Query3`, they are reachable only
+   through `ConvexHull` — so it is recorded rather than scheduled.  The fix is
+   known and cheap.
+4. **`GenerateOrthonormalBasis`** is a 1-2 ulp x87-vs-binary32 difference
+   (C-order) that no commit has touched; it is dead for the same reason.
+5. **`InvSqrt`**'s root path is still the rebuild's binary64 `sqrt`; the row is
+   dead.
 
 ## 8. Where to read more
 

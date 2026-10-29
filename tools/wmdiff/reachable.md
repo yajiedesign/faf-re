@@ -27,9 +27,9 @@ decompiled signature and the declaration disagreed, the declaration won.
 
 | value | meaning | count |
 |---|---|---:|
-| **已匹配** | the row is compared against the retail and passes bit for bit | 75 |
+| **已匹配** | the row is compared against the retail and passes bit for bit | 85 |
 | **未匹配** | the target has no row - it is a Wild Magic function the table does not cover | 0 |
-| **失败** | the row is compared against the retail and fails | 81 |
+| **失败** | the row is compared against the retail and fails | 71 |
 | **不适用** | no row is the right answer for the target | 0 |
 
 Every target in this ledger **is** a table row, so only **已匹配** and **失败**
@@ -47,10 +47,10 @@ still need work.
 | **unsettled** - reachability not decided | **0** |
 | rows the harness runs by default | **46** |
 | rows the harness skips unless `--include-dead` is given | **110** |
-| of the default run: **已匹配** | **34** |
-| of the default run: **失败** | **12** |
-| of the whole table: **已匹配** | **75** |
-| of the whole table: **失败** | **81** |
+| of the default run: **已匹配** | **46** |
+| of the default run: **失败** | **0** |
+| of the whole table: **已匹配** | **85** |
+| of the whole table: **失败** | **71** |
 
 **A function the main project does not call does not need a comparison entry.**
 That is the rule this ledger applies: the 110 dead rows stay in the table (they
@@ -96,12 +96,12 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 1 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452AD0` | yes | `src/moho/render/camera/VTransform.h:284` `Wm3::Vec3f::Dot(rotatedNormal, transform.pos_)`; `src/moho/render/CWldTerrainDecal.cpp:65` | 失败 |
-| 2 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&) const` | `0x00452AD0` | yes | one Wild Magic call from row 5: `src/moho/collision/CColPrimitiveBase.cpp:430` -> `DistVector3Box3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Box3.cpp:56` `kDiff.Dot(m_rkBox.Axis[i])` | 失败 |
+| 1 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452AD0` | yes | `src/moho/render/camera/VTransform.h:284` `Wm3::Vec3f::Dot(rotatedNormal, transform.pos_)`; `src/moho/render/CWldTerrainDecal.cpp:65` | 已匹配 |
+| 2 | `Wm3::Vector3<float>::Dot(const Wm3::Vector3<float>&) const` | `0x00452AD0` | yes | one Wild Magic call from row 5: `src/moho/collision/CColPrimitiveBase.cpp:430` -> `DistVector3Box3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Box3.cpp:56` `kDiff.Dot(m_rkBox.Axis[i])` | 已匹配 |
 | 3 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00452BC0` | yes | `src/moho/audio/AudioEngine.cpp:1197,1199`; `src/moho/collision/CColPrimitiveBase.cpp:140,221` | 已匹配 |
 | 4 | `Wm3::Vector3<float>::Cross(const Wm3::Vector3<float>&) const` | `0x00452BC0` | yes | one Wild Magic call from row 21: `src/moho/ui/UiRuntimeTypes.cpp:21008` -> `IntrLine3Box3f::Test()` -> `Foundation/Intersection/Wm3IntrLine3Box3.cpp:44` `m_rkLine.Direction.Cross(kDiff)` | 已匹配 |
-| 5 | `Wm3::Vector3<float>::LengthSq(const Wm3::Vector3<float>&)` | `0x004757E0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:165,394,587,620`; `src/moho/audio/AudioEngine.cpp:1134`; `src/moho/ai/CAiSteeringImpl.cpp:603,637` | 失败 |
-| 6 | `Wm3::Vector3<float>::SquaredLength() const` | `0x004757E0` | yes | one Wild Magic call from row 17: `src/moho/projectile/Projectile.cpp:1553` -> `DistVector3Segment3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Segment3.cpp:72` `kDiff.SquaredLength()` | 失败 |
+| 5 | `Wm3::Vector3<float>::LengthSq(const Wm3::Vector3<float>&)` | `0x004757E0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:165,394,587,620`; `src/moho/audio/AudioEngine.cpp:1134`; `src/moho/ai/CAiSteeringImpl.cpp:603,637` | 已匹配 |
+| 6 | `Wm3::Vector3<float>::SquaredLength() const` | `0x004757E0` | yes | one Wild Magic call from row 17: `src/moho/projectile/Projectile.cpp:1553` -> `DistVector3Segment3f::GetSquared()` -> `Foundation/Distance/Wm3DistVector3Segment3.cpp:72` `kDiff.SquaredLength()` | 已匹配 |
 | 7 | `Wm3::Vector3<float>::Normalize(Wm3::Vector3<float>&, float)` | `0x00452AF0` | yes | `src/moho/entity/Entity.cpp:7664,7862,7867,7979` `Wm3::Vector3f::Normalize(&pushedUp)` -> `Foundation/Math/Wm3Vector3.h:177` -> this `Vector3&` overload | 已匹配 |
 | 8 | `Wm3::Vector3<float>::Normalize()` | `0x00452AF0` | no | `grep -rn "\.Normalize()" src/` -> only `Wm3::Vector3f::Normalize(&v)` (the *pointer* overload, row 7). This member's own callers are `Foundation/Math/Wm3Vector3.inl:322` (`UnitCross`), `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:143,176` and `Foundation/Containment/Wm3ContBox3.cpp:288,430,436,447` - none of them reachable. (The retail body `0x00452AF0` stays covered by row 7.) | 已匹配 |
 | 137 | `Wm3::Vector3<float>::GenerateOrthonormalBasis(Wm3::Vector3<float>&, Wm3::Vector3<float>&, Wm3::Vector3<float>&, bool)` | `0x00A3CF80` | no | `grep -rn "GenerateOrthonormalBasis\|Orthonormalize" src/` -> 0 hits. The Wild Magic callers (`Foundation/Containment/Wm3ContBox3.cpp:292,307,369`, `Wm3ContCapsule3.cpp:52`, `Foundation/Intersection/Wm3IntrLine3Capsule3.cpp:99`, ...) are all in classes `src/` never reaches. | 失败 |
@@ -116,7 +116,7 @@ quoted `src/` call site or by a quoted search that found nothing.
 | 9 | `Wm3::SqrtfBinary(float)` | `0x00452FC0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:171,394,442,587,620,645` | 已匹配 |
 | 47 | `Wm3::InBox<float>(const Wm3::Vector3<float>&, const Wm3::Box3<float>&)` | `0x00A3BC10` | yes | `src/moho/collision/CColPrimitiveBase.cpp:457` | 已匹配 |
 | 50 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*)` | `0x00A3AE40` | yes | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26` | 已匹配 |
-| 57 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)` | `0x00A3AE40` | yes | the same C++ function as row 50 (`Foundation/Containment/Wm3ContBox3.h:27`; the mask argument defaults to null) - reached through `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`. | 失败 |
+| 57 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector3<float>*, const bool*)` | `0x00A3AE40` | yes | the same C++ function as row 50 (`Foundation/Containment/Wm3ContBox3.h:27`; the mask argument defaults to null) - reached through `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`. | 已匹配 |
 | 58 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*)` | `0x00A685F0` | no | `grep -rn "ContAlignedBox" src/` -> one call, `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`, whose argument is `Wm3::Vector3f vertices[8]` (same file `:23`) => only the 3D overload is instantiated. The 2D overload (`Foundation/Containment/Wm3ContBox2.cpp:20`) has no caller at all. | 已匹配 |
 | 59 | `Wm3::ContAlignedBox<float>(int, const Wm3::Vector2<float>*, const bool*)` | `0x00A685F0` | no | `grep -rn "ContAlignedBox" src/` -> one call, `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:26`, whose argument is `Wm3::Vector3f vertices[8]` => only the 3D overload is instantiated. | 失败 |
 
@@ -144,19 +144,19 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 15 | `Wm3::DistVector3Box3<float>::GetSquared()` | `0x00A45C00` | yes | `src/moho/collision/CColPrimitiveBase.cpp:430` | 失败 |
-| 16 | `Wm3::DistVector3Box3<float>::Get()` | `0x00A457E0` | no | `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, and it calls `GetSquared()` (row 15). `Get()` has no other caller: `grep -rn "DistVector3Box3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3DistVector3Box3.cpp` itself and `Wm3DistRay3Box3.cpp:62` / `Wm3DistSegment3Box3.cpp:65,73` (classes `src/` never reaches). | 失败 |
-| 62 | `Wm3::DistVector3Box3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A458C0` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 失败 |
-| 63 | `Wm3::DistVector3Box3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A45A60` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 失败 |
+| 15 | `Wm3::DistVector3Box3<float>::GetSquared()` | `0x00A45C00` | yes | `src/moho/collision/CColPrimitiveBase.cpp:430` | 已匹配 |
+| 16 | `Wm3::DistVector3Box3<float>::Get()` | `0x00A457E0` | no | `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, and it calls `GetSquared()` (row 15). `Get()` has no other caller: `grep -rn "DistVector3Box3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3DistVector3Box3.cpp` itself and `Wm3DistRay3Box3.cpp:62` / `Wm3DistSegment3Box3.cpp:65,73` (classes `src/` never reaches). | 已匹配 |
+| 62 | `Wm3::DistVector3Box3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A458C0` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 已匹配 |
+| 63 | `Wm3::DistVector3Box3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A45A60` | no | the swept overload of row 15; `grep -rn "DistVector3Box3" src/` -> one use, `src/moho/collision/CColPrimitiveBase.cpp:429`, unswept. | 已匹配 |
 
 ### `Wm3::DistVector3Segment3<float>`
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 17 | `Wm3::DistVector3Segment3<float>::GetSquared()` | `0x00A484F0` | yes | `src/moho/projectile/Projectile.cpp:1553` | 失败 |
-| 18 | `Wm3::DistVector3Segment3<float>::Get()` | `0x00A480E0` | yes | `src/moho/ui/CUIWorldView.cpp:277` | 失败 |
-| 48 | `Wm3::DistVector3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48190` | no | the swept overload of row 17; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 失败 |
-| 49 | `Wm3::DistVector3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48340` | no | the swept overload of row 15; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 失败 |
+| 17 | `Wm3::DistVector3Segment3<float>::GetSquared()` | `0x00A484F0` | yes | `src/moho/projectile/Projectile.cpp:1553` | 已匹配 |
+| 18 | `Wm3::DistVector3Segment3<float>::Get()` | `0x00A480E0` | yes | `src/moho/ui/CUIWorldView.cpp:277` | 已匹配 |
+| 48 | `Wm3::DistVector3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48190` | no | the swept overload of row 17; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 已匹配 |
+| 49 | `Wm3::DistVector3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A48340` | no | the swept overload of row 15; `grep -rn "DistVector3Segment3f" src/` -> `src/moho/projectile/Projectile.cpp:1552` and `src/moho/ui/CUIWorldView.cpp:276`, both unswept. | 已匹配 |
 
 ### `Wm3::IntrBox2Circle2<float>`
 
@@ -171,7 +171,7 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 21 | `Wm3::IntrLine3Box3<float>::Test()` | `0x00A4FE60` | yes | `src/moho/ui/UiRuntimeTypes.cpp:21008` | 失败 |
+| 21 | `Wm3::IntrLine3Box3<float>::Test()` | `0x00A4FE60` | yes | `src/moho/ui/UiRuntimeTypes.cpp:21008` | 已匹配 |
 | 40 | `Wm3::IntrLine3Box3<float>::Find()` | `0x00A508F0` | no | `grep -rn "IntrLine3Box3f" src/` -> one use, `src/moho/ui/UiRuntimeTypes.cpp:21007`, and it calls `Test()` (row 21). `Find()` is called only from `Foundation/Intersection/Wm3IntrLine3Box3.cpp:77` - itself only from a `Find` that is never reached. | 已匹配 |
 | 68 | `Wm3::IntrLine3Box3<float>::DoClipping(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Box3<float>&, bool, int&, Wm3::Vector3<float>*, int&)` | `0x00A50220` | yes | one Wild Magic call from row 22: `src/moho/collision/CColPrimitiveBase.cpp:385` -> `IntrSegment3Box3f::Find()` -> `Foundation/Intersection/Wm3IntrSegment3Box3.cpp:100` `IntrLine3Box3<Real>::DoClipping(...)` | 已匹配 |
 | 69 | `Wm3::IntrLine3Box3<float>::Clip(float, float, float&, float&)` | `0x00A4FCC0` | yes | two Wild Magic calls from row 22: -> `Foundation/Intersection/Wm3IntrLine3Box3.cpp:150` (called by `DoClipping`) | 已匹配 |
@@ -180,15 +180,15 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 22 | `Wm3::IntrSegment3Box3<float>::Find()` | `0x00A462A0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:385` | 失败 |
-| 27 | `Wm3::IntrSegment3Box3<float>::GetPoint(int) const` | `0x00A46300` | yes | `src/moho/collision/CColPrimitiveBase.cpp:391,394,395` | 失败 |
+| 22 | `Wm3::IntrSegment3Box3<float>::Find()` | `0x00A462A0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:385` | 已匹配 |
+| 27 | `Wm3::IntrSegment3Box3<float>::GetPoint(int) const` | `0x00A46300` | yes | `src/moho/collision/CColPrimitiveBase.cpp:391,394,395` | 已匹配 |
 | 46 | `Wm3::IntrSegment3Box3<float>::Test()` | `0x00A46440` | no | `grep -rn "IntrSegment3Box3f" src/` -> one construction, `src/moho/collision/CColPrimitiveBase.cpp:384`, and it calls `Find()` (row 22). `Test()` has no caller: `grep -rn "IntrSegment3Box3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3IntrSegment3Box3.cpp` itself. | 失败 |
 
 ### `Wm3::Distance<float, Wm3::Vector3<float>>`
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 23 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetClosestPoint1() const` | `0x00A39230` | no | `grep -rn "Wm3::Distance\|Distance<" src/` -> 0 hits; no `Distance` object exists on the engine side. The Wild Magic callers of `GetClosestPoint1` are all in unreachable classes (`Foundation/Distance/Wm3DistLine3Circle3.cpp:99`, `Wm3DistRay3Box3.cpp:58,65`, `Wm3DistSegment3Box3.cpp:61,68,76`, `Wm3DistSegment3Rectangle3.cpp:67,80,90`, ...). | 失败 |
+| 23 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetClosestPoint1() const` | `0x00A39230` | no | `grep -rn "Wm3::Distance\|Distance<" src/` -> 0 hits; no `Distance` object exists on the engine side. The Wild Magic callers of `GetClosestPoint1` are all in unreachable classes (`Foundation/Distance/Wm3DistLine3Circle3.cpp:99`, `Wm3DistRay3Box3.cpp:58,65`, `Wm3DistSegment3Box3.cpp:61,68,76`, `Wm3DistSegment3Rectangle3.cpp:67,80,90`, ...). | 已匹配 |
 | 44 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivative(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39110` | no | virtual default of the `Distance` base; its only caller is the base's own Newton driver `Foundation/Distance/Wm3Distance.cpp:150` (`Get(fTMin,fTMax,...)`, row 70), and `src/` never enters it (`grep -rn "Wm3::Distance\|Distance<" src/` -> 0). | 已匹配 |
 | 45 | `Wm3::Distance<float, Wm3::Vector3<float>>::GetDerivativeSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A39180` | no | virtual default of the `Distance` base; only the base's own Newton driver `Foundation/Distance/Wm3Distance.cpp:150` calls it, and `src/` never enters that. | 已匹配 |
 | 70 | `Wm3::Distance<float, Wm3::Vector3<float>>::Get(float, float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A38C50` | no | the base class's Newton driver; `src/` holds no `Distance` object (`grep -rn "Wm3::Distance\|Distance<" src/` -> 0), so nothing reaches it. | 已匹配 |
@@ -200,7 +200,7 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 24 | `Wm3::IntrBox3Sphere3<float>::Test()` | `0x00A41560` | yes | `src/moho/collision/CColPrimitiveBase.cpp:608` | 失败 |
+| 24 | `Wm3::IntrBox3Sphere3<float>::Test()` | `0x00A41560` | yes | `src/moho/collision/CColPrimitiveBase.cpp:608` | 已匹配 |
 | 25 | `Wm3::IntrBox3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A43420` | yes | `src/moho/collision/CColPrimitiveBase.cpp:618` | 已匹配 |
 | 26 | `Wm3::IntrBox3Sphere3<float>::GetContactPoint() const` | `0x00A414C0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:619` | 已匹配 |
 | 51 | `Wm3::IntrBox3Sphere3<float>::GetVertexIntersection(float, float, float, float, float, float, float)` | `0x00A41740` | yes | two Wild Magic calls from row 25: `src/moho/collision/CColPrimitiveBase.cpp:618` -> `IntrBox3Sphere3f::Find(fTMax,v0,v1)` -> `Foundation/Intersection/Wm3IntrBox3Sphere3.cpp:384` (and `:480,:657`) | 已匹配 |
@@ -217,8 +217,8 @@ quoted `src/` call site or by a quoted search that found nothing.
 | 28 | `Wm3::IntrSegment3Sphere3<float>::Find()` | `0x00A471C0` | yes | `src/moho/collision/CColPrimitiveBase.cpp:578` | 已匹配 |
 | 29 | `Wm3::IntrSegment3Sphere3<float>::GetPoint(int) const` | `0x00A46940` | yes | `src/moho/collision/CColPrimitiveBase.cpp:584,587,588` | 已匹配 |
 | 30 | `Wm3::IntrSegment3Sphere3<float>::Test()` | `0x00A46C80` | no | `grep -rn "IntrSegment3Sphere3" src/` -> one construction, `src/moho/collision/CColPrimitiveBase.cpp:577`, and it calls the unswept `Find()` (row 28). `Test()` has no caller: `grep -rn "IntrSegment3Sphere3<" dependencies/WildMagic3p8/Foundation/` -> only `Wm3IntrSegment3Sphere3.cpp` itself. | 已匹配 |
-| 31 | `Wm3::IntrSegment3Sphere3<float>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46B10` | no | the swept overload of row 30; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. Its only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp` itself (the virtual slot), never reached. | 已匹配 |
-| 32 | `Wm3::IntrSegment3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46DB0` | no | the swept overload of row 28; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. | 已匹配 |
+| 31 | `Wm3::IntrSegment3Sphere3<float>::Test(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46B10` | no | the swept overload of row 30; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. Its only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp` itself (the virtual slot), never reached. | 失败 |
+| 32 | `Wm3::IntrSegment3Sphere3<float>::Find(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A46DB0` | no | the swept overload of row 28; `grep -rn "IntrSegment3Sphere3" src/` -> one hit, the unswept `Find()` call at `src/moho/collision/CColPrimitiveBase.cpp:578`. | 失败 |
 
 ### `Wm3::IntrBox2Box2<float>`
 
@@ -230,8 +230,8 @@ quoted `src/` call site or by a quoted search that found nothing.
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 34 | `Wm3::DistSegment3Segment3<float>::GetSquared()` | `0x00A7E660` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits (the class is named only in the comment `src/moho/math/Wm3Segment3FafExtras.h:8`). The Wild Magic caller `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` belongs to `DistSegment3Rectangle3`, which `src/` never reaches. | 已匹配 |
-| 35 | `Wm3::DistSegment3Segment3<float>::Get()` | `0x00A7E230` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` (unreachable class). | 已匹配 |
+| 34 | `Wm3::DistSegment3Segment3<float>::GetSquared()` | `0x00A7E660` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits (the class is named only in the comment `src/moho/math/Wm3Segment3FafExtras.h:8`). The Wild Magic caller `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` belongs to `DistSegment3Rectangle3`, which `src/` never reaches. | 失败 |
+| 35 | `Wm3::DistSegment3Segment3<float>::Get()` | `0x00A7E230` | no | `grep -rn "DistSegment3Segment3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Distance/Wm3DistSegment3Rectangle3.cpp:62` (unreachable class). | 失败 |
 | 66 | `Wm3::DistSegment3Segment3<float>::Get(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E2A0` | no | the swept overload of row 35; `grep -rn "DistSegment3Segment3" src/` -> 0 hits and the only Wild Magic caller is unreachable. | 失败 |
 | 67 | `Wm3::DistSegment3Segment3<float>::GetSquared(float, const Wm3::Vector3<float>&, const Wm3::Vector3<float>&)` | `0x00A7E480` | no | the swept overload of row 34; `grep -rn "DistSegment3Segment3" src/` -> 0 hits and the only Wild Magic caller is unreachable. | 失败 |
 
@@ -249,15 +249,15 @@ quoted `src/` call site or by a quoted search that found nothing.
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
 | 37 | `Wm3::IntrSegment3Capsule3<float>::Test()` | `0x00A6BEB0` | no | `grep -rn "IntrSegment3Capsule3\|Capsule3" src/` -> 0 hits. The Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:145,177` - the swept sphere queries, which are themselves unreachable. | 已匹配 |
-| 38 | `Wm3::IntrSegment3Capsule3<float>::Find()` | `0x00A6C070` | no | `grep -rn "IntrSegment3Capsule3\|Capsule3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:177` (unreachable). | 已匹配 |
-| 42 | `Wm3::IntrSegment3Capsule3<float>::GetPoint(int) const` | `0x00A6BDF0` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:185` (unreachable). | 已匹配 |
-| 43 | `Wm3::IntrSegment3Capsule3<float>::GetParameter(int) const` | `0x00A6BE00` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:183` (unreachable). | 已匹配 |
+| 38 | `Wm3::IntrSegment3Capsule3<float>::Find()` | `0x00A6C070` | no | `grep -rn "IntrSegment3Capsule3\|Capsule3" src/` -> 0 hits; the only Wild Magic caller is `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:177` (unreachable). | 失败 |
+| 42 | `Wm3::IntrSegment3Capsule3<float>::GetPoint(int) const` | `0x00A6BDF0` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:185` (unreachable). | 失败 |
+| 43 | `Wm3::IntrSegment3Capsule3<float>::GetParameter(int) const` | `0x00A6BE00` | no | `grep -rn "IntrSegment3Capsule3" src/` -> 0 hits; the accessor is read only in `Foundation/Intersection/Wm3IntrSegment3Sphere3.cpp:183` (unreachable). | 失败 |
 
 ### `Wm3::IntrLine3Capsule3<float>`
 
 | # | target | retail address | executed? | evidence | wmdiff status |
 |---:|---|---|---|---|---|
-| 39 | `Wm3::IntrLine3Capsule3<float>::Find(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Capsule3<float>&, float*)` | `0x00A7F920` | no | `grep -rn "IntrLine3Capsule3\|Capsule3" src/` -> 0 hits. The Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:51` and `Wm3IntrRay3Capsule3.cpp:51`, both in unreachable classes. | 已匹配 |
+| 39 | `Wm3::IntrLine3Capsule3<float>::Find(const Wm3::Vector3<float>&, const Wm3::Vector3<float>&, const Wm3::Capsule3<float>&, float*)` | `0x00A7F920` | no | `grep -rn "IntrLine3Capsule3\|Capsule3" src/` -> 0 hits. The Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:51` and `Wm3IntrRay3Capsule3.cpp:51`, both in unreachable classes. | 失败 |
 | 78 | `Wm3::IntrLine3Capsule3<float>::Test()` | `0x00A7F760` | no | `grep -rn "IntrLine3Capsule3\|Capsule3" src/` -> 0 hits; the only Wild Magic callers are `Foundation/Intersection/Wm3IntrSegment3Capsule3.cpp:51` and `Wm3IntrRay3Capsule3.cpp:51`, both unreachable. | 已匹配 |
 
 ### `Wm3::DistLine3Segment3<float>`
@@ -485,16 +485,24 @@ reach were being compared on every run - the 59 `float` rows of the float
 island, plus the 4 `double` rows the old skip list had missed - and their
 results said nothing about the engine.
 
-The 12 rows that run by default and fail are exactly the ones the float
-analysis documents (`float-analysis-ordinary.md`,
-`float-analysis-extreme.md`) already attributed: the two `Dot` rows, the two
-`LengthSq`/`SquaredLength` rows, `DistVector3Box3f::GetSquared`, `DistVector3Segment3f::Get`/`GetSquared`,
+The 46 rows that run by default now all pass.  They used to be 34 passing
+and 12 failing; the 12 failures were exactly the ones the float analysis
+documents (`float-analysis-ordinary.md`, `float-analysis-extreme.md`)
+attributed: the two `Dot` rows, the two `LengthSq`/`SquaredLength` rows,
+`DistVector3Box3f::GetSquared`, `DistVector3Segment3f::Get`/`GetSquared`,
 `IntrLine3Box3f::Test`, `IntrSegment3Box3f::Find`/`GetPoint`,
-`IntrBox3Sphere3f::Test` and the masked `ContAlignedBox`.  All of them are
+`IntrBox3Sphere3f::Test` and the masked `ContAlignedBox`.  All of them were
 **codegen** differences (the retail's x87 register file against the rebuild's
 binary32 SSE), not source differences - and the three that reach the game
 (`Dot`, `LengthSq`/`SquaredLength`, `DistVector3Segment3`) are the ones
-`x87math-usage.md` names.
+`x87math-usage.md` names.  The two submodule commits `59f1614` and `9af34dc`
+reproduce the retail's x87 chains for those rows; the mechanism per row is in
+`float-analysis-ordinary.md` under `## Resolution`.
+
+The whole table (`--include-dead`) is 85 passing and 71 failing.  Every one of
+the 71 failures is a **dead** row - the engine never executes it - and they
+are listed as 失败 in the tables below because the `--include-dead` run says
+so.
 
 ### The rows that were hardest to classify
 

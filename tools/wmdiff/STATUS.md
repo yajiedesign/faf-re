@@ -25,26 +25,36 @@ arithmetic with hardware instructions rather than with `double`.
 | entries in `kTargets[]` | **156** |
 | entries the harness runs by default | **46** |
 | entries the engine never executes - skipped unless `--include-dead` | **110** |
-| default run: pass / fail | **34 / 12** |
-| whole table (`--include-dead`): pass / fail | **75 / 81** |
+| default run: pass / fail | **46 / 0** |
+| whole table (`--include-dead`): pass / fail | **85 / 71** |
 | duplicate entries | **0** |
-| of the 81 failures: `double` rows | **47** |
-| of the 81 failures: `float` rows | **34** |
+| of the 71 whole-table failures: `double` rows | **47** |
+| of the 71 whole-table failures: `float` rows | **24** |
+| of the 71 whole-table failures: rows the engine executes | **0** |
 
-**Before this change the split was 75 / 109.**  The harness skipped only the 47
-`double` rows, so a default run exercised 109 rows - 75 passing and 34 failing.
-It now exercises **46** rows, **34** passing and **12** failing: 63 rows the
-engine cannot reach - 59 `float` rows and the 4 `double` rows the old skip list
-had missed - were being compared on every run, and their verdicts said nothing
-about the engine.  The dead rows stay in the table - they were verified bit for
-bit at some point and they cost nothing to keep - but they are skipped by
-default, so the pass/fail line is about the code the engine actually runs.
+**The live surface is clean.**  A default run is **46/46**, and it stays 46/46
+at 1,000,000 draws on each of the five seeds `0x5EED2007`, `0xDEADBEEF`,
+`0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`.  Before the two x87 fixes the same
+default run was **34 / 46**: the 12 failures were the two `Dot` rows, the two
+`LengthSq`/`SquaredLength` rows, `DistVector3Box3f::GetSquared`,
+`DistVector3Segment3f::Get`/`GetSquared`, `IntrLine3Box3f::Test`,
+`IntrSegment3Box3f::Find`/`GetPoint`, `IntrBox3Sphere3f::Test` and the masked
+`ContAlignedBox` - all of them codegen differences, closed by the submodule
+commits `59f1614` and `9af34dc`.
 
-The seeds are `0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`,
-`0xA5A5A5A5`.  The 81 failures are the `double` rows plus the `float` rows that
-`float-analysis-ordinary.md` and `float-analysis-extreme.md` attribute; a
-20,000-draw run reproduces exactly the same **75 / 81** split, and so does the
-default run's **34 / 46**.
+**Before the reachability work the split was 75 / 109.**  The harness skipped
+only the 47 `double` rows, so a default run exercised 109 rows - 75 passing and
+34 failing.  It now exercises **46** rows: 63 rows the engine cannot reach -
+59 `float` rows and the 4 `double` rows the old skip list had missed - were
+being compared on every run, and their verdicts said nothing about the engine.
+The dead rows stay in the table - they were verified bit for bit at some point
+and they cost nothing to keep - but they are skipped by default, so the
+pass/fail line is about the code the engine actually runs.
+
+The whole table (`--include-dead`, 20,000 draws) is **85 / 156**.  Every one of
+the 71 failures is a **dead** row: the engine never executes it.  They are
+listed with the `失败` status in `reachable.md` because that is what the
+`--include-dead` run says, not because anything the game runs is wrong.
 
 **The 156 entries and the "how many Wild Magic functions are there" question
 are different questions now.**  The old figure - 219 functions, from the Ghidra
@@ -72,14 +82,17 @@ intersectors, the swept distance queries, the `Distance` base class's Newton
 driver, and the private helpers of intersectors the engine only enters through
 their unswept entry points).
 
-The 12 failures among the 46 rows that run by default are the ones the float
-analysis documents already attribute: the two `Dot` rows, the two
-`LengthSq`/`SquaredLength` rows, `DistVector3Box3f::GetSquared`,
-`DistVector3Segment3f::Get`/`GetSquared`, `IntrLine3Box3f::Test`,
-`IntrSegment3Box3f::Find`/`GetPoint`, `IntrBox3Sphere3f::Test` and the masked
-`ContAlignedBox`.  All of them are **codegen** differences (the retail's x87
-register file against the rebuild's binary32 SSE), not source differences; the
-three that reach the game are the ones `x87math-usage.md` names.
+All 46 rows that run by default pass.  They used to be 34 passing and 12
+failing; the 12 failures were the ones the float analysis documents already
+attributed: the two `Dot` rows, the two `LengthSq`/`SquaredLength` rows,
+`DistVector3Box3f::GetSquared`, `DistVector3Segment3f::Get`/`GetSquared`,
+`IntrLine3Box3f::Test`, `IntrSegment3Box3f::Find`/`GetPoint`,
+`IntrBox3Sphere3f::Test` and the masked `ContAlignedBox`.  All of them were
+**codegen** differences (the retail's x87 register file against the rebuild's
+binary32 SSE), not source differences; the three that reach the game are the
+ones `x87math-usage.md` names.  The two submodule commits `59f1614` and
+`9af34dc` reproduce the retail's x87 chains for them; the per-row mechanism is
+in `float-analysis-ordinary.md` under `## Resolution`.
 
 **A new row must be audited before it is added.**  A row that is not in
 `reachable.md` has no reachability verdict, so the harness cannot tell whether
@@ -117,7 +130,29 @@ and never the swept `Find`; it calls `IntrSegment3Sphere3f::Find()` and never
 
 ## What the suite actually fixed
 
-**Two** changes have altered what the engine computes.
+**Four** changes have altered what the engine computes.
+
+**The x87 float chains (submodule `59f1614`, `9af34dc`).**  The retail's
+`float` bodies are x87 code, not SSE: the intermediate sums and products live
+on the x87 register file, where the exponent range is extended and the
+significand is 24 bits.  The rebuild compiled them as binary32 SSE, so the
+results parted company outside the float normal range.  The two commits
+reproduce the retail's chains:
+
+| function | retail address | mechanism | commit |
+|---|---|---|---|
+| `Vector3<float>::Dot` | `0x00452AD0` | x87 sum order and 24-bit rounding | `59f1614` |
+| `Vector3<float>::LengthSq` / `SquaredLength` | `0x004757E0` | x87 squares, extended exponent | `59f1614` |
+| `DistVector3Segment3<float>::Get` / `GetSquared` | `0x00A480E0` / `0x00A484F0` | the inlined dot chain | `59f1614` |
+| `IntrLine3Box3<float>::Test` | `0x00A4FE60` | x87 clip arithmetic | `9af34dc` |
+| `IntrSegment3Box3<float>::Find` / `GetPoint` | `0x00A462A0` / `0x00A46300` | the x87 line-box chain | `9af34dc` |
+| `IntrBox3Sphere3<float>::Test` | `0x00A41560` | x87 radius comparison | `9af34dc` |
+| `ContAlignedBox<float>` (masked call shape) | `0x00A3AE40` | the mask byte test | `9af34dc` |
+
+The helper header is `Foundation/Math/Wm3X87.h` (`RoundTo24`, `Mul24`,
+`Add24`, `Sub24`, `Div24`).  With those in place the default run is **46/46**
+at 1,000,000 draws on all five seeds.  The per-row account of what was wrong
+and what changed is in `float-analysis-ordinary.md` under `## Resolution`.
 
 **`ContAlignedBox<float>` did not write the box's axis.**  The retail's WM3.8
 body writes the identity into the axis before computing the centre and extents;
@@ -177,6 +212,32 @@ Two more changes were verified and cannot move the engine:
   case); 17 exist only in the rebuild.
 * **The harness cannot see the engine's own code.**  Differences inside `src/`
   are outside its reach.
+
+## What is left
+
+**Nothing on the engine-facing surface.**  All 46 rows the engine executes are
+bit-identical to the retail, at 1,000,000 draws on all five seeds.
+
+What remains are the **whole-table failures under `--include-dead`** - 71 rows,
+every one of them `dead`:
+
+* **47 `double` rows.**  `src/` passes no `double` argument to a Wild Magic
+  template anywhere (`double-audit.md`).
+* **24 `float` rows.**  The `DistLine3Segment3` and `DistSegment3Segment3`
+  families (the retail's association of the long `fSqrDist` sum was never
+  pinned down), the swept `DistVector2Box2` rows, the capsule and swept-sphere
+  intersectors, `Math<float>::InvSqrt`, `GenerateOrthonormalBasis`, the masked
+  2D `ContAlignedBox`, and the four `Query2`/`Query3` rows with the known
+  **OR-vs-AND** source divergence - which is real but unreachable.
+
+Two other items are open, and neither is a rebuild defect:
+
+* **The `--skip-extreme` measurement defect.**  The filter tests every word of
+  the input block as a float, so nine rows run **zero** inputs under it and
+  report a vacuous pass (`CONCLUSIONS.md` §3.5, §7).
+* **The `Query2`/`Query3` OR-vs-AND source divergence.**  The retail combines
+  the simplex signs with OR where the rebuild uses AND.  `src/` never names
+  `Wm3::Query2` or `Wm3::Query3`, so it is recorded rather than scheduled.
 
 ## Resuming
 
