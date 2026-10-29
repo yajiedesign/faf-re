@@ -6955,3 +6955,88 @@ what is left is `0.0f` and `0` on both sides of every draw.  **Skipping the nois
 is not the same as having something left to compare**, and an entry that can
 never fail is not an entry.  Both are `executed-not-pairable`, with that
 reasoning in the census note.
+
+## The typed path: the rows carry their own types
+
+**2026-10-29, phase 1 of the typed-row refactor.**  Every row used to be a
+block of 32-bit words: the generator filled the block, the retail thunk read
+it as floats, the harness read it as floats, and the driver compared
+`outWords` words.  That is fine for a row whose input happens to be floats,
+but it is a poor fit for a row whose input is a *class* - the row has to know
+the layout, and the harness has to guess it.
+
+`wmdiff::Target` now carries a second path.  A row that sets `genT` is a
+**typed row**:
+
+```cpp
+struct Target
+{
+  const char* name;
+  std::uint32_t va;
+  const char* source;
+  int inWords;  int outWords;                       // word path
+  const char* inLayout;  const char* outLayout;
+  void (*gen)(Rng&, std::uint32_t*);
+  void (*retail)(const std::uint32_t*, std::uint32_t*);
+  void (*ours)(const std::uint32_t*, std::uint32_t*);
+  std::uint32_t inBytes = 0;  std::uint32_t outBytes = 0;   // typed path
+  void (*genT)(Rng&, void*, DrawKind) = nullptr;
+  void (*retailT)(const void*, void*) = nullptr;
+  void (*oursT)(const void*, void*) = nullptr;
+};
+```
+
+The typed members come **last** on purpose: the rows that are still on the
+word path keep their initializers exactly as they were, and the default
+initializers leave the typed members null and zero.  A row is typed when
+`genT != nullptr`.
+
+The typed row's own file owns the input and output struct definitions; the
+driver only ever sees byte buffers (`inBytes` / `outBytes` long) and hands the
+same input buffer to both sides.  The structs hold **plain float lanes**, not
+`Wm3::Vector3<float>`: the retail thunk takes the *address* of the lanes
+(`const float*`), and so does the harness forward - which is where the
+`Wm3::Vector3<float>` is built and the real member called.
+
+### `DrawKind`: the two kinds of draw
+
+```cpp
+enum class DrawKind { Ordinary, WithExtremes };
+```
+
+* **`WithExtremes`** is the word path's mixture, extremes included.  The typed
+  generator makes *the same draws in the same order* - the same helper, the
+  same arguments, the same sequence of RNG draws - so the same seed still
+  produces the same input bytes.  That is what makes the conversion provably
+  harmless instead of merely plausible, and it is checkable: the
+  `[nan-payload]` notes land on the **same iteration numbers** as before
+  (Dot 8795, Dot-const 3583, Cross 14750, Cross-const 9636, LengthSq 9310,
+  SquaredLength 1453, Box3::ComputeVertices 136 at 20000 iterations on seed
+  0x5EED2007), and the whole 46-row report at 1000000 iterations is
+  **byte-identical** to the word-path build's, line for line.
+* **`Ordinary`** is the `--skip-extreme` draw: every lane is finite, in range
+  and normal - no NaN, no infinity, no subnormal - so a typed row always has a
+  comparable input and can never be `[SKIP]`ed.  It consumes a different number
+  of draws; the two kinds are never mixed in one run.
+
+The driver branches once per row: a typed row allocates the byte buffers,
+fills them with the canary, calls `genT(rng, in, gSkipExtreme ? Ordinary :
+WithExtremes)`, then `retailT` / `oursT`, and compares `outBytes` bytes.  The
+word path keeps its behaviour **including the word scan and the `[SKIP]`
+guard** - but the scan now runs only for word-path rows; a typed row is never
+scanned, because it draws ordinary inputs itself when `--skip-extreme` is on.
+
+### Which rows are on the typed path now
+
+Every row outside `wm3_coll_targets.cpp`: the eight `Wm3Vector3` rows, the
+two `Wm3Math` rows and the two geometry rows - twelve.  The thirty-four
+collision rows stay on the word path for now; a later phase converts them and
+then the word path itself goes away.
+
+The typed rows keep the same NaN-payload rule as the word path: a lane that
+differs but is a NaN on both sides is tallied, not failed (unless
+`--strict-nan`).
+
+**The typed path has discriminating power.**  A one-ulp perturbation of the
+rebuild's `Vector3<float>::Dot` answer fails the row **19478 / 20000** on the
+typed path - the same row, the same draws, the same comparison.

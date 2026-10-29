@@ -102,6 +102,23 @@ namespace wmdiff
   float GenAngle(Rng& rng);
   float GenT(Rng& rng);
 
+  /// Which draw a typed row's generator should make.
+  ///
+  /// WithExtremes is the word path's mixture, extremes included: the typed
+  /// generator makes *the same draws in the same order*, so the same seed
+  /// produces the same input bytes as the word path did - that is what makes
+  /// the conversion provably harmless.
+  ///
+  /// Ordinary is the --skip-extreme draw: every lane is finite, in range and
+  /// normal (no NaN, no infinity, no subnormal), so a typed row can never be
+  /// skipped for want of a comparable input. It may consume a different number
+  /// of draws - the two kinds are never mixed in one run.
+  enum class DrawKind
+  {
+    Ordinary,
+    WithExtremes
+  };
+
   struct Target
   {
     const char* name;
@@ -114,6 +131,24 @@ namespace wmdiff
     void (*gen)(Rng&, std::uint32_t* in);
     void (*retail)(const std::uint32_t* in, std::uint32_t* out);
     void (*ours)(const std::uint32_t* in, std::uint32_t* out);
+
+    // --- typed path ----------------------------------------------------------
+    //
+    // A typed row hands the two sides the *same* typed input struct and gets
+    // a typed output struct back; the row's own file owns the struct
+    // definitions, so the harness only ever sees opaque byte buffers
+    // (inBytes / outBytes long). The typed members are used when genT is not
+    // null; the word members above are used otherwise. Both are kept for now:
+    // the word path still carries the rows that have not been converted yet.
+    //
+    // The typed members come last so that a row which has not been converted
+    // keeps its initializer exactly as it was - the default initializers
+    // below leave the typed members null and zero.
+    std::uint32_t inBytes = 0;
+    std::uint32_t outBytes = 0;
+    void (*genT)(Rng&, void* in, DrawKind) = nullptr;
+    void (*retailT)(const void* in, void* out) = nullptr;
+    void (*oursT)(const void* in, void* out) = nullptr;
   };
 
   const Target* MathTargets(int& count);

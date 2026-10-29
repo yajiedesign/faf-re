@@ -3,19 +3,23 @@
 // A row is here only once its retail address is known. Most of Math has no
 // rebuild call site, so most of it is out of scope: the README's "What is in
 // scope" section and wmdiff/reachable.md list it.
+//
+// Both rows are on the typed path: the two sides are handed the same typed
+// input struct and answer with a typed output struct, and the harness only
+// ever sees the byte buffers behind them.
 
 #include "wm3_math_targets.h"
 
 #include "fuzz.h"
 
+#include <cmath>
 #include <cstdint>
 
 #include "wm3_math_harness.h"
 #include "wm3_math_thunks.h"
 
+using wmdiff::DrawKind;
 using wmdiff::FromBits;
-using wmdiff::GenAngle;
-using wmdiff::GenEdge;
 using wmdiff::GenFloat;
 using wmdiff::GenPlain;
 using wmdiff::Rng;
@@ -26,42 +30,98 @@ namespace wm3math
 {
   namespace
   {
-    // ---- input generators ---------------------------------------------------
-
-    // One arbitrary float: raw bit patterns (NaN payloads, infinities,
-    // denormals, FLT_MAX), edge values, +-k ulp neighbours and a log-uniform
-    // sweep of the exponent range.
-    void GenX1(Rng& rng, u32* in)
-    {
-      in[0] = wmdiff::Bits(GenFloat(rng));
-    }
-
-// ---- wrappers ----------------------------------------------------------
+    // ---- typed row shapes --------------------------------------------------
     //
-    // The harness and the thunks already return raw u32 bit patterns, so the
-    // retail and ours wrappers are the same shape and only the callee differs.
+    // A plain float lane, not a class: the retail thunk takes the value by
+    // value and the harness forward - which is what calls the real
+    // Math<float> member - takes a float too.
 
-#define WM3MATH_WRAP_UNARY(NAME)                     \
-    void Retail##NAME(const u32* in, u32* out)       \
-    {                                                \
-      out[0] = wm3mathretail::NAME(FromBits(in[0])); \
-    }                                                \
-    void Ours##NAME(const u32* in, u32* out)         \
-    {                                                \
-      out[0] = wm3mathharness::NAME(FromBits(in[0])); \
+    struct ScalarIn
+    {
+      float x;
+    };
+
+    struct ScalarOut
+    {
+      // The answer is carried as the float it is, so the bytes compared are
+      // the float's own bit pattern - exactly what the word path compared.
+      float ret;
+    };
+
+    // ---- typed generator ---------------------------------------------------
+    //
+    // WithExtremes draws exactly what the word path drew: one GenFloat, in
+    // the same place in the sequence, so the same seed still produces the
+    // same input bytes.
+    //
+    // Ordinary is the --skip-extreme draw: a finite, in-range, normal lane -
+    // no NaN, no infinity, no subnormal. The square root's lane is
+    // non-negative, so the answer is not a NaN either.
+
+    void GenAbsT(Rng& rng, void* p, DrawKind kind)
+    {
+      ScalarIn& in = *static_cast<ScalarIn*>(p);
+      if (kind == DrawKind::WithExtremes) {
+        in.x = GenFloat(rng);
+        return;
+      }
+      in.x = GenPlain(rng, 1000.0f);
     }
 
-    WM3MATH_WRAP_UNARY(FAbs)
-    WM3MATH_WRAP_UNARY(Sqrt)
+    void GenSqrtT(Rng& rng, void* p, DrawKind kind)
+    {
+      ScalarIn& in = *static_cast<ScalarIn*>(p);
+      if (kind == DrawKind::WithExtremes) {
+        in.x = GenFloat(rng);
+        return;
+      }
+      in.x = std::fabs(GenPlain(rng, 1000.0f));
+    }
 
-#undef WM3MATH_WRAP_UNARY
+    // ---- both sides --------------------------------------------------------
+    //
+    // The harness and the thunks already answer with raw u32 bit patterns,
+    // so the retail and ours wrappers are the same shape and only the callee
+    // differs; FromBits puts the pattern back into the float lane the
+    // comparison reads.
 
+    void FAbsRetailT(const void* p, void* q)
+    {
+      const ScalarIn& in = *static_cast<const ScalarIn*>(p);
+      ScalarOut& out = *static_cast<ScalarOut*>(q);
+      out.ret = FromBits(wm3mathretail::FAbs(in.x));
+    }
+
+    void FAbsOursT(const void* p, void* q)
+    {
+      const ScalarIn& in = *static_cast<const ScalarIn*>(p);
+      ScalarOut& out = *static_cast<ScalarOut*>(q);
+      out.ret = FromBits(wm3mathharness::FAbs(in.x));
+    }
+
+    void SqrtRetailT(const void* p, void* q)
+    {
+      const ScalarIn& in = *static_cast<const ScalarIn*>(p);
+      ScalarOut& out = *static_cast<ScalarOut*>(q);
+      out.ret = FromBits(wm3mathretail::Sqrt(in.x));
+    }
+
+    void SqrtOursT(const void* p, void* q)
+    {
+      const ScalarIn& in = *static_cast<const ScalarIn*>(p);
+      ScalarOut& out = *static_cast<ScalarOut*>(q);
+      out.ret = FromBits(wm3mathharness::Sqrt(in.x));
+    }
   } // namespace
 
   const wmdiff::Target kMathTargets[] = {
-    //  name                 va          our source                                  inW outW inLayout  outLayout  gen          retail              ours
-    { "Wm3::Math<float>::FAbs(float)", 0x0040DAB0, "Foundation/Math/Wm3Math.inl:82",           1, 1, "x",       "ret",      GenX1,        RetailFAbs,          OursFAbs },
-    { "Wm3::Math<float>::Sqrt(float)", 0x00452FC0, "Foundation/Math/Wm3Math.inl:142",          1, 1, "x",       "ret",      GenX1,        RetailSqrt,          OursSqrt },
+    //  name                 va          our source                                  inW outW inLayout  outLayout  gen retail ours
+    { "Wm3::Math<float>::FAbs(float)", 0x0040DAB0, "Foundation/Math/Wm3Math.inl:82",           0, 0, "x",       "ret",      nullptr, nullptr, nullptr,
+      static_cast<std::uint32_t>(sizeof(ScalarIn)), static_cast<std::uint32_t>(sizeof(ScalarOut)),
+      GenAbsT, FAbsRetailT, FAbsOursT },
+    { "Wm3::Math<float>::Sqrt(float)", 0x00452FC0, "Foundation/Math/Wm3Math.inl:142",          0, 0, "x",       "ret",      nullptr, nullptr, nullptr,
+      static_cast<std::uint32_t>(sizeof(ScalarIn)), static_cast<std::uint32_t>(sizeof(ScalarOut)),
+      GenSqrtT, SqrtRetailT, SqrtOursT },
   };
 
   const wmdiff::Target* Targets(int& count)

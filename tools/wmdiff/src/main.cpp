@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "wm3_coll_targets.h"
 
@@ -325,6 +326,18 @@ namespace
     return 0;
   }
 
+  // The typed path's counterpart: the row's own file owns the input and output
+  // struct types, so the harness only ever passes opaque byte buffers.
+  DWORD CallGuardedTyped(void (*fn)(const void*, void*), const void* in, void* out) noexcept
+  {
+    __try {
+      fn(in, out);
+    } __except (GuardFilter(GetExceptionInformation())) {
+      return gLastCode;
+    }
+    return 0;
+  }
+
   // A retail void(void) C-init entry. wmdiff runs the two entries whose BSS
   // results the targets read (0x00BEDC30 computes float pi at 0x00FB78FC,
   // 0x00BEDC60 computes pi/2 at 0x00FB7914); the retail CRT would have run
@@ -386,6 +399,36 @@ namespace
     }
     PrintWords("retail", outR, t.outWords, t.outLayout);
     PrintWords("ours  ", outO, t.outWords, t.outLayout);
+  }
+
+  // The typed path's mismatch report: the row's struct layout is the row
+  // file's business, so the lanes are printed as raw words.
+  void PrintMismatchTyped(const wmdiff::Target& t, int iter, const unsigned char* in,
+    const unsigned char* outR, const unsigned char* outO)
+  {
+    std::printf("[MISMATCH] %s (retail 0x%08X vs %s) iter %d  inputs (typed):\n",
+      t.name, t.va, t.source, iter);
+    for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+      u32 w = 0;
+      std::memcpy(&w, in + k, 4);
+      std::printf("        %08X(%g)\n", w, static_cast<double>(FromBits(w)));
+    }
+    for (std::uint32_t k = 0; k + 4 <= t.outBytes; k += 4) {
+      u32 r = 0, o = 0;
+      std::memcpy(&r, outR + k, 4);
+      std::memcpy(&o, outO + k, 4);
+      std::printf("        %08X(%g)  vs  %08X(%g)\n", r, static_cast<double>(FromBits(r)),
+        o, static_cast<double>(FromBits(o)));
+    }
+  }
+
+  /// Fill a byte buffer with the canary, one 32-bit word at a time.
+  void FillCanary(unsigned char* p, const std::size_t bytes) noexcept
+  {
+    for (std::size_t k = 0; k + 4 <= bytes; k += 4) {
+      const u32 canary = wmdiff::kCanary;
+      std::memcpy(p + k, &canary, 4);
+    }
   }
 
   void Usage()
@@ -473,9 +516,15 @@ int main(int argc, char** argv)
     std::printf("%-18s %-10s %-52s %s\n", "name", "retail VA", "our source", "layouts");
     for (int i = 0; i < count; ++i) {
       const wmdiff::Target& t = targets[i];
-      std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s\n", t.name, t.va,
-        t.source[0] ? t.source : "(none)", t.inLayout, t.outLayout,
-        t.va == 0 ? "   [TODO: retail VA not filled in]" : "");
+      if (t.genT != nullptr) {
+        std::printf("%-18s 0x%08X %-52s typed in[%uB] out[%uB]\n", t.name, t.va,
+          t.source[0] ? t.source : "(none)", t.inBytes, t.outBytes);
+      }
+      else {
+        std::printf("%-18s 0x%08X %-52s in[%s] out[%s]%s\n", t.name, t.va,
+          t.source[0] ? t.source : "(none)", t.inLayout, t.outLayout,
+          t.va == 0 ? "   [TODO: retail VA not filled in]" : "");
+      }
     }
     return 0;
   }
@@ -675,77 +724,157 @@ int main(int argc, char** argv)
     int mismatches = 0, nanPayloadOnly = 0, extremeSkipped = 0;
     bool crashed = false;
 
+    // A row is on the typed path when it carries a typed generator. The typed
+    // path's buffers are byte buffers: the row's own file owns the input and
+    // output struct types, and the harness must not know them.
+    const bool typed = t.genT != nullptr;
+    std::vector<unsigned char> tin;
+    std::vector<unsigned char> toutR;
+    std::vector<unsigned char> toutO;
+    if (typed) {
+      tin.assign(t.inBytes, 0);
+      toutR.assign(t.outBytes, 0);
+      toutO.assign(t.outBytes, 0);
+    }
+
+    if (gStackLimit == nullptr) {
+      MEMORY_BASIC_INFORMATION stackInfo{};
+      ULONG_PTR low = 0, high = 0;
+      GetCurrentThreadStackLimits(&low, &high);
+      gStackLimit = reinterpret_cast<const void*>(low);
+    }
+
     for (int iter = 0; iter < gIters; ++iter) {
+      bool bad = false, onlyNanPayload = true;
+      bool extreme = false;
+      // The word path's buffers. Declared here because the mismatch report
+      // below reads them; the typed path does not touch them.
       u32 in[wmdiff::kMaxWords];
       u32 outR[wmdiff::kMaxWords];
       u32 outO[wmdiff::kMaxWords];
 
-      for (int k = 0; k < t.inWords; ++k) {
-        in[k] = wmdiff::kCanary;
-      }
-      for (int k = 0; k < t.outWords; ++k) {
-        outR[k] = wmdiff::kCanary;
-        outO[k] = wmdiff::kCanary;
-      }
+      if (typed) {
+        // ---- typed path --------------------------------------------------
+        //
+        // The canary goes into the byte buffers exactly as it goes into the
+        // word buffers on the word path: a lane nobody writes still shows up
+        // as 0xCDCDCDCD. The typed row is never scanned for extreme words -
+        // it draws ordinary inputs itself when --skip-extreme is on.
+        FillCanary(tin.data(), tin.size());
+        FillCanary(toutR.data(), toutR.size());
+        FillCanary(toutO.data(), toutO.size());
 
-      t.gen(gen, in);
+        t.genT(gen, tin.data(), gSkipExtreme ? wmdiff::DrawKind::Ordinary
+                                             : wmdiff::DrawKind::WithExtremes);
 
-      bool extreme = false;
-      for (int k = 0; k < t.inWords; ++k) {
-        if (IsNan(in[k]) || std::fabs(static_cast<double>(FromBits(in[k]))) > 9.2e18
-          || (FromBits(in[k]) != 0.0f && std::fabs(static_cast<double>(FromBits(in[k]))) < 1.2e-38)) {
-          extreme = true;
+        SetFpEnv();
+        {
+          const DWORD code = CallGuardedTyped(t.retailT, tin.data(), toutR.data());
+          if (code != 0) {
+            std::printf("[CRASH] %s retail side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
+              t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
+            DumpStackFrames();
+            for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+              u32 w = 0;
+              std::memcpy(&w, tin.data() + k, 4);
+              std::printf(" %08X", w);
+            }
+            std::printf("\n");
+            crashed = true;
+            break;
+          }
+        }
+
+        SetFpEnv();
+        {
+          const DWORD code = CallGuardedTyped(t.oursT, tin.data(), toutO.data());
+          if (code != 0) {
+            std::printf("[CRASH] %s our side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
+              t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
+            for (std::uint32_t k = 0; k + 4 <= t.inBytes; k += 4) {
+              u32 w = 0;
+              std::memcpy(&w, tin.data() + k, 4);
+              std::printf(" %08X", w);
+            }
+            std::printf("\n");
+            crashed = true;
+            break;
+          }
+        }
+
+        for (std::uint32_t k = 0; k + 4 <= t.outBytes; k += 4) {
+          u32 r = 0, o = 0;
+          std::memcpy(&r, toutR.data() + k, 4);
+          std::memcpy(&o, toutO.data() + k, 4);
+          if (r != o) {
+            if (!(IsNan(r) && IsNan(o))) {
+              onlyNanPayload = false;
+            }
+            bad = true;
+          }
         }
       }
-      if (gSkipExtreme && extreme) {
-        ++extremeSkipped;
-        continue;
-      }
-
-      SetFpEnv();
-      if (gStackLimit == nullptr) {
-        MEMORY_BASIC_INFORMATION stackInfo{};
-        ULONG_PTR low = 0, high = 0;
-        GetCurrentThreadStackLimits(&low, &high);
-        gStackLimit = reinterpret_cast<const void*>(low);
-      }
-      {
-        const DWORD code = CallGuarded(t.retail, in, outR);
-        if (code != 0) {
-          std::printf("[CRASH] %s retail side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
-            t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
-          DumpStackFrames();
-          for (int k = 0; k < t.inWords; ++k) {
-            std::printf(" %08X", in[k]);
-          }
-          std::printf("\n");
-          crashed = true;
-          break;
+      else {
+        // ---- word path ---------------------------------------------------
+        for (int k = 0; k < t.inWords; ++k) {
+          in[k] = wmdiff::kCanary;
         }
-      }
-
-      SetFpEnv();
-      {
-        const DWORD code = CallGuarded(t.ours, in, outO);
-        if (code != 0) {
-          std::printf("[CRASH] %s our side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
-            t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
-          for (int k = 0; k < t.inWords; ++k) {
-            std::printf(" %08X", in[k]);
-          }
-          std::printf("\n");
-          crashed = true;
-          break;
+        for (int k = 0; k < t.outWords; ++k) {
+          outR[k] = wmdiff::kCanary;
+          outO[k] = wmdiff::kCanary;
         }
-      }
 
-      bool bad = false, onlyNanPayload = true;
-      for (int k = 0; k < t.outWords; ++k) {
-        if (outR[k] != outO[k]) {
-          if (!(IsNan(outR[k]) && IsNan(outO[k]))) {
-            onlyNanPayload = false;
+        t.gen(gen, in);
+
+        for (int k = 0; k < t.inWords; ++k) {
+          if (IsNan(in[k]) || std::fabs(static_cast<double>(FromBits(in[k]))) > 9.2e18
+            || (FromBits(in[k]) != 0.0f && std::fabs(static_cast<double>(FromBits(in[k]))) < 1.2e-38)) {
+            extreme = true;
           }
-          bad = true;
+        }
+        if (gSkipExtreme && extreme) {
+          ++extremeSkipped;
+          continue;
+        }
+
+        SetFpEnv();
+        {
+          const DWORD code = CallGuarded(t.retail, in, outR);
+          if (code != 0) {
+            std::printf("[CRASH] %s retail side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
+              t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
+            DumpStackFrames();
+            for (int k = 0; k < t.inWords; ++k) {
+              std::printf(" %08X", in[k]);
+            }
+            std::printf("\n");
+            crashed = true;
+            break;
+          }
+        }
+
+        SetFpEnv();
+        {
+          const DWORD code = CallGuarded(t.ours, in, outO);
+          if (code != 0) {
+            std::printf("[CRASH] %s our side raised 0x%08X at %p esp=%p (limit %p) [%s], iter %d; inputs:",
+              t.name, code, gLastFault, gLastFaultStack, gStackLimit, ModuleOf(gLastFault), iter);
+            for (int k = 0; k < t.inWords; ++k) {
+              std::printf(" %08X", in[k]);
+            }
+            std::printf("\n");
+            crashed = true;
+            break;
+          }
+        }
+
+        for (int k = 0; k < t.outWords; ++k) {
+          if (outR[k] != outO[k]) {
+            if (!(IsNan(outR[k]) && IsNan(outO[k]))) {
+              onlyNanPayload = false;
+            }
+            bad = true;
+          }
         }
       }
 
@@ -759,13 +888,18 @@ int main(int argc, char** argv)
           continue;
         }
         if (mismatches < gMaxMismatch) {
-          PrintMismatch(t, iter, extreme, in, outR, outO);
+          if (typed) {
+            PrintMismatchTyped(t, iter, tin.data(), toutR.data(), toutO.data());
+          }
+          else {
+            PrintMismatch(t, iter, extreme, in, outR, outO);
+          }
         }
         ++mismatches;
       }
     }
 
-    if (gSkipExtreme && extremeSkipped == gIters) {
+    if (!typed && gSkipExtreme && extremeSkipped == gIters) {
       // Nothing was compared: every draw had an extreme word.  Printing this as
       // a pass is how rows with integer/bool/mask words in their input block
       // reported 200000/200000 without running a single input.
