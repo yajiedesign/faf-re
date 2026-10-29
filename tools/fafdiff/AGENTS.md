@@ -26,7 +26,8 @@
 映射进自己的地址空间，与**重建版主引擎**（`src/...`）**逐位**比对同一批输入。
 
 关键区别：**被测代码是从 `src/` 直接编进 harness 的**，用的是引擎自己的编译开关
-（harness 是引擎 CMake 工程的一个 target，链 `faf_codegen`）；镜像代码一律不镜像。
+（harness 是引擎 CMake 工程的一个 target，从 `faf_engine_options` 继承全部设置）；镜像代码
+一律不镜像。
 
 ### 从 wmdiff 搬共享内核时的两条硬注意事项
 
@@ -53,19 +54,37 @@
 
 否则 harness 测的是另一个程序，而不是引擎构建的那个。
 
-**绝对不得修改任何引擎工程文件或编译选项** —— 哪怕只做一次实验、哪怕只改一行。差异的收敛
-位置只有两个：重建源码，或比对中零售一侧的接线；**绝不在"怎么编译"上**。
+**绝对不得为了让比对通过而修改任何编译选项的值** —— 哪怕只做一次实验、哪怕只改一行。差异
+的收敛位置只有两个：重建源码，或比对中零售一侧的接线；**绝不在"怎么编译"上**。
 
-harness 由引擎的 CMake 工程构建（`tools/fafdiff/CMakeLists.txt`），因此：
+**这些开关只存在一处：`src/CMakeLists.txt` 的 INTERFACE target `faf_engine_options`。**
+defines、include 路径、`_faf_main_options`（`/EHs /permissive- /W3`、DXSDK `-idirafter`、
+clang 警告抑制、按架构的 `/FI`）以及 `faf_codegen`/`faf::wx`/`Wm3Dx9Application` 的链接要求
+都挂在那里，`faf_engine` 与 `fafdiff` 都链它 ⇒ ⇒ **这里不许再抄第二份**：抄一份就是让它漂
+（曾经就是抄的，漏了 DXSDK 与 `/FI`，于是 `src/moho/sim/Sim.cpp` 在 harness 里编不过）✓
 
-* 编译器与代码生成契约就是引擎的（clang-cl + `faf_codegen`：`/fp:precise`、
-  不许 contraction、x86 上 `/arch:SSE2`、Math 库调用不内联……）；
-* `/EHs /permissive- /W3` 与引擎一致；
-* 宏集合与引擎一致（`WIN32 _CONSOLE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS`）。
+⇒ ⇒ 核对方式：`faf_engine` 加这个 target 前后，`main.exe` 的 `.text` 必须逐位相同
+（`e20608c567f60bda8be68c22e7aeab0d`，2026-10-29 实测改前改后一致）⇒ ⇒ 一致才说明这只是
+"把设置搬了个家"，没有动引擎的产物 ✓
 
-⇒ ⇒ 引擎侧开关一旦变化（`/D` 列表、`/FI`、include 路径），必须与引擎工程
-（`src/CMakeLists.txt`、`cmake/FafCodegen.cmake`）对过一遍 ⇒ ⇒ 开关漂了，harness 测的就是
-引擎从没构建过的程序 ✓
+⇒ ⇒ 引擎侧开关一旦变化（`/D` 列表、`/FI`、include 路径），只需改 `faf_engine_options`；
+harness 自动跟上 ✓
+
+## 为什么 `Sim.cpp` 不直接编进 harness
+
+`moho::QuatCrossAdd` 的实现曾长期在 `src/moho/sim/Sim.cpp`。试过把它整个 TU 编进来，结论是
+**不可行**，原因不是"未定义符号多"（未引用的 COMDAT 确实会被 `/OPT:REF` 丢弃），而是：
+
+1. `Sim.cpp` 有一个 **非 COMDAT 的 `.CRT$XCU` 静态初始化器**（`__GLOBAL__sub_I_Sim.cpp`）——
+   它永远被保留，引用文件内所有静态对象的构造函数，于是把 sim 核心一起拖进来；
+2. 实测：只加 `Sim.cpp` → 缺 20 个符号（`gpg::Logf`、`gpg::RRef`、`msvc8::string`、`MD5`、
+   `BVIntSet`…）；补齐定义它们的 8 个 TU 后，残差换成**另一批** 20 个更深的 sim 符号
+   （`CWldSession`、`IdPool`、`UserCommandIssueHelper`…）⇒ ⇒ 不收敛；
+3. 引擎 `.obj` 的符号闭包（上界）是 **591/941 个 TU**。
+
+⇒ ⇒ 所以 `QuatCrossAdd` 的定义放在 `src/moho/math/QuaternionMath.cpp`（它是四元数函数，放这里
+本身也合理）；移动前后函数体逐行相同、引擎 `.text` 逐位相同，harness 测的就是引擎编译出的
+那一份 ✓
 
 ## 构建与运行
 

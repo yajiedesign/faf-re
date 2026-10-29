@@ -51,18 +51,29 @@ foreach(_lib IN LISTS FFMPEG_FAF_LIBRARIES)
 endforeach()
 
 # --- Compilation ----------------------------------------------------------------------
-target_compile_definitions(faf_engine PUBLIC
+# The engine's own compile and link settings live on one INTERFACE target,
+# faf_engine_options, so that anything compiling engine translation units -
+# the engine itself, the engine tests, and the paired harness
+# (tools/fafdiff) - gets exactly the same switches instead of a hand-copied
+# subset of them. A harness that compiled a TU with different settings would
+# measure a program the engine never built.
+add_library(faf_engine_options INTERFACE)
+
+target_compile_definitions(faf_engine_options INTERFACE
   WIN32 _WINDOWS WIN32_LEAN_AND_MEAN NOMINMAX
   LUAPLUS_LIB LUA_NUMBER=float
   BOOST_ALL_NO_LIB BOOST_NO_AUTO_PTR
   _CRT_SECURE_NO_WARNINGS
   UNICODE _UNICODE)
 
-target_include_directories(faf_engine PUBLIC
+target_include_directories(faf_engine_options INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${FAF_DEPENDENCIES_DIR}/boost_1_34_1"
   "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")
-target_link_libraries(faf_engine PUBLIC faf_codegen faf::wx Wm3Dx9Application)
+target_link_libraries(faf_engine_options INTERFACE faf_codegen faf::wx Wm3Dx9Application)
+
+# The engine's own objects are compiled with the very same settings.
+target_link_libraries(faf_engine PUBLIC faf_engine_options)
 
 set(_faf_main_options
   # C++ exceptions with extern "C" functions allowed to throw (/EHs, not
@@ -108,7 +119,7 @@ list(APPEND _faf_main_options
   -Wno-mismatched-tags -Wno-extra-qualification)
 
 # C and C++ only (not the x64 MASM file).
-target_compile_options(faf_engine PUBLIC "$<$<COMPILE_LANGUAGE:C,CXX>:${_faf_main_options}>")
+target_compile_options(faf_engine_options INTERFACE "$<$<COMPILE_LANGUAGE:C,CXX>:${_faf_main_options}>")
 
 # --- Per-file settings ---------------------------------------------------------------
 set(_fx11 "${FAF_DEPENDENCIES_DIR}/FX11")

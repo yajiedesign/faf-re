@@ -62,16 +62,21 @@ set(FAFDIFF_SOURCES
 add_executable(fafdiff EXCLUDE_FROM_ALL ${FAFDIFF_SOURCES})
 set_target_properties(fafdiff PROPERTIES OUTPUT_NAME fafdiff)
 
+# The harness compiles the engine's own translation units, so it takes the
+# engine's own settings - the definitions, the include paths, the code
+# generation contract (faf_codegen) and the compile options - from the one
+# place they live: the interface target faf_engine_options
+# (src/CMakeLists.txt). Nothing here may restate them: a second copy is a
+# copy that drifts, and a harness that compiled a TU with different switches
+# would measure a program the engine never built.
+target_link_libraries(fafdiff PRIVATE faf_engine_options)
+
+# Only what is the harness's own: its sources' include path, the Wild Magic
+# headers the harness compiles against (Foundation/System/Wm3System.cpp) and
+# the console subsystem macro.
 target_include_directories(fafdiff PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
-  "${CMAKE_SOURCE_DIR}/src"
-  ${WM3_FOUNDATION_INCLUDES}
-  "${FAF_DEPENDENCIES_DIR}/boost_1_34_1"
-  "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")
-target_compile_definitions(fafdiff PRIVATE
-  WIN32 _CONSOLE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
-target_compile_options(fafdiff PRIVATE /EHs /permissive- /W3)
-target_link_libraries(fafdiff PRIVATE faf_codegen)
+  ${WM3_FOUNDATION_INCLUDES})
 
 # The retail image is mapped at its preferred base 0x00400000 and has no
 # relocations, so the harness must sit elsewhere and stay put: no ASLR, no
