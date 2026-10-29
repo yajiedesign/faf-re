@@ -33,10 +33,19 @@ set(FAFDIFF_SOURCES
   src/pe_image.cpp
   src/gen.cpp
   src/targets.cpp
-  src/engine_globals.cpp)
-# The engine translation units under test are added to this list, one at a
-# time. Each one added here is one more engine file compiled by the engine's
-# own switches rather than mirrored by hand.
+  src/engine_globals.cpp
+  # The engine translation units under test are added to this list, one at a
+  # time. Each one added here is one more engine file compiled by the engine's
+  # own switches rather than mirrored by hand.
+  #
+  # src/moho/math/Vector3f.cpp is the first one under test (the row for
+  # moho::NormalizeVectorInto, retail 0x0044F7E0).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/Vector3f.cpp"
+  # A dependency of the TU above, not a unit under test: Vector3f.cpp calls
+  # the msvc8:: x87 helpers, and their bodies live in src/legacy/math/
+  # X87Math.cpp. It is compiled with the engine's own switches as well, so
+  # the helpers behave in the harness exactly as they do in the engine.
+  "${CMAKE_SOURCE_DIR}/src/legacy/math/X87Math.cpp")
 
 add_executable(fafdiff EXCLUDE_FROM_ALL ${FAFDIFF_SOURCES})
 set_target_properties(fafdiff PROPERTIES OUTPUT_NAME fafdiff)

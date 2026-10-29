@@ -83,8 +83,82 @@ declared in `src/targets.h`.
 
 ## State
 
-**The table is empty until the first translation unit under test lands.**
-`--list` prints the header and no rows, and a run reports `0/0 targets passed`.
+**The table has one row.** The first translation unit under test is
+`src/moho/math/Vector3f.cpp`, compiled into the harness with the engine's own
+switches (`src/legacy/math/X87Math.cpp` comes with it: it is the dependency
+that holds the `msvc8::` x87 helpers `Vector3f.cpp` calls).
+
+```bash
+./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
+# name               retail VA  our source                     typed layout
+# NormalizeVectorInto 0x0044F7E0 src/moho/math/Vector3f.cpp:25  in[12B] out[16B]
+```
+
+## The paired rows
+
+### `NormalizeVectorInto` -- retail `0x0044F7E0`
+
+`src/moho/math/Vector3f.cpp:31` (the doc comment starts at line 25).
+
+**The retail convention, measured from the image**
+(`.tmp/disasm.py 0x0044F7E0`):
+
+| | |
+|---|---|
+| destination | `ESI` |
+| source | `EDI` |
+| return value | `EAX` = the destination pointer (`mov eax, esi` at 0x0044F82A, on both paths) |
+| epilogue | `add esp, 0x0C` / `ret` -- the stack only; the `push ecx` at 0x0044F810 is the four-byte slot the float argument to the sqrt call lives in, not a saved register (the body never writes `ECX`) |
+
+The body: the squared length in SSE float (`(x*x + y*y) + z*z`), the retail's
+own sqrt at 0x00452FC0 (`fld; fsqrt`, i.e. an x87 fsqrt under the harness's
+`_PC_24` control word), the length rounded to float by `fst dword [esp+8]`,
+then `fcompi` against zero and `jbe` to the zero branch. `jbe` is taken when
+the length is **not positive or unordered**, so a NaN length also produces the
+zero vector. The reciprocal is `divss` (`1.0f / length`), multiplied into the
+three lanes.
+
+**The typed shapes**
+
+```cpp
+struct NormIn  { Wm3::Vector3f source; };              // 12 bytes
+struct NormOut { Wm3::Vector3f dest;                   // 12 bytes
+                 std::uint32_t returnedDest; };        //  4 bytes
+```
+
+`returnedDest` is the answer to the question the return value answers -- "is it
+the destination pointer?" (1 = yes). The pointers themselves cannot be
+compared: the two sides write into different output buffers.
+
+**The generator**
+
+* `Ordinary` (`--skip-extreme`): every lane finite, normal (never subnormal),
+  non-zero, and the vector therefore has a strictly positive length. The
+  degenerate branch is **not** reached here.
+* `WithExtremes` (the default): 40% `GenVec3` (unit vectors, plain vectors,
+  mixed magnitudes, axis-aligned lanes), 15% the zero-length vector (with
+  signed zeros -- the degenerate branch), 15% NaN- and infinity-laden vectors,
+  15% denormal lanes (the squared length underflows) and 15% a unit direction
+  at a random magnitude (the squared length overflows to infinity).
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xA5A5A5A5`, `0xC0FFEE01`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 1,000,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[PASS]` (no NaN-payload differences) |
+| mutation 1: `1.0f / length` -> `1.0f / (length + 1e-7f)` | `[FAIL] 248312 mismatches in 1000000 iterations` |
+| restore mutation 1 | `[PASS] 1000000/1000000` |
+| mutation 2: `length > 0.0f` -> `length >= 0.0f` (the degenerate branch) | `[FAIL] 333413 mismatches in 1000000 iterations` |
+| restore mutation 2 | `[PASS] 1000000/1000000` |
+
+The harness's build of `Vector3f.cpp` and the engine's own build of it were
+compared instruction by instruction (`llvm-objdump` on both `.obj` files):
+identical. The engine's x86 `/FIplatform/X87SqrtCall.h` does not change this
+translation unit -- `faf_codegen` already keeps `sqrt` a call on x86.
 
 ## Coverage ledger
 

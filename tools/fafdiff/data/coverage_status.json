@@ -2,7 +2,7 @@
  "schema": "fafdiff-coverage/1",
  "functions": {
   "0x0044F7E0": {
-   "status": "未匹配",
+   "status": "已匹配",
    "why": ""
   },
   "0x0046FB20": {

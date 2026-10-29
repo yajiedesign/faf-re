@@ -10,7 +10,7 @@ in the retail image.
 | `src` commit | `72b1c05a` |
 | screen data | `.tmp/fafdiff/screen.json` |
 | status data | `tools/fafdiff/data/coverage_status.json` |
-| statuses | `未匹配` 38, `已匹配` 0, `失败` 0, `不适用` 0 |
+| statuses | `未匹配` 37, `已匹配` 1, `失败` 0, `不适用` 0 |
 
 A row's status is one of four:
 
@@ -23,7 +23,7 @@ A row's status is one of four:
 
 | # | function | address | source | status |
 |---:|---|---|---|---|
-| 1 | `NormalizeVectorInto(Wm3::Vector3f* const dest, const Wm3::Vector3f& source)` | `0x0044F7E0` | `src/moho/math/Vector3f.cpp:25` | 未匹配 |
+| 1 | `NormalizeVectorInto(Wm3::Vector3f* const dest, const Wm3::Vector3f& source)` | `0x0044F7E0` | `src/moho/math/Vector3f.cpp:25` | 已匹配 |
 | 2 | `Vector4f::operator=(const Vector4f& rhs)` | `0x0046FB20` | `src/moho/math/Vector4f.cpp:84` | 未匹配 |
 | 3 | `RayBoxSlabClip(RaySlabState& state, const Wm3::AxisAlignedBox3f& box)` | `0x00473DF0` | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105` | 未匹配 |
 | 4 | `atan2f(const float y, const float x)` | `0x004E9DF0` | `src/legacy/math/X87Math.cpp:465` | 未匹配 |

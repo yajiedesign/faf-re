@@ -4,7 +4,10 @@
 在仓库根目录的 `AGENTS.md`；`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另一个 harness
 的指引。
 
-**当前状态：表是空的。** 没有比对项，没有目标 TU。
+**当前状态：表里有一条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
+（零售 `0x0044F7E0`，`moho::NormalizeVectorInto`）；它带的依赖 TU 是
+`src/legacy/math/X87Math.cpp`（`msvc8::` x87 助手的实现）。逐条证据在
+`tools/fafdiff/README.md`，覆盖账本在 `tools/fafdiff/COVERAGE.md`。
 
 ## 术语：中文一律叫“比对项”
 
