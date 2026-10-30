@@ -1,9 +1,12 @@
 #include "targets.h"
 
+#include "moho/math/GridPos.h"
 #include "moho/math/QuaternionMath.h"
 #include "moho/math/Vector2f.h"
 #include "moho/math/Vector3f.h"
 #include "moho/math/Vector4f.h"
+#include "moho/math/Wm3AxisAlignedBox3FafExtras.h"
+#include "moho/math/Wm3Segment3FafExtras.h"
 #include "legacy/math/X87Math.h"
 
 #include <cmath>
@@ -3281,6 +3284,770 @@ namespace
     typedOut.result = msvc8::asin(typedIn.value);
   }
 
+  // ---------------------------------------------------------------------
+  // The third batch of comparison rows.
+  //
+  // Four rows in three translation units the harness had not compiled yet:
+  // src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp,
+  // src/moho/math/Wm3Segment3FafExtras.cpp and src/moho/math/GridPos.cpp.
+  // Every retail convention below was **measured** from the image with
+  // `.tmp/disasm.py <va>` (cross-read against llvm-objdump's AT&T output of
+  // the same addresses, which is the authority on the operand order); none of
+  // them is read off a header.
+
+  // --- RayBoxSlabClip - retail 0x00473DF0 ---------------------------------
+  //
+  //   0x00473DF0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+  //   0x00473DF9  fld  dword ptr [ecx + 0xc]      <- the x direction lane
+  //   0x00473DFC  movss xmm5, [0x00dfec20]       <- 1.0f
+  //   0x00473E04  xorps xmm6, xmm6               <- 0.0f
+  //   0x00473E07  fst  dword ptr [esp + 4]        <- the raw direction lane
+  //   0x00473E0B  fabs
+  //   0x00473E0D  fld  dword ptr [0x00e4f7a8]     <- FLT_MIN
+  //   0x00473E13  fxch st(1)
+  //   0x00473E15  fcompi st(1) / jb 0x00473E85    <- |dir| < FLT_MIN: skip the axis
+  //   0x00473E19  movss xmm4, [esp + 4]          <- the raw direction lane again
+  //   0x00473E1F  comiss xmm4, xmm6              <- the direction against 0.0f
+  //   0x00473E22  movss xmm3, [ecx]              <- the origin lane
+  //   0x00473E26  movss xmm0, [edx]              <- the box's Min lane
+  //   0x00473E2A  movss xmm1, [edx + 0xc]        <- the box's Max lane
+  //   0x00473E2F  movaps xmm2, xmm5              <- 1.0f
+  //   0x00473E32  divss xmm2, xmm4               <- 1.0f / direction
+  //   0x00473E36  subss xmm0, xmm3               <- Min - origin
+  //   0x00473E3A  subss xmm1, xmm3               <- Max - origin
+  //   0x00473E3E  mulss xmm0, xmm2               <- t0
+  //   0x00473E42  mulss xmm1, xmm2               <- t1
+  //   0x00473E46  movss xmm2, [ecx + 0x18]       <- the running tEnter
+  //   0x00473E4B  jbe 0x00473E66                 <- direction <= 0: the other order
+  //   ...        (the direction > 0 branch: tEnter = max(tEnter, t0),
+  //              tExit = min(tExit, t1); the other branch swaps the two)
+  //   0x00473F7D  movss xmm0, [ecx + 0x1c]       <- the running tExit
+  //   0x00473F82  comiss xmm0, [ecx + 0x18]      <- tExit against tEnter
+  //   0x00473F86  jb 0x00473F91                  <- tExit < tEnter: false
+  //   0x00473F88  mov eax, 1                     <- true
+  //
+  // So: the state in ECX, the box in EDX, the answer in EAX (0 or 1). The
+  // state is worked on in place: the origin lanes are at +0x00..+0x08, the
+  // direction lanes at +0x0c..+0x14 and the running interval at +0x18 and
+  // +0x1c - the layout `moho::RaySlabState` has.
+  //
+  // The degenerate-direction gate is the x87 one: |direction| is compared
+  // against FLT_MIN (0x00e4f7a8) with `fcompi`, and an unordered (NaN)
+  // direction skips the axis as well - which is what the rebuild's
+  // `!(fabs(direction) >= FLT_MIN)` does.
+  //
+  // The comparison is the whole state the retail leaves behind plus the
+  // answer: the slab clip is a *state* function, not a function that returns
+  // a value.
+
+  struct SlabIn
+  {
+    moho::RaySlabState state;
+    Wm3::AxisAlignedBox3f box;
+  };
+
+  struct SlabOut
+  {
+    moho::RaySlabState state;
+    // The retail's answer: EAX is 1 when the interval is still non-empty
+    // (tExit >= tEnter) and 0 otherwise.
+    std::uint32_t clipped;
+  };
+
+  // The box of the slab row: an ordered one (min <= max) or an inverted one
+  // (min > max on some axis - the retail does not check the order).
+  void GenSlabBox(Rng& rng, Wm3::AxisAlignedBox3f& box, const bool ordered)
+  {
+    float lo[3];
+    float hi[3];
+    for (int k = 0; k < 3; ++k) {
+      lo[k] = GenPlain(rng, 10.0f);
+      hi[k] = GenPlain(rng, 10.0f);
+    }
+    if (ordered) {
+      for (int k = 0; k < 3; ++k) {
+        if (hi[k] < lo[k]) {
+          const float t = lo[k];
+          lo[k] = hi[k];
+          hi[k] = t;
+        }
+      }
+    }
+    box.Min = Wm3::Vector3f(lo[0], lo[1], lo[2]);
+    box.Max = Wm3::Vector3f(hi[0], hi[1], hi[2]);
+  }
+
+  void GenSlab(Rng& rng, void* in, const DrawKind kind)
+  {
+    SlabIn& typed = *static_cast<SlabIn*>(in);
+    float origin[3] = {0.0f, 0.0f, 0.0f};
+    float dir[3] = {0.0f, 0.0f, 0.0f};
+    float tEnter = 0.0f;
+    float tExit = 0.0f;
+
+    if (kind == DrawKind::Ordinary) {
+      // Ordinary: a plain ray against a plain box, with the interval wide
+      // open. Every lane is finite, normal and non-zero.
+      for (int k = 0; k < 3; ++k) {
+        origin[k] = GenOrdinaryLane(rng);
+        dir[k] = GenOrdinaryLane(rng);
+      }
+      GenSlabBox(rng, typed.box, true);
+      tEnter = 0.0f;
+      tExit = 1.0e30f;
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 20) {
+        // a plain ray against a plain box
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        GenSlabBox(rng, typed.box, true);
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 35) {
+        // a ray parallel to a slab: one direction lane is exactly zero, so
+        // that axis contributes no slab at all
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        const std::uint32_t axis = rng.Below(3);
+        dir[axis] = rng.Chance(50) ? 0.0f : -0.0f;
+        GenSlabBox(rng, typed.box, true);
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 45) {
+        // the origin sits exactly on a face of the box
+        GenSlabBox(rng, typed.box, true);
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        const std::uint32_t axis = rng.Below(3);
+        origin[axis] = rng.Chance(50) ? typed.box.Min[axis] : typed.box.Max[axis];
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 55) {
+        // an inverted box: min > max on one axis
+        GenSlabBox(rng, typed.box, true);
+        const std::uint32_t axis = rng.Below(3);
+        const float t = typed.box.Min[axis];
+        typed.box.Min[axis] = typed.box.Max[axis];
+        typed.box.Max[axis] = t;
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 63) {
+        // a degenerate direction: |dir| < FLT_MIN, so the axis is skipped
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        const std::uint32_t axis = rng.Below(3);
+        dir[axis] = rng.Chance(50) ? 0.0f : FromBits(0x00000001u + rng.Below(0x007FFFFFu));
+        GenSlabBox(rng, typed.box, true);
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 70) {
+        // the direction exactly on the FLT_MIN gate: the axis is *not*
+        // skipped
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        const std::uint32_t axis = rng.Below(3);
+        dir[axis] = rng.Chance(50) ? FromBits(0x00800000u) : FromBits(0x80800000u);
+        GenSlabBox(rng, typed.box, true);
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 80) {
+        // NaN lanes: in the origin, in the direction and in the box
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenFloat(rng);
+          dir[k] = GenFloat(rng);
+        }
+        origin[rng.Below(3)] = FromBits(0x7FC00000u);
+        dir[rng.Below(3)] = FromBits(0x7FC00000u);
+        GenSlabBox(rng, typed.box, true);
+        if (rng.Chance(40)) {
+          typed.box.Min[rng.Below(3)] = FromBits(0x7FC00000u);
+        }
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else if (mode < 90) {
+        // a degenerate interval: empty, a single point, infinite, or NaN
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 10.0f);
+          dir[k] = GenPlain(rng, 10.0f);
+        }
+        GenSlabBox(rng, typed.box, true);
+        switch (rng.Below(7)) {
+        case 0:
+          tEnter = 1.0f;
+          tExit = 0.0f;
+          break;
+        case 1:
+          tEnter = 0.5f;
+          tExit = 0.5f;
+          break;
+        case 2:
+          tEnter = -std::numeric_limits<float>::infinity();
+          tExit = std::numeric_limits<float>::infinity();
+          break;
+        case 3:
+          tEnter = 0.0f;
+          tExit = 0.0f;
+          break;
+        case 4:
+          tEnter = FromBits(0x7FC00000u);
+          tExit = 1.0f;
+          break;
+        case 5:
+          tEnter = -1.0f;
+          tExit = -1.0f;
+          break;
+        default:
+          tEnter = 0.0f;
+          tExit = 1.0e30f;
+          break;
+        }
+      } else if (mode < 95) {
+        // huge coordinates: the products overflow to infinity
+        for (int k = 0; k < 3; ++k) {
+          origin[k] = GenPlain(rng, 1.0e30f);
+          dir[k] = GenPlain(rng, 1.0e30f);
+        }
+        GenSlabBox(rng, typed.box, true);
+        tEnter = 0.0f;
+        tExit = 1.0e30f;
+      } else {
+        // the mixed draw
+        GenVec3(rng, origin);
+        GenVec3(rng, dir);
+        GenSlabBox(rng, typed.box, rng.Chance(70));
+        tEnter = GenPlain(rng, 100.0f);
+        tExit = GenPlain(rng, 100.0f);
+      }
+    }
+
+    typed.state.originX = origin[0];
+    typed.state.originY = origin[1];
+    typed.state.originZ = origin[2];
+    typed.state.dirX = dir[0];
+    typed.state.dirY = dir[1];
+    typed.state.dirZ = dir[2];
+    typed.state.tEnter = tEnter;
+    typed.state.tExit = tExit;
+  }
+
+  __declspec(naked) void RetailRayBoxSlabClip(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      // the retail works in place: the input state is copied into the output
+      // buffer first, and the retail is handed that buffer.
+      mov  eax, [ebp]
+      mov  [ebx], eax
+      mov  eax, [ebp + 4]
+      mov  [ebx + 4], eax
+      mov  eax, [ebp + 8]
+      mov  [ebx + 8], eax
+      mov  eax, [ebp + 12]
+      mov  [ebx + 12], eax
+      mov  eax, [ebp + 16]
+      mov  [ebx + 16], eax
+      mov  eax, [ebp + 20]
+      mov  [ebx + 20], eax
+      mov  eax, [ebp + 24]
+      mov  [ebx + 24], eax
+      mov  eax, [ebp + 28]
+      mov  [ebx + 28], eax
+      mov  ecx, ebx              // the retail's state
+      lea  edx, [ebp + 32]       // the retail's box
+      mov  eax, 0x00473DF0
+      call eax
+      mov  [ebx + 32], eax       // the answer: 0 or 1
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursRayBoxSlabClip(const void* in, void* out)
+  {
+    const SlabIn& typedIn = *static_cast<const SlabIn*>(in);
+    SlabOut& typedOut = *static_cast<SlabOut*>(out);
+    typedOut.state = typedIn.state;
+    typedOut.clipped = moho::RayBoxSlabClip(typedOut.state, typedIn.box) ? 1u : 0u;
+  }
+
+  // --- MakeSegment3fFromEndpoints - retail 0x004FE130 ---------------------
+  //
+  //   0x004FE130  sub  esp, 0x24
+  //   0x004FE133  movss xmm1, [ecx]              <- the start's x lane
+  //   0x004FE137  movss xmm0, [eax]              <- the end's x lane
+  //   0x004FE145  subss xmm0, xmm1               <- end.x - start.x
+  //   0x004FE149  movss [esp + 8], xmm1          <- the start's x lane, kept
+  //   0x004FE154  subss xmm1, xmm2               <- end.y - start.y
+  //   0x004FE158  movss [esp + 0xc], xmm2        <- the start's y lane, kept
+  //   0x004FE163  subss xmm2, xmm3               <- end.z - start.z
+  //   0x004FE167  movss [esp + 0x10], xmm3       <- the start's z lane, kept
+  //   0x004FE16D  movss xmm3, [0x00e4f724]       <- 0.5f
+  //   0x004FE175  mulss xmm1, xmm3               <- the half's y lane
+  //   0x004FE179  mulss xmm0, xmm3               <- the half's x lane
+  //   0x004FE17D  mulss xmm2, xmm3               <- the half's z lane
+  //   0x004FE184  mulss xmm3, xmm1               <- half.y * half.y
+  //   0x004FE191  mulss xmm1, xmm2               <- half.z * half.z
+  //   0x004FE195  addss xmm3, xmm1               <- (half.y^2 + half.z^2)
+  //   0x004FE19C  mulss xmm1, xmm0               <- half.x * half.x
+  //   0x004FE1A1  addss xmm3, xmm1               <- + half.x^2
+  //   0x004FE1B6  call 0x00452FC0                <- the retail's own sqrt
+  //   0x004FE1BB  fst  dword ptr [esp + 8]        <- the extent, rounded to float
+  //   0x004FE1C5  fstp dword ptr [esp + 0x18]     <- the extent, again
+  //   0x004FE1CF  comiss xmm4, xmm1              <- the extent against 0.0f
+  //   0x004FE1D2  jbe 0x004FE1FF                 <- not positive: the zero direction
+  //   0x004FE1E8  divss xmm0, xmm4               <- 1.0f / extent
+  //   0x004FE1EF  mulss xmm1, [esp + 0x18]        <- half.x * (1/extent)
+  //   0x004FE1F5  mulss xmm2, xmm0               <- half.y * (1/extent)
+  //   0x004FE1F9  mulss xmm3, xmm0               <- half.z * (1/extent)
+  //   0x004FE20B  addss xmm0, [esp + 0x18]        <- start.x + half.x
+  //   0x004FE21D  addss xmm4, [esp + 0x1c]        <- start.y + half.y
+  //   0x004FE223  addss xmm5, [esp + 0x20]        <- start.z + half.z
+  //   0x004FE229  movss [esi], xmm0               <- the origin's x lane
+  //   0x004FE23D  movss [esi + 0xc], xmm1         <- the direction's x lane
+  //   0x004FE24C  movss [esi + 0x18], xmm0        <- the extent
+  //   0x004FE251  mov eax, esi                    <- the return value: the object
+  //   0x004FE256  ret
+  //
+  // So: the start in ECX, the end in EAX and the *object* in ESI - this is
+  // the retail's `Segment3::Segment3(end, start)`, a constructor, not a
+  // factory. The rebuild's `Wm3::MakeSegment3fFromEndpoints` returns the
+  // segment by value, so the harness hands the retail an output buffer and
+  // compares the 28 bytes it fills (origin, direction, extent) with the
+  // rebuild's returned object.
+  //
+  // The retail returns the object pointer in EAX (`mov eax, esi`); the
+  // rebuild returns the object by value, so there is no pointer to compare
+  // - `returnedDest` records the retail's answer (1: the returned pointer
+  // is the object the harness handed it) and the rebuild's side answers the
+  // same question about the object it wrote into the output buffer.
+  //
+  // The sum of the squares is formed in the retail's order -
+  // (half.y^2 + half.z^2) + half.x^2 - which is the order the rebuild's
+  // source spells out as well.
+
+  struct SegIn
+  {
+    Wm3::Vector3f start;
+    Wm3::Vector3f end;
+  };
+
+  struct SegOut
+  {
+    Wm3::Segment3f segment;
+    std::uint32_t returnedDest;
+  };
+
+  void GenSegment(Rng& rng, void* in, const DrawKind kind)
+  {
+    SegIn& typed = *static_cast<SegIn*>(in);
+    float start[3];
+    float end[3];
+
+    if (kind == DrawKind::Ordinary) {
+      for (int k = 0; k < 3; ++k) {
+        start[k] = GenPlain(rng, 100.0f);
+        end[k] = GenPlain(rng, 100.0f);
+      }
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 25) {
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenPlain(rng, 100.0f);
+          end[k] = GenPlain(rng, 100.0f);
+        }
+      } else if (mode < 38) {
+        // the two points coincide: the extent is zero and the direction is
+        // the zero vector
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenPlain(rng, 100.0f);
+          end[k] = start[k];
+        }
+      } else if (mode < 50) {
+        // the end point before the start point
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenPlain(rng, 100.0f);
+          end[k] = start[k] - GenPlain(rng, 10.0f);
+        }
+      } else if (mode < 60) {
+        // one lane equal, the other two different
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenPlain(rng, 100.0f);
+          end[k] = start[k];
+        }
+        const std::uint32_t axis = rng.Below(3);
+        end[axis] = start[axis] + GenPlain(rng, 10.0f);
+      } else if (mode < 70) {
+        // huge coordinates: the difference overflows to infinity
+        for (int k = 0; k < 3; ++k) {
+          start[k] = FromBits(0x7F7FFFFFu);
+          end[k] = -FromBits(0x7F7FFFFFu);
+        }
+      } else if (mode < 78) {
+        // the difference underflows into the denormals
+        for (int k = 0; k < 3; ++k) {
+          start[k] = 0.0f;
+          end[k] = FromBits(0x00000001u);
+        }
+      } else if (mode < 88) {
+        // NaN lanes
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenFloat(rng);
+          end[k] = GenFloat(rng);
+        }
+        start[rng.Below(3)] = FromBits(0x7FC00000u);
+      } else {
+        // infinite lanes
+        for (int k = 0; k < 3; ++k) {
+          start[k] = GenFloat(rng);
+          end[k] = GenFloat(rng);
+        }
+        start[rng.Below(3)] = FromBits(0x7F800000u);
+        end[rng.Below(3)] = FromBits(0xFF800000u);
+      }
+    }
+
+    typed.start = Wm3::Vector3f(start[0], start[1], start[2]);
+    typed.end = Wm3::Vector3f(end[0], end[1], end[2]);
+  }
+
+  __declspec(naked) void RetailMakeSegment3fFromEndpoints(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      mov  ecx, ebp             // the retail's start (the input's first lane)
+      mov  esi, ebx             // the retail's object
+      mov  edi, 0x004FE130
+      lea  eax, [ebp + 12]      // the retail's end
+      call edi
+      // the retail returns the object pointer in EAX
+      cmp  eax, ebx
+      sete al
+      movzx eax, al
+      mov  [ebx + 28], eax      // 1 when it is the object it was handed
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursMakeSegment3fFromEndpoints(const void* in, void* out)
+  {
+    const SegIn& typedIn = *static_cast<const SegIn*>(in);
+    SegOut& typedOut = *static_cast<SegOut*>(out);
+    typedOut.segment = Wm3::MakeSegment3fFromEndpoints(typedIn.start, typedIn.end);
+    typedOut.returnedDest = 1u; // the object landed in the output buffer
+  }
+
+  // --- GridPos::GridPos - retail 0x00506E20 --------------------------------
+  //
+  //   0x00506E20  push ecx
+  //   0x00506E21  cvtsi2ss xmm1, [esp + 8]      <- the grid size, as a float
+  //   0x00506E27  movss xmm0, [0x00dfec20]       <- 1.0f
+  //   0x00506E2F  divss xmm0, xmm1               <- 1.0f / gridSize
+  //   0x00506E33  movss xmm1, [esi]             <- the world position's x lane
+  //   0x00506E37  mulss xmm1, xmm0              <- the scaled x lane
+  //   0x00506E49  fld  dword ptr [esp + 4]      <- the scaled lane
+  //   0x00506E4D  frndint
+  //   0x00506E4F  fld  dword ptr [esp + 4]
+  //   0x00506E53  fcompi st(1)                  <- the scaled lane against the rounded one
+  //   0x00506E55  cmovb eax, edx                <- smaller: -1
+  //   0x00506E58  fistp dword ptr [esp + 0xc]    <- the rounded lane, as an int
+  //   0x00506E5C  add eax, [esp + 0xc]
+  //   ...        (the same for the z lane)
+  //   0x00506E8F  mov dword ptr [ecx], edi       <- the object's x lane
+  //   0x00506E91  mov dword ptr [ecx + 4], eax   <- the object's z lane
+  //   0x00506E94  mov eax, ecx                   <- the return value: the object
+  //   0x00506E96  pop edi / pop ecx / ret       <- the caller pops the argument
+  //
+  // So: the object in ECX, the world position in ESI, the grid size as the
+  // first stack argument (the retail does **not** pop it - the epilogue is
+  // a plain `ret`), and the answer is the object pointer in EAX.
+  //
+  // The floor is the binary's: the scaled lane is rounded with `frndint`
+  // (round to nearest, ties to even) and one is taken off when the scaled
+  // lane is *below* the rounded one.
+  //
+  // The comparison is the object's bytes: a constructor leaves the object
+  // behind, and that is the thing the two sides have to agree on.
+
+  struct GridIn
+  {
+    Wm3::Vector3f wldPos;
+    std::int32_t gridSize;
+  };
+
+  struct GridOut
+  {
+    std::int32_t x;
+    std::int32_t z;
+    // The retail returns the object pointer in EAX; 1 means "the object it
+    // was handed".
+    std::uint32_t returnedThis;
+  };
+
+  void GenGridPos(Rng& rng, void* in, const DrawKind kind)
+  {
+    GridIn& typed = *static_cast<GridIn*>(in);
+    float pos[3] = {0.0f, 0.0f, 0.0f};
+    int gridSize = 1;
+
+    if (kind == DrawKind::Ordinary) {
+      // Ordinary: a plain world position and a plain grid size, so the
+      // scaled lane is finite, in range and nowhere near a cell boundary.
+      for (int k = 0; k < 3; ++k) {
+        pos[k] = GenPlain(rng, 1000.0f);
+      }
+      gridSize = 1 + static_cast<int>(rng.Below(1024));
+    } else {
+      const std::uint32_t mode = rng.Below(100);
+      if (mode < 18) {
+        // the scaled lane lands exactly on an integer
+        gridSize = 1;
+        const float n = static_cast<float>(rng.Range(-1000.0, 1000.0));
+        pos[0] = n;
+        pos[1] = n;
+        pos[2] = n;
+      } else if (mode < 36) {
+        // the scaled lane lands exactly on a half: the round-to-nearest-even
+        // of the retail's `frndint` and of the rebuild's `nearbyint` is what
+        // decides the answer
+        gridSize = 1;
+        const float h = static_cast<float>(rng.Range(-1000.0, 1000.0)) + 0.5f;
+        pos[0] = h;
+        pos[1] = h;
+        pos[2] = h;
+      } else if (mode < 50) {
+        // a power of two: the reciprocal is exact
+        gridSize = 1 << static_cast<int>(rng.Below(12));
+        for (int k = 0; k < 3; ++k) {
+          pos[k] = GenPlain(rng, 1000.0f);
+        }
+      } else if (mode < 64) {
+        // a grid size whose reciprocal is not exact
+        gridSize = 3 + static_cast<int>(rng.Below(1000));
+        for (int k = 0; k < 3; ++k) {
+          pos[k] = GenPlain(rng, 1000.0f);
+        }
+      } else if (mode < 72) {
+        // a negative grid size
+        gridSize = -(1 + static_cast<int>(rng.Below(1000)));
+        for (int k = 0; k < 3; ++k) {
+          pos[k] = GenPlain(rng, 1000.0f);
+        }
+      } else if (mode < 80) {
+        // the signed zeros and the denormals
+        gridSize = 1;
+        pos[0] = rng.Chance(50) ? 0.0f : -0.0f;
+        pos[1] = FromBits(0x00000001u);
+        pos[2] = -FromBits(0x00000001u);
+      } else if (mode < 88) {
+        // the edges of the integer range the two sides agree on
+        gridSize = 1;
+        pos[0] = 2147483520.0f; // the largest float below 2^31
+        pos[1] = -2147483520.0f;
+        pos[2] = 0.0f;
+      } else {
+        // the mixed draw
+        gridSize = 1 + static_cast<int>(rng.Below(1024));
+        for (int k = 0; k < 3; ++k) {
+          pos[k] = GenPlain(rng, 1000000.0f);
+        }
+      }
+    }
+
+    typed.wldPos = Wm3::Vector3f(pos[0], pos[1], pos[2]);
+    typed.gridSize = gridSize;
+  }
+
+  __declspec(naked) void RetailGridPosCtor(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      mov  esi, ebp             // the retail's world position (the input's)
+      mov  ecx, ebx             // the retail's object
+      push dword ptr [ebp + 12] // the grid size: the retail's first argument
+      mov  edi, 0x00506E20
+      call edi
+      add  esp, 4               // the retail does not pop its argument
+      cmp  eax, ebx             // the retail returns the object pointer
+      sete al
+      movzx eax, al
+      mov  [ebx + 8], eax       // 1 when it is the object it was handed
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursGridPosCtor(const void* in, void* out)
+  {
+    const GridIn& typedIn = *static_cast<const GridIn*>(in);
+    GridOut& typedOut = *static_cast<GridOut*>(out);
+    // The constructor takes a non-const pointer but only reads it.
+    moho::GridPos pos(const_cast<Wm3::Vec3f*>(&typedIn.wldPos), typedIn.gridSize);
+    typedOut.x = pos.x;
+    typedOut.z = pos.z;
+    typedOut.returnedThis = 1u;
+  }
+
+  // --- FloorSecondsToTicks - retail 0x0066D1D0 ----------------------------
+  //
+  //   0x0066D1D0  sub  esp, 8
+  //   0x0066D1D3  mulss xmm0, [0x00dff31c]       <- the seconds * 10.0f
+  //   0x0066D1DB  movss [esp + 4], xmm0          <- the scaled lane
+  //   0x0066D1E8  fld  dword ptr [esp + 4]
+  //   0x0066D1EC  frndint
+  //   0x0066D1EE  fld  dword ptr [esp + 4]
+  //   0x0066D1F2  fcompi st(1)                  <- the scaled lane against the rounded one
+  //   0x0066D1F4  cmovb eax, edx                <- smaller: -1
+  //   0x0066D1F7  fistp dword ptr [esp]          <- the rounded lane, as an int
+  //   0x0066D1FA  add eax, [esp]
+  //   0x0066D200  ret
+  //
+  // So: the seconds arrive in XMM0 (the first float argument) and the tick
+  // count comes back in EAX. The floor is the binary's: the scaled lane is
+  // rounded with `frndint` (round to nearest, ties to even) and one is taken
+  // off when the scaled lane is *below* the rounded one.
+  //
+  // The domain this row covers is the one where the two sides agree: a
+  // finite scaled lane whose magnitude fits into a 32-bit integer. Outside
+  // it the two sides differ by construction (see the README section "The
+  // grid floor and the tick floor outside the covered domain").
+
+  struct TicksIn
+  {
+    float seconds;
+  };
+
+  struct TicksOut
+  {
+    std::int32_t ticks;
+  };
+
+  void GenTicks(Rng& rng, void* in, const DrawKind kind)
+  {
+    TicksIn& typed = *static_cast<TicksIn*>(in);
+    if (kind == DrawKind::Ordinary) {
+      typed.seconds = static_cast<float>(rng.Range(-1.0e6, 1.0e6));
+      return;
+    }
+    switch (rng.Below(16)) {
+    case 0:
+      typed.seconds = 0.0f;
+      break;
+    case 1:
+      typed.seconds = -0.0f;
+      break;
+    case 2:
+      typed.seconds = 0.05f; // the scaled lane is exactly 0.5
+      break;
+    case 3:
+      typed.seconds = 0.15f; // 1.5
+      break;
+    case 4:
+      typed.seconds = 0.25f; // 2.5
+      break;
+    case 5:
+      typed.seconds = -0.05f; // -0.5
+      break;
+    case 6:
+      typed.seconds = 0.1f; // 1.0
+      break;
+    case 7:
+      typed.seconds = -0.1f; // -1.0
+      break;
+    case 8:
+      typed.seconds = FromBits(0x00000001u); // the smallest denormal
+      break;
+    case 9:
+      typed.seconds = -FromBits(0x00000001u);
+      break;
+    case 10:
+      typed.seconds = 2.0e8f; // the top of the covered range
+      break;
+    case 11:
+      typed.seconds = -2.0e8f;
+      break;
+    case 12:
+      typed.seconds = static_cast<float>(rng.Range(-2.0e8, 2.0e8));
+      break;
+    case 13:
+      typed.seconds = static_cast<float>(rng.Range(-1000.0, 1000.0));
+      break;
+    case 14:
+      typed.seconds = static_cast<float>(rng.Range(-1.0e6, 1.0e6));
+      break;
+    default:
+      typed.seconds = static_cast<float>(rng.Range(-20.0, 20.0));
+      break;
+    }
+  }
+
+  __declspec(naked) void RetailFloorSecondsToTicks(const void* in, void* out)
+  {
+    __asm {
+      push ebx
+      push esi
+      push edi
+      push ebp
+      mov  ebp, [esp + 20]      // in
+      mov  ebx, [esp + 24]      // out
+      movss xmm0, [ebp]         // the retail's argument: the seconds
+      mov  edi, 0x0066D1D0
+      call edi
+      mov  [ebx], eax            // the tick count comes back in EAX
+      pop  ebp
+      pop  edi
+      pop  esi
+      pop  ebx
+      ret
+    }
+  }
+
+  void OursFloorSecondsToTicks(const void* in, void* out)
+  {
+    const TicksIn& typedIn = *static_cast<const TicksIn*>(in);
+    TicksOut& typedOut = *static_cast<TicksOut*>(out);
+    typedOut.ticks = moho::FloorSecondsToTicks(typedIn.seconds);
+  }
+
   const std::vector<Target> kTargets = {
     {
       "NormalizeVectorInto",
@@ -3591,6 +4358,46 @@ namespace
       &GenAsin,
       &RetailAsin,
       &OursAsin,
+    },
+    {
+      "RayBoxSlabClip",
+      0x00473DF0u,
+      "src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105",
+      sizeof(SlabIn),
+      sizeof(SlabOut),
+      &GenSlab,
+      &RetailRayBoxSlabClip,
+      &OursRayBoxSlabClip,
+    },
+    {
+      "MakeSegment3fFromEndpoints",
+      0x004FE130u,
+      "src/moho/math/Wm3Segment3FafExtras.cpp:8",
+      sizeof(SegIn),
+      sizeof(SegOut),
+      &GenSegment,
+      &RetailMakeSegment3fFromEndpoints,
+      &OursMakeSegment3fFromEndpoints,
+    },
+    {
+      "GridPosCtor",
+      0x00506E20u,
+      "src/moho/math/GridPos.cpp:22",
+      sizeof(GridIn),
+      sizeof(GridOut),
+      &GenGridPos,
+      &RetailGridPosCtor,
+      &OursGridPosCtor,
+    },
+    {
+      "FloorSecondsToTicks",
+      0x0066D1D0u,
+      "src/moho/math/GridPos.h:33",
+      sizeof(TicksIn),
+      sizeof(TicksOut),
+      &GenTicks,
+      &RetailFloorSecondsToTicks,
+      &OursFloorSecondsToTicks,
     },
   };
 }  // namespace

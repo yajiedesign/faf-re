@@ -80,6 +80,10 @@ It is `EXCLUDE_FROM_ALL`: the engine build does not depend on it.
 # msvc8_sinf         0x005734E0 src/legacy/math/X87Math.cpp:413                      in[4B] out[4B]
 # msvc8_frexp        0x00A8DA05 src/legacy/math/X87Math.cpp:291                      in[8B] out[16B]
 # msvc8_asin         0x00A8DE20 src/legacy/math/X87Math.cpp:773                      in[8B] out[8B]
+# RayBoxSlabClip     0x00473DF0 src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105    in[56B] out[36B]
+# MakeSegment3fFromEndpoints 0x004FE130 src/moho/math/Wm3Segment3FafExtras.cpp:8             in[24B] out[32B]
+# GridPosCtor        0x00506E20 src/moho/math/GridPos.cpp:22                         in[16B] out[12B]
+# FloorSecondsToTicks 0x0066D1D0 src/moho/math/GridPos.h:33                           in[4B] out[4B]
 ```
 
 Options: `--iters N`, `--seed S`, `--filter NAME` (comma-separated substrings),
@@ -114,22 +118,28 @@ declared in `src/targets.h`.
 
 ## State
 
-**The table has thirty-one rows.** Five translation units are under test:
+**The table has thirty-five rows.** Eight translation units are under test:
 `src/moho/math/Vector3f.cpp` (the row for `moho::NormalizeVectorInto` plus
 the seven vector rows below), `src/moho/math/QuaternionMath.cpp` (the eight
 quaternion rows plus the seven rows of the second batch),
 `src/moho/math/Vector4f.cpp` (the row for
 `moho::Vector4f::operator=`), `src/moho/math/Vector2f.cpp` (the row for
-`moho::IsValidVector2f`) and `src/legacy/math/X87Math.cpp` (the five x87
-helper rows of the second batch), all compiled into the harness with the
-engine's own switches. The dependencies they bring with them are Wild
+`moho::IsValidVector2f`), `src/legacy/math/X87Math.cpp` (the five x87
+helper rows of the second batch -- it used to be a dependency TU only, now
+it is a unit under test in its own right),
+`src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp` (the row for
+`moho::RayBoxSlabClip`), `src/moho/math/Wm3Segment3FafExtras.cpp` (the row
+for `Wm3::MakeSegment3fFromEndpoints`) and `src/moho/math/GridPos.cpp` (the
+rows for `moho::GridPos::GridPos` and `moho::FloorSecondsToTicks`) -- plus
+the function extracted out of `src/moho/sim/Sim.cpp` by line number,
+`moho::QuatCrossAdd` (`extract.json`; see below). Their dependency TUs are
+`src/gpg/core/containers/String.cpp` (`gpg::STR_Printf`),
+`src/legacy/containers/String.cpp` (the `msvc8::string` body), Wild
 Magic's `Foundation/System/Wm3System.cpp` (`Wm3::Quaternion`'s copy
-assignment calls `Wm3::System::Memcpy`), `src/gpg/core/containers/String.cpp`
-(`Vector4f.cpp` formats through `gpg::STR_Printf`) and
-`src/legacy/containers/String.cpp` (the `msvc8::string` body). The function
-extracted out of `src/moho/sim/Sim.cpp` by line number is `moho::QuatCrossAdd`
-(`extract.json`; see below). The per-row evidence is in this file, the
-coverage ledger is `tools/fafdiff/COVERAGE.md`.
+assignment calls `Wm3::System::Memcpy`) and Wild Magic's containment code
+(`Wm3::ContAlignedBox`, which the *other* function of
+`Wm3AxisAlignedBox3FafExtras.cpp` calls). The per-row evidence is in this
+file, the coverage ledger is `tools/fafdiff/COVERAGE.md`.
 
 ```bash
 ./build/clang-x86-release/tools/fafdiff/fafdiff.exe --list
@@ -165,6 +175,10 @@ coverage ledger is `tools/fafdiff/COVERAGE.md`.
 # msvc8_sinf         0x005734E0 src/legacy/math/X87Math.cpp:413                      in[4B] out[4B]
 # msvc8_frexp        0x00A8DA05 src/legacy/math/X87Math.cpp:291                      in[8B] out[16B]
 # msvc8_asin         0x00A8DE20 src/legacy/math/X87Math.cpp:773                      in[8B] out[8B]
+# RayBoxSlabClip     0x00473DF0 src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105    in[56B] out[36B]
+# MakeSegment3fFromEndpoints 0x004FE130 src/moho/math/Wm3Segment3FafExtras.cpp:8             in[24B] out[32B]
+# GridPosCtor        0x00506E20 src/moho/math/GridPos.cpp:22                         in[16B] out[12B]
+# FloorSecondsToTicks 0x0066D1D0 src/moho/math/GridPos.h:33                           in[4B] out[4B]
 ```
 
 ### One extracted function, and why
@@ -1698,18 +1712,386 @@ struct AsinOut { double result; };  // 8 bytes
 | mutation: the SSE2 dispatch is bypassed (`TakesSse2Lane(...)` -> `false`), so the engine takes its x87 lane while the retail takes the SSE2 one | `[FAIL] 83442 mismatches in 1000000 iterations` (+7 NaN-payload-only) |
 | restore | `[PASS] 1000000/1000000` |
 
+## The third batch of rows
+
+Four more rows, in three translation units the harness had not compiled yet:
+`src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp` (the row for
+`moho::RayBoxSlabClip`), `src/moho/math/Wm3Segment3FafExtras.cpp` (the row for
+`Wm3::MakeSegment3fFromEndpoints`) and `src/moho/math/GridPos.cpp` (the rows
+for `moho::GridPos::GridPos` and `moho::FloorSecondsToTicks`). The table now
+holds **thirty-five** rows.
+
+Two of the three translation units needed Wild Magic's containment code as a
+dependency: `moho::AxisAlignedBoundsFromBox` -- the *other* function in
+`Wm3AxisAlignedBox3FafExtras.cpp` -- calls `Wm3::ContAlignedBox`, whose body
+lives in `Foundation/Containment/Wm3ContBox3.cpp`, and that file's own
+siblings (`ContOrientedBox`, `ContMinBox`) drag in the convex hull and the
+eigen solver, so those come along as well. They are dependencies, not units
+under test; only the three `src/moho/math/` files are.
+
+### `RayBoxSlabClip` -- retail `0x00473DF0`
+
+`src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| state | `ECX` (worked on in place) |
+| box | `EDX` |
+| return value | `EAX` = 0 or 1 (1 when the interval is still non-empty) |
+
+```
+0x00473DF0  push ebp / mov ebp, esp / and esp, 0xfffffff8
+0x00473DF9  fld  dword ptr [ecx + 0xc]      <- the x direction lane
+0x00473DFC  movss xmm5, [0x00dfec20]       <- 1.0f
+0x00473E07  fst  dword ptr [esp + 4]        <- the raw direction lane
+0x00473E0B  fabs
+0x00473E0D  fld  dword ptr [0x00e4f7a8]     <- FLT_MIN
+0x00473E13  fxch st(1)
+0x00473E15  fcompi st(1) / jb 0x00473E85    <- |dir| < FLT_MIN: skip the axis
+0x00473E19  movss xmm4, [esp + 4]          <- the raw direction lane again
+0x00473E1F  comiss xmm4, xmm6              <- the direction against 0.0f
+0x00473E22  movss xmm3, [ecx]              <- the origin lane
+0x00473E26  movss xmm0, [edx]              <- the box's Min lane
+0x00473E2A  movss xmm1, [edx + 0xc]        <- the box's Max lane
+0x00473E32  divss xmm2, xmm4               <- 1.0f / direction
+0x00473E36  subss xmm0, xmm3               <- Min - origin
+0x00473E3A  subss xmm1, xmm3               <- Max - origin
+0x00473E3E  mulss xmm0, xmm2               <- t0
+0x00473E42  mulss xmm1, xmm2               <- t1
+0x00473E46  movss xmm2, [ecx + 0x18]       <- the running tEnter
+0x00473E4B  jbe 0x00473E66                 <- direction <= 0: the other order
+0x00473F7D  movss xmm0, [ecx + 0x1c]       <- the running tExit
+0x00473F82  comiss xmm0, [ecx + 0x18]      <- tExit against tEnter
+0x00473F86  jb 0x00473F91                  <- tExit < tEnter: false
+0x00473F88  mov eax, 1                     <- true
+```
+
+The state is the layout `moho::RaySlabState` has: the origin lanes at
++0x00..+0x08, the direction lanes at +0x0c..+0x14 and the running interval at
++0x18 and +0x1c.
+
+The degenerate-direction gate is the **x87** one: `|direction|` is compared
+against `FLT_MIN` (0x00e4f7a8) with `fcompi`, and an unordered (NaN)
+direction skips the axis as well -- which is what the rebuild's
+`!(fabs(direction) >= FLT_MIN)` does. The sign test that follows is on the
+*raw* direction lane (the `fst` at 0x00473E07 happens **before** the `fabs`,
+so the lane that reaches `comiss` is the signed one): a direction that is not
+greater than zero takes the branch that swaps the two slab candidates
+(`tEnter = max(tEnter, t1)`, `tExit = min(tExit, t0)`), the other one does
+not.
+
+**The typed shapes**
+
+```cpp
+struct SlabIn  { moho::RaySlabState state;          // 32 bytes
+                 Wm3::AxisAlignedBox3f box; };      // 24 bytes
+struct SlabOut { moho::RaySlabState state;          // 32 bytes
+                 std::uint32_t clipped; };          //  4 bytes
+```
+
+This is the **object state** dimension: the comparison is the whole state
+the retail leaves behind (the slab clip narrows the interval in place) plus
+the answer. The row copies the input state into the output buffer and hands
+the retail *that* buffer, so the retail works in place exactly as it does in
+the engine.
+
+**The generator**
+
+* `Ordinary`: a plain ray (finite, normal, non-zero lanes) against a plain
+  box, with the interval `[0, 1e30]`.
+* `WithExtremes`: 20% a plain ray, 15% a ray parallel to a slab (one
+  direction lane exactly zero, signed), 10% the origin exactly on a face of
+  the box, 10% an **inverted** box (min > max on one axis -- the retail does
+  not check the order), 8% a degenerate direction (`|dir| < FLT_MIN`, so the
+  axis is skipped), 7% the direction exactly **on** the `FLT_MIN` gate (the
+  axis is *not* skipped), 10% NaN lanes in the origin, the direction and the
+  box, 10% a degenerate interval (empty, a single point, infinite, NaN),
+  5% huge coordinates (the products overflow to infinity) and the rest the
+  mixed draw.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| mutation: the sign test `direction <= 0.0f` -> `direction >= 0.0f` (the two slab candidates are swapped) | `[FAIL] 908239 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `MakeSegment3fFromEndpoints` -- retail `0x004FE130`
+
+`src/moho/math/Wm3Segment3FafExtras.cpp:8`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| start | `ECX` |
+| end | `EAX` |
+| the segment | `ESI` -- the object the retail fills in |
+| return value | `EAX` = the object pointer (`mov eax, esi` at 0x004FE251) |
+
+```
+0x004FE130  sub  esp, 0x24
+0x004FE133  movss xmm1, [ecx]              <- the start's x lane
+0x004FE137  movss xmm0, [eax]              <- the end's x lane
+0x004FE145  subss xmm0, xmm1               <- end.x - start.x
+0x004FE149  movss [esp + 8], xmm1          <- the start's x lane, kept
+0x004FE154  subss xmm1, xmm2               <- end.y - start.y
+0x004FE158  movss [esp + 0xc], xmm2        <- the start's y lane, kept
+0x004FE163  subss xmm2, xmm3               <- end.z - start.z
+0x004FE167  movss [esp + 0x10], xmm3       <- the start's z lane, kept
+0x004FE16D  movss xmm3, [0x00e4f724]       <- 0.5f
+0x004FE175  mulss xmm1, xmm3               <- the half's y lane
+0x004FE179  mulss xmm0, xmm3               <- the half's x lane
+0x004FE17D  mulss xmm2, xmm3               <- the half's z lane
+0x004FE184  mulss xmm3, xmm1               <- half.y * half.y
+0x004FE191  mulss xmm1, xmm2               <- half.z * half.z
+0x004FE195  addss xmm3, xmm1               <- (half.y^2 + half.z^2)
+0x004FE19C  mulss xmm1, xmm0               <- half.x * half.x
+0x004FE1A1  addss xmm3, xmm1               <- + half.x^2
+0x004FE1B6  call 0x00452FC0                <- the retail's own sqrt
+0x004FE1BB  fst  dword ptr [esp + 8]        <- the extent, rounded to float
+0x004FE1CF  comiss xmm4, xmm1              <- the extent against 0.0f
+0x004FE1D2  jbe 0x004FE1FF                 <- not positive: the zero direction
+0x004FE1E8  divss xmm0, xmm4               <- 1.0f / extent
+0x004FE1EF  mulss xmm1, [esp + 0x18]        <- half.x * (1/extent)
+0x004FE20B  addss xmm0, [esp + 0x18]        <- start.x + half.x
+0x004FE229  movss [esi], xmm0               <- the origin's x lane
+0x004FE23D  movss [esi + 0xc], xmm1         <- the direction's x lane
+0x004FE24C  movss [esi + 0x18], xmm0        <- the extent
+0x004FE251  mov eax, esi                    <- the return value: the object
+0x004FE256  ret
+```
+
+**How a by-value struct return travels here.** The retail's 0x004FE130 is
+not a factory: it is `Segment3::Segment3(end, start)`, a **constructor**.
+`ESI` is the object the caller owns, the retail fills its 28 bytes in place
+and returns the object pointer in `EAX`. The rebuild's
+`Wm3::MakeSegment3fFromEndpoints` returns the segment **by value**, so the
+harness hands the retail an output buffer (`ESI` = the output) and compares
+the 28 bytes the retail filled with the rebuild's returned object. The
+`returnedDest` flag records the retail's answer to "is the returned pointer
+the object it was handed" (1: yes).
+
+The sum of the squares is formed in the retail's order --
+`(half.y^2 + half.z^2) + half.x^2` -- which is the order the rebuild's
+source spells out as well. (The rebuild's *compiler* emits the two first
+squares the other way round; that is a NaN-payload difference only, and the
+harness tallies it rather than failing on it.)
+
+The extent is the retail's own square root (0x00452FC0, an x87 `fsqrt`
+under the simulation's `_PC_24`), against the rebuild's `std::sqrt` in
+binary64. The double rounding is innocuous here (53 bits >= 2*24 + 2), so
+the two agree bit for bit.
+
+**The typed shapes**
+
+```cpp
+struct SegIn  { Wm3::Vector3f start;              // 12 bytes
+                Wm3::Vector3f end; };              // 12 bytes
+struct SegOut { Wm3::Segment3f segment;            // 28 bytes
+                std::uint32_t returnedDest; };     //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: two plain points.
+* `WithExtremes`: 25% two plain points, 13% the two points **coincide** (the
+  extent is zero and the direction is the zero vector), 12% the end point
+  before the start point, 10% one lane equal and the other two different,
+  10% huge coordinates (the difference overflows to infinity and the
+  direction becomes NaN), 8% a difference that underflows into the
+  denormals, 10% NaN lanes and 12% infinite lanes.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| `--strict-nan`, 1,000,000, `0x5EED2007` | `[FAIL] 3088 mismatches` -- **NaN-payload only** (the rebuild's compiler sums the two first squares the other way round) |
+| mutation: the degenerate test `extent > 0.0f` -> `extent >= 0.0f` (the zero-length segment gets a NaN direction) | `[FAIL] 209680 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `GridPosCtor` -- retail `0x00506E20`
+
+`src/moho/math/GridPos.cpp:22`.
+
+**The retail convention**
+
+| | |
+|---|---|
+| the object | `ECX` (the constructor writes its two lanes in place) |
+| the world position | `ESI` |
+| the grid size | the first stack argument |
+| return value | `EAX` = the object pointer (`mov eax, ecx` at 0x00506E94) |
+| epilogue | `pop edi / pop ecx / ret` -- the argument is **not** popped, the caller does it |
+
+```
+0x00506E20  push ecx
+0x00506E21  cvtsi2ss xmm1, [esp + 8]      <- the grid size, as a float
+0x00506E27  movss xmm0, [0x00dfec20]       <- 1.0f
+0x00506E2F  divss xmm0, xmm1               <- 1.0f / gridSize
+0x00506E33  movss xmm1, [esi]             <- the world position's x lane
+0x00506E37  mulss xmm1, xmm0              <- the scaled x lane
+0x00506E49  fld  dword ptr [esp + 4]      <- the scaled lane
+0x00506E4D  frndint
+0x00506E4F  fld  dword ptr [esp + 4]
+0x00506E53  fcompi st(1)                  <- the scaled lane against the rounded one
+0x00506E55  cmovb eax, edx                <- smaller: -1
+0x00506E58  fistp dword ptr [esp + 0xc]    <- the rounded lane, as an int
+0x00506E5C  add eax, [esp + 0xc]
+0x00506E8F  mov dword ptr [ecx], edi       <- the object's x lane
+0x00506E91  mov dword ptr [ecx + 4], eax   <- the object's z lane
+0x00506E94  mov eax, ecx                   <- the return value: the object
+```
+
+The floor is the binary's: the scaled lane is rounded with `frndint` (round
+to nearest, ties to even) and **one is taken off when the scaled lane is
+below the rounded one** -- the `fcompi` sets the carry flag, and `cmovb`
+turns it into the `-1`. The rebuild's source spells the same thing as
+`(int)rounded + (scaled < rounded ? -1 : 0)`.
+
+This is the **object state** dimension as well: the comparison is the two
+integer lanes the constructor leaves in the object.
+
+**The typed shapes**
+
+```cpp
+struct GridIn  { Wm3::Vector3f wldPos;            // 12 bytes
+                 std::int32_t gridSize; };        //  4 bytes
+struct GridOut { std::int32_t x;                  //  4 bytes
+                 std::int32_t z;                  //  4 bytes
+                 std::uint32_t returnedThis; };   //  4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a plain world position and a grid size in [1, 1024].
+* `WithExtremes`: 18% a world position that lands **exactly on an integer**
+  (grid size 1), 18% one that lands **exactly on a half** -- the
+  round-to-nearest-even of the retail's `frndint` and of the rebuild's
+  `nearbyint` is what decides the answer there, and it is the case that
+  separates a floor from a truncation -- 14% a power-of-two grid size (the
+  reciprocal is exact), 14% a grid size whose reciprocal is not exact, 8% a
+  negative grid size, 8% the signed zeros and the denormals, 8% the edges of
+  the integer range the two sides agree on, and the rest the mixed draw.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| mutation: the floor adjustment `scaled < rounded` -> `scaled <= rounded` (an exactly integral scaled lane is floored one too far) | `[FAIL] 160162 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+### `FloorSecondsToTicks` -- retail `0x0066D1D0`
+
+`src/moho/math/GridPos.h:33` (the declaration; the body is in
+`src/moho/math/GridPos.cpp:36`).
+
+**The retail convention**
+
+| | |
+|---|---|
+| the seconds | `XMM0` (the first float argument) |
+| return value | `EAX` = the tick count |
+
+```
+0x0066D1D0  sub  esp, 8
+0x0066D1D3  mulss xmm0, [0x00dff31c]       <- the seconds * 10.0f
+0x0066D1DB  movss [esp + 4], xmm0          <- the scaled lane
+0x0066D1E8  fld  dword ptr [esp + 4]
+0x0066D1EC  frndint
+0x0066D1EE  fld  dword ptr [esp + 4]
+0x0066D1F2  fcompi st(1)                  <- the scaled lane against the rounded one
+0x0066D1F4  cmovb eax, edx                <- smaller: -1
+0x0066D1F7  fistp dword ptr [esp]          <- the rounded lane, as an int
+0x0066D1FA  add eax, [esp]
+0x0066D200  ret
+```
+
+The same floor lane as the grid constructor, on `seconds * 10.0f`.
+
+**The typed shapes**
+
+```cpp
+struct TicksIn  { float seconds; };            // 4 bytes
+struct TicksOut { std::int32_t ticks; };       // 4 bytes
+```
+
+**The generator**
+
+* `Ordinary`: a plain number of seconds in [-1e6, 1e6].
+* `WithExtremes`: the edge table -- 0, -0, the values whose scaled lane is
+  exactly 0.5, 1.5, 2.5 and -0.5 (the ties of the round-to-nearest-even),
+  the values whose scaled lane is exactly 1.0 and -1.0, the smallest
+  denormal and its negative, the edges of the covered integer range, and
+  plain values in three magnitudes.
+
+**The evidence**
+
+| check | result |
+|---|---|
+| 1,000,000 iterations, seed `0x5EED2007` | `[PASS] 1000000/1000000 bit-identical` |
+| 1,000,000 iterations, seed `0xDEADBEEF` | `[PASS] 1000000/1000000 bit-identical` |
+| the five-seed sweep (`0x5EED2007`, `0xDEADBEEF`, `0x12345678`, `0xC0FFEE01`, `0xA5A5A5A5`), 1,000,000 each | `[PASS]` on all five |
+| `--skip-extreme`, the same five seeds, 200,000 each | `[PASS]` on all five |
+| mutation: the floor adjustment `scaled < rounded` -> `scaled <= rounded` | `[FAIL] 395158 mismatches in 1000000 iterations` |
+| restore | `[PASS] 1000000/1000000` |
+
+## The grid floor and the tick floor outside the covered domain
+
+The two floor rows above cover the domain in which the retail and the rebuild
+agree: a **finite** scaled lane whose magnitude fits into a 32-bit integer
+(|scaled| <= 2^31 - 1). Outside it the two sides differ, and the difference
+is a property of the two *contracts*, not of a bug in either side:
+
+* **A NaN scaled lane.** The retail's `fcompi` sets the carry flag on an
+  unordered comparison, and its `cmovb` turns that carry into the `-1`; the
+  `fistp` of a NaN then stores the "integer indefinite" `0x80000000`. The
+  retail answers `0x7FFFFFFF`. The rebuild's comparison is a C++
+  `scaled < rounded`, which is **false** for a NaN, and its `double` to
+  `int` conversion is guarded by a `cmovpl` that answers `0`. The rebuild
+  answers `0`.
+* **A positive infinite scaled lane.** The retail's `fistp` of an infinity
+  stores the indefinite `0x80000000`; the rebuild clamps the double to the
+  32-bit range and answers `2147483647`.
+* **A positive scaled lane outside the 32-bit range** (`scaled >= 2^31`).
+  The retail's `fistp` stores the indefinite `0x80000000` (the answer
+  `-2147483648`); the rebuild clamps and answers `2147483647`. (On the
+  negative side the two agree: both answer `-2147483648`.)
+
+The two rows therefore draw their inputs from the covered domain: the
+generators above never produce a NaN or an infinite world coordinate or
+number of seconds, and they keep the scaled lane inside the 32-bit range.
+That is a deliberate restriction, and it is why the floor rows do **not**
+witness the NaN and out-of-range behaviour -- the rebuild does not reproduce
+the retail's x87 conversion lane there, and no row in this harness can claim
+that it does.
+
 ## The candidates that could not be paired as rows
 
 `moho::CoordsAbsFloat` (retail `0x0050D140`), `moho::CoordsScaleByInvSqrt`
 (retail `0x0050D150`) and `moho::QuaternionToRotationMatrix3x3` (retail
-`0x00A3AD70`) are recorded as 不适用 in the ledger. All three live in an
-anonymous namespace in `src/moho/math/QuaternionMath.cpp` and the compiler
-inlines them: the engine's `QuaternionMath.cpp.obj` has **no symbol** for any
-of them (`llvm-nm` finds none), so the harness has no code of its own to
-compare against the retail, and no extraction was made for them (an
-extraction would not be the engine's build either -- the engine never emits
-these bodies). The reasons are spelled out per address in
-`tools/fafdiff/data/coverage_status.json`; in short:
+`0x00A3AD70`) are recorded as 不适用 in the ledger. Each retail body exists;
+what the engine has is **not the same operation**, and that is the reason --
+not that the compiler inlined these functions. Being able to call them is a
+property of the build, not of the contract: a bridge translation unit that
+`#include`s the `.cpp` and calls the helper from inside `namespace moho` can
+reach any of them. It would then be comparing a different operation. The
+per-address reasons are in `tools/fafdiff/data/coverage_status.json`; in
+short:
 
 * **`0x0050D140`** is the retail's `fld dword ptr [ebp + 8]; fabs`: it answers
   with the 80-bit extended value, where the engine's copy answers with a
@@ -1726,10 +2108,14 @@ these bodies). The reasons are spelled out per address in
   `BuildTiltShortestArcDelta` row too.
 * **`0x00A3AD70`** is a real retail body (a double quaternion expanded into a
   3x3 double rotation matrix), but the engine's copy is an unused
-  anonymous-namespace function the compiler discards -- and it would not
-  match anyway: the retail computes the whole chain on the x87 (a 24-bit
+  `[[maybe_unused]]` function that nothing calls -- and it would not match
+  anyway: the retail computes the whole chain on the x87 (a 24-bit
   significand under the simulation's `_PC_24`, not binary64), while the
   engine's source is plain binary64 double arithmetic.
+
+For all three, the engine's object carries no symbol for the helper
+(`llvm-nm` finds none in `QuaternionMath.cpp.obj`); that is a fact about the
+build, not the verdict.
 
 ## The candidate that could not be paired: `Moho::ToString`
 
@@ -1782,13 +2168,14 @@ function under test.)
 
 ## The NaN-payload differences
 
-Six rows report differences under `--strict-nan` that are **NaN payloads
+Seven rows report differences under `--strict-nan` that are **NaN payloads
 only**: both sides produce a NaN in the same lane, and only the payload bits
 differ (for example the retail writes `7FC00000` where the rebuild writes
 `7FC12345`, the payload of the NaN that came in). The counts per million
 iterations are 1614 (`MatrixToQuat`), 3747 (`QuatFromVecRot`), 765
 (`MatrixRowsToQuatCanonical`), 772 (`MatrixColumnsToQuatCanonical`), 42733
-(`BuildRotationMatrixEulerHPR`) and 948 (`BuildTiltShortestArcDelta`), i.e.
+(`BuildRotationMatrixEulerHPR`), 948 (`BuildTiltShortestArcDelta`) and 3088
+(`MakeSegment3fFromEndpoints`), i.e.
 between 0.08% and 4.3% of the iterations, and they come from the same class
 of mechanism: the retail's x87 path quiets a NaN into the default one (or
 the x87 "real indefinite", `FFC00000`) while the rebuild propagates the
@@ -1814,6 +2201,9 @@ the symbol names and the file header lines removed):
 | `src/moho/math/Vector2f.cpp` | identical (70 instruction lines) |
 | `src/gpg/core/containers/String.cpp` | identical (3913 instruction lines) |
 | `src/legacy/containers/String.cpp` | identical (3149 instruction lines) |
+| `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp` | identical (390 instruction lines) |
+| `src/moho/math/Wm3Segment3FafExtras.cpp` | identical (90 instruction lines) |
+| `src/moho/math/GridPos.cpp` | identical (85 instruction lines) |
 | the extracted `QuatCrossAdd` (`Sim.cpp` vs `generated/sim_quat_cross_add.cpp`) | identical (263 instruction lines) |
 
 The counts are the disassembled instruction lines of `llvm-objdump -d`

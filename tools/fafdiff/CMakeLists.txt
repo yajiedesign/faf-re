@@ -70,7 +70,35 @@ set(FAFDIFF_SOURCES
   # Magic's Foundation/System/Wm3System.cpp. It is compiled with the engine's
   # own switches as well, so the copy behaves in the harness exactly as it does
   # in the engine.
-  "${WM3_ROOT}/Foundation/System/Wm3System.cpp")
+  "${WM3_ROOT}/Foundation/System/Wm3System.cpp"
+  # src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp is a unit under test (the
+  # row for moho::RayBoxSlabClip, retail 0x00473DF0).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp"
+  # src/moho/math/Wm3Segment3FafExtras.cpp is a unit under test (the row for
+  # Wm3::MakeSegment3fFromEndpoints, retail 0x004FE130).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/Wm3Segment3FafExtras.cpp"
+  # src/moho/math/GridPos.cpp is a unit under test (the rows for
+  # moho::GridPos::GridPos, retail 0x00506E20, and moho::FloorSecondsToTicks,
+  # retail 0x0066D1D0).
+  "${CMAKE_SOURCE_DIR}/src/moho/math/GridPos.cpp"
+  # A dependency of the Wm3AxisAlignedBox3FafExtras.cpp TU above, not a unit
+  # under test: that file's other function (moho::AxisAlignedBoundsFromBox)
+  # calls Wm3::ContAlignedBox, whose body lives in Wild Magic's
+  # Foundation/Containment/Wm3ContBox3.cpp. The linker needs the whole symbol
+  # -- the object file is pulled in whole, and ContAlignedBox's own siblings
+  # (ContOrientedBox, ContMinBox) drag in the convex hull and the eigen
+  # solver, so those come along as well.
+  "${WM3_ROOT}/Foundation/Containment/Wm3ContBox3.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3ContBox2.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3ConvexHull3.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3ConvexHull1.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3ConvexHull2.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3ConvexHull.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3HullEdge2.cpp"
+  "${WM3_ROOT}/Foundation/Containment/Wm3HullTriangle3.cpp"
+  "${WM3_ROOT}/Foundation/Approximation/Wm3ApprGaussPointsFit3.cpp"
+  "${WM3_ROOT}/Foundation/Approximation/Wm3ApprGaussPointsFit2.cpp"
+  "${WM3_ROOT}/Foundation/Numerics/Wm3Eigen.cpp")
 
 # --- The functions extracted from a TU the harness cannot link ------------------------
 # src/moho/sim/Sim.cpp holds moho::QuatCrossAdd (the row for retail 0x0044F880,

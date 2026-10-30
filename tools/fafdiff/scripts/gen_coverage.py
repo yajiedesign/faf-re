@@ -426,6 +426,12 @@ def build_markdown(rows, statuses, src_commit, screen_path, status_path,
     out.append("domain. The per-row evidence -- iteration counts, mutation, seed list --")
     out.append("lives in `tools/fafdiff/README.md`; this table only carries the verdict.")
     out.append("")
+    out.append("A matched row may still carry a `why` in the status file. That means the pair")
+    out.append("is bit-identical on the domain the generator draws from, and the generator")
+    out.append("deliberately stays inside it because the two contracts diverge outside; the")
+    out.append("mechanism is written down in `tools/fafdiff/README.md`. The two floor rows")
+    out.append("(NAN, infinity and out-of-range scaled lanes) are the current case.")
+    out.append("")
 
     # ----------------------------------------------- 3. how it is generated
     out.append("## How this table is generated")

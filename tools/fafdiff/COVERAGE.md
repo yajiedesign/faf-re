@@ -10,7 +10,7 @@ in the retail image.
 | `src` commit | `d814addb` |
 | screen data | `.tmp/fafdiff/screen.json` |
 | status data | `tools/fafdiff/data/coverage_status.json` |
-| statuses | `未匹配` 4, `已匹配` 30, `失败` 0, `不适用` 4 |
+| statuses | `未匹配` 0, `已匹配` 34, `失败` 0, `不适用` 4 |
 
 A row's status is one of four:
 
@@ -25,7 +25,7 @@ A row's status is one of four:
 |---:|---|---|---|---|
 | 1 | `NormalizeVectorInto(Wm3::Vector3f* const dest, const Wm3::Vector3f& source)` | `0x0044F7E0` | `src/moho/math/Vector3f.cpp:25` | 已匹配 |
 | 2 | `Vector4f::operator=(const Vector4f& rhs)` | `0x0046FB20` | `src/moho/math/Vector4f.cpp:84` | 已匹配 |
-| 3 | `RayBoxSlabClip(RaySlabState& state, const Wm3::AxisAlignedBox3f& box)` | `0x00473DF0` | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105` | 未匹配 |
+| 3 | `RayBoxSlabClip(RaySlabState& state, const Wm3::AxisAlignedBox3f& box)` | `0x00473DF0` | `src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp:105` | 已匹配 |
 | 4 | `atan2f(const float y, const float x)` | `0x004E9DF0` | `src/legacy/math/X87Math.cpp:465` | 已匹配 |
 | 5 | `MatrixToQuat(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004EB3F0` | `src/moho/math/QuaternionMath.cpp:256` | 已匹配 |
 | 6 | `RotateQuatByAngle(Wm3::Quaternionf* quat, float rads)` | `0x004EB740` | `src/moho/math/QuaternionMath.cpp:557` | 已匹配 |
@@ -37,8 +37,8 @@ A row's status is one of four:
 | 12 | `QuatsNearEqual(const Wm3::Quaternionf& lhs, const Wm3::Quaternionf& rhs)` | `0x004EDED0` | `src/moho/math/QuaternionMath.cpp:201` | 已匹配 |
 | 13 | `MatrixColumnsToQuatCanonical(const Wm3::Vector3f* const matrixColumns, Wm3::Quaternionf* const out)` | `0x004F0AE0` | `src/moho/math/QuaternionMath.cpp:391` | 已匹配 |
 | 14 | `MatrixRowsToQuatCanonical(const Wm3::Vector3f* const matrixRows, Wm3::Quaternionf* const out)` | `0x004F0CB0` | `src/moho/math/QuaternionMath.cpp:317` | 已匹配 |
-| 15 | `MakeSegment3fFromEndpoints(const Vector3f& start, const Vector3f& end)` | `0x004FE130` | `src/moho/math/Wm3Segment3FafExtras.cpp:8` | 未匹配 |
-| 16 | `GridPos::GridPos(Wm3::Vec3f* const wldPos, const int gridSize)` | `0x00506E20` | `src/moho/math/GridPos.cpp:22` | 未匹配 |
+| 15 | `MakeSegment3fFromEndpoints(const Vector3f& start, const Vector3f& end)` | `0x004FE130` | `src/moho/math/Wm3Segment3FafExtras.cpp:8` | 已匹配 |
+| 16 | `GridPos::GridPos(Wm3::Vec3f* const wldPos, const int gridSize)` | `0x00506E20` | `src/moho/math/GridPos.cpp:22` | 已匹配 |
 | 17 | `BuildTiltShortestArcDelta(const Wm3::Vector3f& targetNormal, Wm3::Quaternionf* const outDelta, const Wm3::Vector3f& currentUp)` | `0x0050CB50` | `src/moho/math/QuaternionMath.cpp:983` | 已匹配 |
 | 18 | `CoordsAbsFloat(const float value)` | `0x0050D140` | `src/moho/math/QuaternionMath.cpp:946` | 不适用 |
 | 19 | `CoordsScaleByInvSqrt(const float lengthSq, const float a, const float b, float& outA, float& outB)` | `0x0050D150` | `src/moho/math/QuaternionMath.cpp:959` | 不适用 |
@@ -51,7 +51,7 @@ A row's status is one of four:
 | 26 | `sinf(const float x)` | `0x005734E0` | `src/legacy/math/X87Math.cpp:413` | 已匹配 |
 | 27 | `VecSetLength(Wm3::Vector3f* const vector, const float targetLength)` | `0x005B1C90` | `src/moho/math/Vector3f.cpp:149` | 已匹配 |
 | 28 | `NormalizeAngleSignedRadians(const float angleRadians)` | `0x0062FB50` | `src/moho/math/QuaternionMath.cpp:117` | 已匹配 |
-| 29 | `FloorSecondsToTicks(float seconds)` | `0x0066D1D0` | `src/moho/math/GridPos.h:33` | 未匹配 |
+| 29 | `FloorSecondsToTicks(float seconds)` | `0x0066D1D0` | `src/moho/math/GridPos.h:33` | 已匹配 |
 | 30 | `QuatFromAxisAngleVector(Wm3::Quaternionf* const quat, Wm3::Vector3f axisAngle)` | `0x00697360` | `src/moho/math/QuaternionMath.cpp:719` | 已匹配 |
 | 31 | `IsUnitLengthVector3f(const Wm3::Vector3f& value)` | `0x0069A1D0` | `src/moho/math/Vector3f.cpp:73` | 已匹配 |
 | 32 | `VecSetLengthTo(Wm3::Vector3f* const destination, const Wm3::Vector3f* const targetLengthVector, const Wm3::Vector3f* const sourceVector)` | `0x0069A360` | `src/moho/math/Vector3f.cpp:200` | 已匹配 |
@@ -65,9 +65,9 @@ A row's status is one of four:
 ## Why a row is 不适用
 
 * `0x004ECED0` ToString(const Vector4f& value) - 零售有对应体：0x004ECED0 是 Moho::ToString（把四个 lane 加宽成 double，用 "x=%f,y=%f,z=%f,w=%f" 格式化进调用方提供的字符串对象，调用 gpg::STR_Printf 0x00938F10，返回该对象）。但零售这一侧在本 harness 里跑不起来：调用进入 gpg::STR_Va (0x00938E00) 之后不再返回（int3 探针在 0x00938E00/0x00938E02/0x00938E07/0x00938E0D/0x00938E0E 都触发，0x00938E15 及其后都不触发；0x00938E0E 是 `mov dword ptr fs:[0], esp`，它装上的零售自己的 SEH 帧吞掉了随后发生的故障，展开再也没完成）。这一条因此无法逐位比对，记为不适用；证据见 tools/fafdiff/README.md。
-* `0x0050D140` CoordsAbsFloat(const float value) - 零售有对应体：0x0050D140 是 `fld dword ptr [ebp + 8]; fabs` —— 取一个 float 的绝对值，答案留在 x87 栈上（没有落到内存）。但重建版的 moho::CoordsAbsFloat 在 src/moho/math/QuaternionMath.cpp 的匿名 namespace 里、只有 BuildTiltShortestArcDelta 一个调用点，编译器把它内联进去了：engine 的 QuaternionMath.cpp.obj 里根本没有这个符号（llvm-nm 查不到），harness 无法单独调用它，所以它不能作为一条独立比对项。契约也不同：零售那一侧返回的是 80 位扩展精度（st(0)），重建版返回 double（先舍入到 binary64）。零售这一侧的行为由 0x0050CB50 那一行覆盖 —— 零售的 BuildTiltShortestArcDelta 正是调用 0x0050D140 的那个函数。
-* `0x0050D150` CoordsScaleByInvSqrt(const float lengthSq, const float a, const float b, float& outA, float& outB) - 零售有对应体：0x0050D150 是 `fld dword ptr [ebp + 8]; fsqrt; fld1; fdivrp` —— 1/sqrt(x)，答案留在 x87 栈上。但重建版的 moho::CoordsScaleByInvSqrt 不是它的对应物：那是一个重建版自造的复合助手（四个参数：lengthSq、a、b 和两个输出引用），把倒数与两个乘积融在一起做（源码注释写明：float 返回值会把倒数先舍入到 float 范围，denormal 输出上会差一个 ulp）。契约不同（零售是单参数、返回 st(0)；重建版是四参数、两个输出），而且它同样在匿名 namespace 里被内联进 BuildTiltShortestArcDelta，engine 的 .obj 里没有独立符号。零售那一侧对应的行为（倒数与两个乘积都留在 x87 栈上、直到 lane 存储才舍入）由 0x0050CB50 那一行覆盖。
-* `0x00A3AD70` QuaternionToRotationMatrix3x3(const double* const quaternionLanes, double* const outMatrixLanes) - 零售有对应体：0x00A3AD70 确实是一个把四个 double 组成的四元数 lane 展开成 3x3 double 旋转矩阵的函数（ECX = 四元数 lane，EAX = 九个 double 的输出）。但重建版的 moho::QuaternionToRotationMatrix3x3 在 src/moho/math/QuaternionMath.cpp 的匿名 namespace 里、没有任何调用点，编译器根本没有生成它 —— engine 的 QuaternionMath.cpp.obj 里没有这个符号（llvm-nm 查不到），harness 里不存在可比的代码。而且两边的算术本来也不一样：零售那一侧整条链走 x87（在模拟的 _PC_24 下是 24 位尾数，不是 binary64），重建源码写的是普通 double 运算（binary64），即使能调用也不会逐位相同。
+* `0x0050D140` CoordsAbsFloat(const float value) - 零售有对应体：0x0050D140 是 `fld dword ptr [ebp + 8]; fabs`——取一个 float 的绝对值，结果留在 x87 栈上（st(0)，80 位扩展精度）。重建版没有同契约的独立函数：`moho::CoordsAbsFloat` 返回 double（binary64），在引擎里只以**内联**形式存在于 `BuildTiltShortestArcDelta` 中（展开后中间值仍留在 x87 上）；一旦作为独立函数调用，返回处必然舍入到 binary64，与零售的 st(0) 不是同一个运算。能否调用不是障碍（桥接 TU 可以做到），契约不同才是，故记不适用。零售这一侧的行为由 0x0050CB50（BuildTiltShortestArcDelta）那一行覆盖。
+* `0x0050D150` CoordsScaleByInvSqrt(const float lengthSq, const float a, const float b, float& outA, float& outB) - 零售有对应体：0x0050D150 是 `fld dword ptr [ebp + 8]; fsqrt; fld1; fdivrp`——单参数、结果留在 st(0) 的 1/sqrt。重建版故意把它融合进四参数的 `moho::CoordsScaleByInvSqrt`（lengthSq、a、b 与两个输出引用：outA = a/sqrt(len)、outB = b/sqrt(len)），源码注释写明理由：float 返回会先把倒数舍入到 float 范围，denormal 输出上差一个 ulp，所以倒数与两个乘积必须一起形成。它不是零售那个单参数运算的对应实现，也没有可独立调用的 1/sqrt 版本；契约不同，故记不适用。零售侧行为由 0x0050CB50 那一行覆盖。
+* `0x00A3AD70` QuaternionToRotationMatrix3x3(const double* const quaternionLanes, double* const outMatrixLanes) - 零售有对应体：0x00A3AD70 把四个 double 的四元数展开成 3x3 double 旋转矩阵（ECX = 输入 lane，EAX = 九个 double 输出）。重建版的 `moho::QuaternionToRotationMatrix3x3` 是 `[[maybe_unused]]` 死代码，没有任何调用点；而且它按 binary64 计算，零售那条链走 x87（模拟的 _PC_24 下是 24 位尾数）——即使桥接 TU 把符号编出来，两边也不是同一个运算，不会逐位相同。它不是引擎实际执行的实现，也不与零售同构，故记不适用。
 
 ## What 已匹配 means
 
@@ -87,6 +87,12 @@ five-seed sweep (five seeds x 1,000,000 iterations):
 five-seed sweep catch the ones that only show up in a corner of the input
 domain. The per-row evidence -- iteration counts, mutation, seed list --
 lives in `tools/fafdiff/README.md`; this table only carries the verdict.
+
+A matched row may still carry a `why` in the status file. That means the pair
+is bit-identical on the domain the generator draws from, and the generator
+deliberately stays inside it because the two contracts diverge outside; the
+mechanism is written down in `tools/fafdiff/README.md`. The two floor rows
+(NAN, infinity and out-of-range scaled lanes) are the current case.
 
 ## How this table is generated
 

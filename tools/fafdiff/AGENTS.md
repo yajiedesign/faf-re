@@ -4,7 +4,7 @@
 在仓库根目录的 `AGENTS.md`；`dependencies/WildMagic3p8/wmdiff/AGENTS.md` 是另一个 harness
 的指引。
 
-**当前状态：表里有三十一条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
+**当前状态：表里有三十五条比对项。** 被测的 TU 是 `src/moho/math/Vector3f.cpp`
 （八条：零售 `0x0044F7E0` 的 `moho::NormalizeVectorInto`，以及
 `moho::VEC_LargestAxis`、`moho::VecSetLength`、`moho::VecSetLengthTo`、
 `moho::VEC_HeadingFromXZ`、`moho::EulerRollToQuat`、`moho::IsValidVector3f`、
@@ -20,12 +20,22 @@
 `src/moho/math/Vector2f.cpp`（一条：`moho::IsValidVector2f`）与
 `src/legacy/math/X87Math.cpp`（五条 x87 助手：`msvc8::atan2f`、`msvc8::cosf`、
 `msvc8::sinf`、`msvc8::frexp`、`msvc8::asin` —— 它原来只是依赖 TU，现在本身也是
-被测 TU），再外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
+被测 TU），第三批又加了两个 TU：`src/moho/math/Wm3AxisAlignedBox3FafExtras.cpp`
+（一条：`moho::RayBoxSlabClip`，零售 `0x00473DF0`）与
+`src/moho/math/Wm3Segment3FafExtras.cpp`（一条：
+`Wm3::MakeSegment3fFromEndpoints`，零售 `0x004FE130`），以及
+`src/moho/math/GridPos.cpp`（两条：`moho::GridPos::GridPos`，零售
+`0x00506E20`，与 `moho::FloorSecondsToTicks`，零售 `0x0066D1D0` —— 后者定义在
+`src/moho/math/GridPos.cpp` 里，头文件 `GridPos.h:33` 只是声明，所以它有独立符号，
+不是“不适用”），再外加从 `src/moho/sim/Sim.cpp` 按行号复制出来的
 `moho::QuatCrossAdd`（`extract.json`；见下文“复制的闭环”）；它们带的依赖 TU 是
 `src/gpg/core/containers/String.cpp`（`gpg::STR_Printf`）、
-`src/legacy/containers/String.cpp`（`msvc8::string`）与 Wild Magic 的
+`src/legacy/containers/String.cpp`（`msvc8::string`）、Wild Magic 的
 `Foundation/System/Wm3System.cpp`（`Wm3::Quaternion` 的拷贝赋值调用
-`Wm3::System::Memcpy`）。逐条证据在 `tools/fafdiff/README.md`，覆盖账本在
+`Wm3::System::Memcpy`）与 Wild Magic 的 containment 一族
+（`Wm3::ContAlignedBox` —— `Wm3AxisAlignedBox3FafExtras.cpp` 里另一个函数
+`moho::AxisAlignedBoundsFromBox` 要用它，它的同伴又把凸包与特征求解拖进来）。
+逐条证据在 `tools/fafdiff/README.md`，覆盖账本在
 `tools/fafdiff/COVERAGE.md`。
 
 **零售的格式化路径在本 harness 里跑不起来。** `moho::ToString`
@@ -69,6 +79,13 @@
 并写明原因（"零售无对应体：……"），然后接着做下一条 ✓
 
 ⇒ ⇒ 不要为了"确认是否可达"去追调用链：那不是 fafdiff 的问题，追了也不改变任何比对结果 ✓
+⇒ ⇒ **内联不是不配对的理由**：重建版把函数内联了、`.obj` 里没有符号，只是量具怎么拿到它的
+问题——头文件里的直接 `#include` 调用；`.cpp` 的匿名 namespace 里的，用一个 `#include` 该
+`.cpp` 的桥接 TU，在同一个 TU 内加薄包装调用 ✓
+
+⇒ ⇒ `不适用` 只留给**契约不同**：参数/返回值/运算本身不是一回事（例如融合过的助手、返回 binary64
+而零售留在 st(0)），或死代码且算法与零售不同。`why` 必须写**契约差别**，不能写"没有符号" ✓
+
 
 ## harness 编译被测代码的方式，必须与引擎编译它的方式一致
 
