@@ -27,14 +27,19 @@
   "files": [
     {
       "source": "src/moho/sim/Sim.cpp",
-      "sourceSha256": "e98cfcf6c1db4e096c1b05c3fa9c7b52a42f2efa59b860e5ae578bf48a83b663",
+      "sourceSha256": "72f7b7e0a7bb2d6814e38df5ca867178378976574b51618f96552e75e6fcc9cf",
       "output": "sim_quat_cross_add.cpp",
-      "outputSha256": "5ea8bc392908aa3308a15d2351d267b6f90500f71853d259df4cd30d0cdc854f",
+      "outputSha256": "9a8744c4ebec93196ea60de337e98e288be0ec79ccd88b1f4dbfbb82d46d860e",
       "includes": [
         "moho/math/QuaternionMath.h",
         "moho/math/Vector3f.h"
       ],
-      "ranges": [[6252, 6316]],
+      "ranges": [
+        [
+          5096,
+          5160
+        ]
+      ],
       "note": "moho::QuatCrossAdd, retail 0x0044F880. Its row is in src/targets.cpp; QuatFromVecRot (QuaternionMath.cpp) calls it."
     }
   ]

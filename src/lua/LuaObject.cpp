@@ -32,12 +32,16 @@
 #include "LuaError.h"
 #include "LuaGcEventLog.h"
 #include "LuaMemAccounting.h"
+#include "LuaNumberText.h"
 #include "gpg/core/diagnostics/ProbeWatch.h"
+#include "gpg/core/profiling/ProfileNames.h"
+#include "gpg/core/profiling/Profiler.h"
 #include "LuaParser.h"
 #include "LuaTableIterator.h"
 #include "LuaUndump.h"
 #include "gpg/core/containers/ArchiveSerialization.h"
 #include "gpg/core/containers/FastVector.h"
+#include "gpg/core/containers/String.h"
 #include "gpg/core/containers/ReadArchive.h"
 #include "gpg/core/containers/WriteArchive.h"
 #include "gpg/core/reflection/BadRefCast.h"
@@ -3037,7 +3041,7 @@ extern "C"
 	{
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = static_cast<int>(numericKey);
+			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey) {
 				return luaH_getnum(t, integerKey);
 			}
@@ -3063,7 +3067,7 @@ extern "C"
 
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = static_cast<int>(numericKey);
+			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey && integerKey >= 1) {
 				const int zeroBased = integerKey - 1;
 				if ((zeroBased & 0xFF000000) == 0 && integerKey <= table->sizearray) {
@@ -3480,6 +3484,13 @@ extern "C"
 			}
 			lua_pushcclosure(state, registration->func, nup);
 			lua_settable(state, destinationTableIndex);
+#if defined(TRACY_ENABLE)
+			// Profile builds: name library functions (table.insert, string.find, next) for their zones.
+			gpg::profiling::NameLuaCFunction(
+				reinterpret_cast<const void*>(registration->func), libname != nullptr ? libname : "<global>",
+				registration->name
+			);
+#endif
 			++registration;
 		}
 
@@ -3598,7 +3609,7 @@ extern "C"
 
 			if (node.i_key.tt == LUA_TNUMBER) {
 				const float numericKey = node.i_key.value.n;
-				const int integerKey = static_cast<int>(numericKey);
+				const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
 				if (static_cast<float>(integerKey) == numericKey && integerKey >= 1
 					&& ((integerKey - 1) & 0xFF000000) == 0) {
 					const int logIndex = luaO_log2(static_cast<unsigned int>(integerKey - 1));
@@ -3890,7 +3901,7 @@ extern "C"
 		TObject* valueSlot = nullptr;
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = static_cast<int>(numericKey);
+			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey) {
 				valueSlot = const_cast<TObject*>(luaH_getnum(table, integerKey));
 			}
@@ -3918,7 +3929,7 @@ extern "C"
 		const TObject* slot = nullptr;
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = static_cast<int>(numericKey);
+			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey) {
 				slot = luaH_getnum(table, integerKey);
 			}
@@ -5530,28 +5541,36 @@ namespace
 	 * What it does:
 	 * Expands one wildcard expression through CRT find-first/find-next and
 	 * returns one Lua table of 1-based filename entries.
+	 *
+	 * Engine addition (dedicated-server plan WPL.15): the names are sorted in
+	 * NTFS's order (`gpg::STR_FileNameOrderLess`) before they go into the
+	 * table, the order the shipped game gets them in on NTFS, on every platform
+	 * and file system. Init scripts mount what this lists in this order.
 	 */
 	int LuaIoDir(lua_State* const state)
 	{
 		const char* const wildcard = lua_tostring(state, 1);
 		lua_newtable(state);
 
+		std::vector<std::string> names{};
 		__finddata64_t findData{};
 		const intptr_t findHandle = ::_findfirst64(wildcard, &findData);
 		if (findHandle != -1) {
-			int index = 1;
-			lua_pushnumber(state, static_cast<lua_Number>(index));
-			lua_pushstring(state, findData.name);
-			lua_settable(state, -3);
-
-			while (::_findnext64(findHandle, &findData) == 0) {
-				++index;
-				lua_pushnumber(state, static_cast<lua_Number>(index));
-				lua_pushstring(state, findData.name);
-				lua_settable(state, -3);
-			}
-
+			do {
+				names.emplace_back(findData.name);
+			} while (::_findnext64(findHandle, &findData) == 0);
 			(void)::_findclose(findHandle);
+		}
+		std::sort(names.begin(), names.end(), [](const std::string& lhs, const std::string& rhs) {
+			return gpg::STR_FileNameOrderLess(lhs.c_str(), rhs.c_str());
+		});
+
+		int index = 1;
+		for (const std::string& name : names) {
+			lua_pushnumber(state, static_cast<lua_Number>(index));
+			lua_pushstring(state, name.c_str());
+			lua_settable(state, -3);
+			++index;
 		}
 
 		return 1;
@@ -5845,7 +5864,7 @@ namespace
 	 * Allocates one heap WrapFile storage payload and returns it as reflected
 	 * `gpg::RRef` with close-enabled default state.
 	 */
-	gpg::RRef* NewWrapFileStorageRef(gpg::RRef* const out)
+	gpg::RRef NewWrapFileStorageRef()
 	{
 		auto* const wrapFile = static_cast<WrapFile*>(::operator new(sizeof(WrapFile), std::nothrow));
 		if (wrapFile != nullptr) {
@@ -5853,7 +5872,12 @@ namespace
 			wrapFile->closeEnabled = 1u;
 		}
 
-		return BuildWrapFileRef(out, wrapFile);
+		// Returned by value, as `RType::new_ref_func_t` declares it: each ABI then passes the
+		// result as its callers expect (MSVC through a hidden pointer, System V x64 in
+		// registers); a `RRef*(RRef*)` body cast to that type only matches the first.
+		gpg::RRef out{};
+		(void)BuildWrapFileRef(&out, wrapFile);
+		return out;
 	}
 
 	/**
@@ -5863,17 +5887,18 @@ namespace
 	 * Initializes caller-owned WrapFile storage and returns the reflected
 	 * `gpg::RRef` view of that payload.
 	 */
-	gpg::RRef* ConstructWrapFileStorageRef(
-		gpg::RRef* const out,
-		WrapFile* const wrapFile
-	)
+	gpg::RRef ConstructWrapFileStorageRef(void* const storage)
 	{
+		auto* const wrapFile = static_cast<WrapFile*>(storage);
 		if (wrapFile != nullptr) {
 			wrapFile->stream = nullptr;
 			wrapFile->closeEnabled = 1u;
 		}
 
-		return BuildWrapFileRef(out, wrapFile);
+		// By value, as `RType::ctor_ref_func_t` declares it (see NewWrapFileStorageRef).
+		gpg::RRef out{};
+		(void)BuildWrapFileRef(&out, wrapFile);
+		return out;
 	}
 
 	/**
@@ -5904,8 +5929,8 @@ namespace
 	{
 		size_ = sizeof(WrapFile);
 		gpg::RType::Init();
-		newRefFunc_ = reinterpret_cast<gpg::RType::new_ref_func_t>(&NewWrapFileStorageRef);
-		ctorRefFunc_ = reinterpret_cast<gpg::RType::ctor_ref_func_t>(&ConstructWrapFileStorageRef);
+		newRefFunc_ = &NewWrapFileStorageRef;
+		ctorRefFunc_ = &ConstructWrapFileStorageRef;
 		deleteFunc_ = reinterpret_cast<gpg::RType::delete_func_t>(&DestroyWrapFileStorage);
 		dtrFunc_ = reinterpret_cast<gpg::RType::dtr_func_t>(&FinalizeWrapFileStorage);
 		Finish();
@@ -6041,8 +6066,8 @@ namespace
 	 */
 	gpg::RType* ConfigureWrapFileRefCallbacks(gpg::RType* const type)
 	{
-		type->newRefFunc_ = reinterpret_cast<gpg::RType::new_ref_func_t>(&NewWrapFileStorageRef);
-		type->ctorRefFunc_ = reinterpret_cast<gpg::RType::ctor_ref_func_t>(&ConstructWrapFileStorageRef);
+		type->newRefFunc_ = &NewWrapFileStorageRef;
+		type->ctorRefFunc_ = &ConstructWrapFileStorageRef;
 		return type;
 	}
 
@@ -6055,8 +6080,8 @@ namespace
 	 */
 	gpg::RType* ConfigureWrapFileAllCallbacks(gpg::RType* const type)
 	{
-		type->newRefFunc_ = reinterpret_cast<gpg::RType::new_ref_func_t>(&NewWrapFileStorageRef);
-		type->ctorRefFunc_ = reinterpret_cast<gpg::RType::ctor_ref_func_t>(&ConstructWrapFileStorageRef);
+		type->newRefFunc_ = &NewWrapFileStorageRef;
+		type->ctorRefFunc_ = &ConstructWrapFileStorageRef;
 		type->deleteFunc_ = reinterpret_cast<gpg::RType::delete_func_t>(&DestroyWrapFileStorage);
 		type->dtrFunc_ = reinterpret_cast<gpg::RType::dtr_func_t>(&FinalizeWrapFileStorage);
 		return type;
@@ -6071,8 +6096,8 @@ namespace
 	 */
 	void ConfigureWrapFileAllCallbacksInPlace(gpg::RType* const type)
 	{
-		type->newRefFunc_ = reinterpret_cast<gpg::RType::new_ref_func_t>(&NewWrapFileStorageRef);
-		type->ctorRefFunc_ = reinterpret_cast<gpg::RType::ctor_ref_func_t>(&ConstructWrapFileStorageRef);
+		type->newRefFunc_ = &NewWrapFileStorageRef;
+		type->ctorRefFunc_ = &ConstructWrapFileStorageRef;
 		type->deleteFunc_ = reinterpret_cast<gpg::RType::delete_func_t>(&DestroyWrapFileStorage);
 		type->dtrFunc_ = reinterpret_cast<gpg::RType::dtr_func_t>(&FinalizeWrapFileStorage);
 	}
@@ -6487,7 +6512,10 @@ namespace
 			if (lua_type(state, firstArgumentIndex) == LUA_TNUMBER) {
 				if (writeSucceeded != 0) {
 					const double value = lua_tonumber(state, firstArgumentIndex);
-					writeSucceeded = std::fprintf(stream, "%.14g", value) > 0 ? 1 : 0;
+					// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
+					char rendered[64];
+					(void)lua::FormatNumberLikeWindowsCrt(rendered, "%.14g", value);
+					writeSucceeded = std::fputs(rendered, stream) >= 0 ? 1 : 0;
 				}
 			} else if (lua_type(state, firstArgumentIndex) == LUA_TSTRING) {
 				std::size_t elementCount = 0u;
@@ -9811,7 +9839,8 @@ namespace
 			case 'f':
 			case 'g':
 			case 'G':
-				std::sprintf(item, form, static_cast<double>(luaL_checknumber(state, argumentIndex)));
+				// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
+				(void)lua::FormatNumberLikeWindowsCrt(item, form, static_cast<double>(luaL_checknumber(state, argumentIndex)));
 				break;
 
 			case 'q':
@@ -16680,7 +16709,8 @@ extern "C"
 		}
 
 		char rendered[32];
-		std::sprintf(rendered, "%.14g", static_cast<double>(object->value.n));
+		// Plan WPL.17: the Windows CRT's NaN text (LuaNumberText.h).
+		(void)lua::FormatNumberLikeWindowsCrt(rendered, "%.14g", static_cast<double>(object->value.n));
 
 		TString* const interned = luaS_newlstr(state, rendered, std::strlen(rendered));
 		object->value.p = interned;
@@ -17685,7 +17715,8 @@ extern "C"
 	int luaO_str2d(const char* const s, float* const result)
 	{
 		char* end = nullptr;
-		const float value = static_cast<float>(std::strtod(s, &end));
+		// Plan WPL.17: the Windows CRT's NaN spellings (LuaNumberText.h).
+		const float value = static_cast<float>(lua::ParseNumberLikeWindowsCrt(s, &end));
 		if (end == s) {
 			return 0; // nothing converted
 		}
@@ -18052,6 +18083,10 @@ extern "C"
 			++invocationsHigh;
 		}
 
+#if defined(TRACY_ENABLE)
+		// Profile builds: one zone per engine function Lua calls, named by its binder.
+		FAF_PROFILE_ZONE_TRANSIENT(gpg::profiling::LuaCFunctionName(reinterpret_cast<const void*>(closure->c.f)));
+#endif
 		const int produced = closure->c.f(state);
 		return state->top - produced;
 	}

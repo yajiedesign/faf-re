@@ -33,7 +33,6 @@ set(FAFDIFF_SOURCES
   src/pe_image.cpp
   src/gen.cpp
   src/targets.cpp
-  src/engine_globals.cpp
   # The engine translation units under test are added to this list, one at a
   # time. Each one added here is one more engine file compiled by the engine's
   # own switches rather than mirrored by hand.
@@ -46,6 +45,9 @@ set(FAFDIFF_SOURCES
   # X87Math.cpp. It is compiled with the engine's own switches as well, so
   # the helpers behave in the harness exactly as they do in the engine.
   "${CMAKE_SOURCE_DIR}/src/legacy/math/X87Math.cpp"
+  # Upstream split the MSVC8 libm bodies out of X87Math.cpp into Libm.cpp
+  # (the dedicated-server plan); X87Math.cpp now only calls them.
+  "${CMAKE_SOURCE_DIR}/src/legacy/math/Libm.cpp"
   # src/moho/math/QuaternionMath.cpp is the second unit under test (the rows
   # for moho::MatrixToQuat, moho::RotateQuatByAngle, moho::QuatLERP,
   # moho::SLERP, moho::NormalizeQuatInPlace, moho::QuatsNearEqual,

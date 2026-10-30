@@ -58,7 +58,7 @@ It is `EXCLUDE_FROM_ALL`: the engine build does not depend on it.
 # QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201                 in[32B] out[4B]
 # QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606                 in[32B] out[16B]
 # QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673                 in[16B] out[16B]
-# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286                            in[36B] out[20B]
+# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:5130                            in[36B] out[20B]
 # Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84                        in[16B] out[20B]
 # VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116                       in[12B] out[4B]
 # VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149                       in[16B] out[16B]
@@ -153,7 +153,7 @@ file, the coverage ledger is `tools/fafdiff/COVERAGE.md`.
 # QuatsNearEqual     0x004EDED0 src/moho/math/QuaternionMath.cpp:201                 in[32B] out[4B]
 # QuatFromVecRot     0x0069AA50 src/moho/math/QuaternionMath.cpp:606                 in[32B] out[16B]
 # QuatToAxisAndAngle 0x006C1070 src/moho/math/QuaternionMath.cpp:673                 in[12B] out[20B]
-# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:6286                            in[36B] out[20B]
+# QuatCrossAdd       0x0044F880 src/moho/sim/Sim.cpp:5130                            in[36B] out[20B]
 # Vector4fAssign     0x0046FB20 src/moho/math/Vector4f.cpp:84                        in[16B] out[20B]
 # VEC_LargestAxis    0x005382E0 src/moho/math/Vector3f.cpp:116                       in[12B] out[4B]
 # VecSetLength       0x005B1C90 src/moho/math/Vector3f.cpp:149                       in[16B] out[16B]
@@ -675,7 +675,7 @@ struct AxisAngleOut { Wm3::Vector3f axis; float angle; };     // 16 bytes
 
 ### `QuatCrossAdd` -- retail `0x0044F880`
 
-`src/moho/sim/Sim.cpp:6286`, extracted into the harness by `extract.json`
+`src/moho/sim/Sim.cpp:5130`, extracted into the harness by `extract.json`
 (see above).
 
 **The retail convention**

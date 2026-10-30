@@ -4142,7 +4142,7 @@ namespace
     {
       "QuatCrossAdd",
       0x0044F880u,
-      "src/moho/sim/Sim.cpp:6286",
+      "src/moho/sim/Sim.cpp:5130",
       sizeof(CrossAddIn),
       sizeof(CrossAddOut),
       &GenCrossAdd,
