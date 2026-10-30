@@ -28,6 +28,7 @@
 
 #include "gpg/core/containers/String.h"
 #include "gpg/core/reflection/Reflection.h"
+#include "gpg/core/profiling/Profiler.h"
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/RenderProfiler.h"
 #include "moho/render/ProjectileIconRenderer.h"
@@ -8553,6 +8554,7 @@ namespace moho
    */
   void CWldSession::DoBeat(msvc8::auto_ptr<SSyncData> syncData)
   {
+    FAF_PROFILE_ZONE_NAMED("WLD:DoBeat");
     const CTimeBarSection beatSection("Sync");
 
     RCamManager* const cameraManager = CAM_GetManager();
@@ -8627,28 +8629,34 @@ namespace moho
       }
     }
 
-    for (const SCreateEntityParams& createParams : beat.mNewEntities) {
-      AddEntity(new UserEntity(*this, createParams));
-    }
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Entities");
+      for (const SCreateEntityParams& createParams : beat.mNewEntities) {
+        AddEntity(new UserEntity(*this, createParams));
+      }
 
-    for (const SCreateUnitParams& createParams : beat.mNewUnits) {
-      AddEntity(new UserUnit(this, createParams));
+      for (const SCreateUnitParams& createParams : beat.mNewUnits) {
+        AddEntity(new UserUnit(this, createParams));
+      }
     }
 
     for (const SSTICommandConstantData& commandConstantData : beat.mPublishedCommandDescriptors) {
       (void)FindOrCreateCommandIssueHelper(*mCommandManager, commandConstantData, 0u, 0);
     }
 
-    if (!ApplyUnitUpdatesParallel(*this, beat.mUnitUpdates)) {
-      for (const SUnitVariableUpdateEntry& unitUpdate : beat.mUnitUpdates) {
-        auto* const unit = static_cast<UserUnit*>(LookupEntityId(unitUpdate.mEntityId));
-        unit->UpdateUnitData(unitUpdate.mVariableData, unitUpdate.mReconFlags);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Updates");
+      if (!ApplyUnitUpdatesParallel(*this, beat.mUnitUpdates)) {
+        for (const SUnitVariableUpdateEntry& unitUpdate : beat.mUnitUpdates) {
+          auto* const unit = static_cast<UserUnit*>(LookupEntityId(unitUpdate.mEntityId));
+          unit->UpdateUnitData(unitUpdate.mVariableData, unitUpdate.mReconFlags);
+        }
       }
-    }
 
-    if (!ApplyEntityUpdatesParallel(*this, beat.mEntityUpdates)) {
-      for (const SEntityVariableUpdateEntry& entityUpdate : beat.mEntityUpdates) {
-        LookupEntityId(entityUpdate.mEntityId)->UpdateEntityData(entityUpdate.mVariableData);
+      if (!ApplyEntityUpdatesParallel(*this, beat.mEntityUpdates)) {
+        for (const SEntityVariableUpdateEntry& entityUpdate : beat.mEntityUpdates) {
+          LookupEntityId(entityUpdate.mEntityId)->UpdateEntityData(entityUpdate.mVariableData);
+        }
       }
     }
 
@@ -8700,6 +8708,7 @@ namespace moho
     // Hand the sim's Lua payload to the UI: last beat's table becomes
     // `PreviousSync`, this beat's stream becomes `Sync`, then `OnSync()` runs.
     {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:SyncLua");
       const LuaPlus::LuaObject previousSync = SCR_Copy(mState->GetGlobal("Sync"), mState);
       mState->GetGlobals().SetObject("PreviousSync", previousSync);
 
@@ -8724,8 +8733,11 @@ namespace moho
     mDebugCanvas.reset_from(beat.mTickDebugCanvas);
     mBeatDebugCanvas.reset_from(beat.mBeatDebugCanvas);
     ren_FogOfWar = beat.mFogOfWar;
-    terrainRes->SyncTerrain(beat.mTerrainUpdate.px);
-    mSimResources.reset_from(beat.mSimResources);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Terrain");
+      terrainRes->SyncTerrain(beat.mTerrainUpdate.px);
+      mSimResources.reset_from(beat.mSimResources);
+    }
 
     // `msvc8::vector<SExtraUnitData>::operator=` (0x00895214, FUN_007530C0,
     // `legacy/containers/Vector.h`). Previously mis-wired through
@@ -8802,6 +8814,7 @@ namespace moho
       // emits (sub_505BA0) reads `originalVec_` at +0x0C and skips the free.
       // Until that template is restored, the base-typed API must be handed a
       // vector that really does own its storage.
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Tickers");
       gpg::fastvector<UserEntity*> tickers;
       auto* const spatialDb = GetEntitySpatialDbStorage();
       (void)spatialDb->Collect(tickers, ENTITYTYPE_Unit);
@@ -8869,7 +8882,10 @@ namespace moho
    */
   void CWldSession::SessionFrame(const float deltaSeconds)
   {
-    static_cast<RRuleGameRules*>(mRules)->UpdateLuaState(mState);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:UpdateLuaState");
+      static_cast<RRuleGameRules*>(mRules)->UpdateLuaState(mState);
+    }
 
     ISTIDriver* const simDriver = sSimDriver.get();
 
@@ -8882,7 +8898,10 @@ namespace moho
       mTimeSinceLastTick += WLD_GetSimRate() * deltaSeconds * 10.0f;
     }
 
-    CFormation::UpdateOrientation(CursorInfo().mMouseWorldPos, mCurFormation);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:UpdateOrientation");
+      CFormation::UpdateOrientation(CursorInfo().mMouseWorldPos, mCurFormation);
+    }
 
     const std::int32_t tickAtFrameStart = mGameTick;
     const std::int32_t targetTick = mGameTick + static_cast<std::int32_t>(std::floor(mTimeSinceLastTick));
@@ -8890,23 +8909,26 @@ namespace moho
     // Drain the driver's sync queue. Bounded at 100 beats so a burst after a
     // stall cannot make one frame arbitrarily long.
     std::int32_t beatsApplied = 0;
-    for (; beatsApplied < 100; ++beatsApplied) {
-      if (mReplayIsPaused) {
-        // A paused replay still applies beats until it lands on a tick.
-        if (mLastBeatWasTick != 0) {
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DrainBeats");
+      for (; beatsApplied < 100; ++beatsApplied) {
+        if (mReplayIsPaused) {
+          // A paused replay still applies beats until it lands on a tick.
+          if (mLastBeatWasTick != 0) {
+            break;
+          }
+        } else if (mGameTick >= targetTick && !wld_RunWithTheWind) {
           break;
         }
-      } else if (mGameTick >= targetTick && !wld_RunWithTheWind) {
-        break;
-      }
 
-      if (!simDriver->HasSyncData()) {
-        break;
-      }
+        if (!simDriver->HasSyncData()) {
+          break;
+        }
 
-      SSyncData* packet = nullptr;
-      simDriver->GetSyncData(packet);
-      DoBeat(msvc8::auto_ptr<SSyncData>(packet));
+        SSyncData* packet = nullptr;
+        simDriver->GetSyncData(packet);
+        DoBeat(msvc8::auto_ptr<SSyncData>(packet));
+      }
     }
 
     if (sEngineStat_Sync_Count == nullptr) {
@@ -8922,13 +8944,19 @@ namespace moho
       mTimeSinceLastTick = std::max(0.0f, std::min(remainder, 1.0f));
     }
 
-    if (const boost::shared_ptr<UICommandGraph> commandGraph = GetCommandGraph(false)) {
-      commandGraph->CreateMeshes();
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:CommandMeshes");
+      if (const boost::shared_ptr<UICommandGraph> commandGraph = GetCommandGraph(false)) {
+        commandGraph->CreateMeshes();
+      }
     }
 
     // 0x00409AC0 - the binary names this `CTaskStage::DoFrame`; it is the same
     // body the rest of the tree already calls `UserFrame`.
-    mCurThread->UserFrame();
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:UserFrame");
+      mCurThread->UserFrame();
+    }
   }
 
   /**
@@ -14880,25 +14908,36 @@ namespace moho
     void WLD_DoPlayingAction(const float deltaSeconds)
     {
       if (ISTIDriver* const simDriver = sSimDriver.get(); simDriver != nullptr) {
-        simDriver->Dispatch();
+        {
+          FAF_PROFILE_ZONE_NAMED("WLD:SimDriverDispatch");
+          simDriver->Dispatch();
+        }
 
         // Snapshot every active GeomCamera and forward to the sim driver so
         // visibility/projection state matches the upcoming session frame.
-        const msvc8::vector<GeomCamera3> cameras = CAM_GetAllCameras();
-        simDriver->SetGeomCams(cameras);
+        {
+          FAF_PROFILE_ZONE_NAMED("WLD:Cameras");
+          const msvc8::vector<GeomCamera3> cameras = CAM_GetAllCameras();
+          simDriver->SetGeomCams(cameras);
+        }
       }
 
       if (CWldSession* const activeSession = WLD_GetActiveSession(); activeSession != nullptr) {
+        FAF_PROFILE_ZONE_NAMED("WLD:SessionFrame");
         activeSession->SessionFrame(deltaSeconds);
       }
 
       if (ISTIDriver* const simDriver = sSimDriver.get(); simDriver != nullptr) {
         // Trailing sim-driver post-frame slot (Func1 in IDA): currently
         // a NoOp until full ISTIDriver vtable slot ownership is recovered.
+        FAF_PROFILE_ZONE_NAMED("WLD:SimDriverPost");
         simDriver->NoOp();
       }
 
-      (void)UI_UpdateDisconnectDialogCallback();
+      {
+        FAF_PROFILE_ZONE_NAMED("WLD:DisconnectDialog");
+        (void)UI_UpdateDisconnectDialogCallback();
+      }
     }
 
     void WLD_CreateSessionInfo()
