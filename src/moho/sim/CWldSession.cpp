@@ -8480,6 +8480,7 @@ namespace moho
       }
 
       const auto unitAt = [](const std::size_t i) { return static_cast<UserUnit*>(sTargets[i]); };
+      FAF_PROFILE_ZONE_NAMED("Sync:UnitApply");
       ApplyPacketInSegments(
         updates.size(),
         [&](const std::size_t i) { return unitAt(i)->UnitDataUpdateRunsLua(updates[i].mVariableData); },
@@ -8510,6 +8511,7 @@ namespace moho
       }
       sSteps.resize(updates.size());
 
+      FAF_PROFILE_ZONE_NAMED("Sync:EntityApply");
       ApplyPacketInSegments(
         updates.size(),
         [&](const std::size_t i) { return sTargets[i]->EntityDataUpdateRunsLua(updates[i].mVariableData); },
@@ -8580,6 +8582,8 @@ namespace moho
     const SSyncData& beat = *syncData;
     ++gUserSyncBeats; // engine addition, see its declaration
 
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Setup");
     mGameTick = beat.mCurTick;
     mLastBeatWasTick = beat.mAdvanced;
 
@@ -8592,22 +8596,32 @@ namespace moho
       SetSelection(WeakSet<UserEntity>());
     }
 
-    USER_GetSound()->UpdateSoundRequests(beat.mAudioRequests);
-
-    if (beat.mAdvanced) {
-      sWorldParticles.AdvancementBeat();
-    }
-    if (beat.mParticleBuffer) {
-      sWorldParticles.AddParticles(*static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()));
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Sound");
+      USER_GetSound()->UpdateSoundRequests(beat.mAudioRequests);
     }
 
-    auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());
-    decalManager->AddDecals(beat.mAddDecals);
-    decalManager->RemoveDecals(beat.mRemoveDecals);
-    decalManager->ProcessRemovals(beat.mCurTick);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Particles");
+      if (beat.mAdvanced) {
+        sWorldParticles.AdvancementBeat();
+      }
+      if (beat.mParticleBuffer) {
+        sWorldParticles.AddParticles(*static_cast<const SParticleBuffer*>(beat.mParticleBuffer.get()));
+      }
+    }
+
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Decals");
+      auto* const decalManager = static_cast<CDecalManager*>(terrainRes->GetDecalManager());
+      decalManager->AddDecals(beat.mAddDecals);
+      decalManager->RemoveDecals(beat.mRemoveDecals);
+      decalManager->ProcessRemovals(beat.mCurTick);
+    }
 
     // Camera shakes reach every live camera, not just the world one.
     {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:CameraShake");
       const msvc8::vector<CameraImpl*> allCameras = CAM_GetAllRCamCameras();
       for (const SCamShakeParams& shake : beat.mCamShakeParams) {
         for (CameraImpl* const camera : allCameras) {
@@ -8618,16 +8632,26 @@ namespace moho
       }
     }
 
-    if (worldCamera != nullptr) {
-      terrainRes->UpdateWaveSystem(worldCamera->CameraGetView(), worldCamera->CameraGetTargetZoom(), mGameTick);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Waves");
+      if (worldCamera != nullptr) {
+        terrainRes->UpdateWaveSystem(worldCamera->CameraGetView(), worldCamera->CameraGetTargetZoom(), mGameTick);
+      }
     }
 
-    for (const gpg::Rect2i& playableRect : beat.mPlayableRectUpdates) {
-      terrainRes->NotifyMapChange(playableRect);
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:PlayableRects");
+      for (const gpg::Rect2i& playableRect : beat.mPlayableRectUpdates) {
+        terrainRes->NotifyMapChange(playableRect);
+      }
+    }
+
     }
 
     // A new army grid means new armies; each lands in its own index slot, and
     // the listener is re-seated afterwards because the focus army may now exist.
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Armies");
     if (!beat.mNewGrids.empty()) {
       for (const SSTIArmyConstantData& armyConstantData : beat.mNewGrids) {
         UserArmy* const army = new UserArmy(this, armyConstantData);
@@ -8647,7 +8671,9 @@ namespace moho
 
     {
       FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Entities");
-      for (const SCreateEntityParams& createParams : beat.mNewEntities) {
+      }
+
+    for (const SCreateEntityParams& createParams : beat.mNewEntities) {
         AddEntity(new UserEntity(*this, createParams));
       }
 
@@ -8858,38 +8884,44 @@ namespace moho
     // entry decode (0x0066A300), advance (0x007AE7E0) and `OrphanUpdate`.
     // 0x0089564A..0x008956D8: the same walk over `mVizUpdates`, with the
     // successor step inlined after the `UpdateVisibility` call.
-    for (auto orphan = mOrphans.begin(); orphan != mOrphans.end();) {
-      UserEntity* const entity = *orphan;
-      ++orphan;
-      if (entity != nullptr) {
-        entity->OrphanUpdate();
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Orphans");
+      for (auto orphan = mOrphans.begin(); orphan != mOrphans.end();) {
+        UserEntity* const entity = *orphan;
+        ++orphan;
+        if (entity != nullptr) {
+          entity->OrphanUpdate();
+        }
+      }
+
+      for (UserEntity* const entity : mVizUpdates) {
+        if (entity != nullptr) {
+          entity->UpdateVisibility();
+        }
       }
     }
 
-    for (UserEntity* const entity : mVizUpdates) {
-      if (entity != nullptr) {
-        entity->UpdateVisibility();
+    {
+      FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Tail");
+      AdvanceCommandIssueHelpersToBeat(*mCommandManager, beat.mCurBeat);
+
+      if (mRequestingPauseState != 0u && beat.mCurBeat - mPauseRequester >= 0) {
+        mRequestingPauseState = 0u;
       }
-    }
 
-    AdvanceCommandIssueHelpersToBeat(*mCommandManager, beat.mCurBeat);
+      CheckForNecessaryUIRefresh();
 
-    if (mRequestingPauseState != 0u && beat.mCurBeat - mPauseRequester >= 0) {
-      mRequestingPauseState = 0u;
-    }
+      if (IUIManager* const uiManager = UI_GetManager(); uiManager != nullptr) {
+        (void)uiManager->DoBeat();
+      }
 
-    CheckForNecessaryUIRefresh();
+      if (!beat.mSubmitArmyStats.empty()) {
+        GPGNET_SubmitArmyStats(beat.mSubmitArmyStats);
+      }
 
-    if (IUIManager* const uiManager = UI_GetManager(); uiManager != nullptr) {
-      (void)uiManager->DoBeat();
-    }
-
-    if (!beat.mSubmitArmyStats.empty()) {
-      GPGNET_SubmitArmyStats(beat.mSubmitArmyStats);
-    }
-
-    if (dbg_Metronome && USER_GetSound() != nullptr) {
-      USER_GetSound()->Play(msvc8::string("Tick", 4u), msvc8::string("TestBank", 8u));
+      if (dbg_Metronome && USER_GetSound() != nullptr) {
+        USER_GetSound()->Play(msvc8::string("Tick", 4u), msvc8::string("TestBank", 8u));
+      }
     }
   }
 
