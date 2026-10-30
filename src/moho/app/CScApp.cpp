@@ -1137,8 +1137,14 @@ void CScApp::Main()
   // FAF FA-Binary-Patches (hooks/GetFPS.cpp): StoreFPS keeps the frame time it
   // finds being pushed here (0x008D1A85) as OnRenderWorld's `delta`.
   moho::UI_SetRenderWorldFrameSeconds(frameSeconds);
-  moho::SND_Frame();
-  moho::DISK_UpdateWatcher();
+  {
+    FAF_PROFILE_ZONE_NAMED("App:SND_Frame");
+    moho::SND_Frame();
+  }
+  {
+    FAF_PROFILE_ZONE_NAMED("App:DISK_UpdateWatcher");
+    moho::DISK_UpdateWatcher();
+  }
 
   float smoothedFrameSeconds = fixedFrameSeconds > 0.0f ? fixedFrameSeconds : framerates.Median();
   // Engine addition (wld_FrameClock): outside network sessions the clock may follow real time.
@@ -1146,20 +1152,34 @@ void CScApp::Main()
       moho::SIM_GetSessionPacing() != moho::ESimSessionPacing::Network) {
     smoothedFrameSeconds = wld_FrameClock == 2 ? frameSeconds : framerates.Mean();
   }
-  if (!moho::WLD_Frame(smoothedFrameSeconds) && wxTheApp != nullptr) {
+  bool frameKeepsGoing = true;
+  {
+    FAF_PROFILE_ZONE_NAMED("App:WLD_Frame");
+    frameKeepsGoing = moho::WLD_Frame(smoothedFrameSeconds);
+  }
+  if (!frameKeepsGoing && wxTheApp != nullptr) {
     wxTheApp->ExitMainLoop();
   }
 
   moho::CWldSession* const activeSession = moho::WLD_GetActiveSession();
   const std::int32_t gameTick = activeSession != nullptr ? activeSession->mGameTick : 0;
   const float simDeltaSeconds = activeSession != nullptr ? activeSession->mTimeSinceLastTick : 0.0f;
-  moho::CAM_GetManager()->Frame(simDeltaSeconds, frameSeconds);
+  {
+    FAF_PROFILE_ZONE_NAMED("App:CAM_Frame");
+    moho::CAM_GetManager()->Frame(simDeltaSeconds, frameSeconds);
+  }
   if (moho::sUserStage != nullptr) {
     FAF_PROFILE_ZONE_NAMED("UserStage");
     moho::sUserStage->UserFrame();
   }
-  ::ADXM_ExecMain();
-  moho::REN_Frame(gameTick, simDeltaSeconds, frameSeconds);
+  {
+    FAF_PROFILE_ZONE_NAMED("App:ADXM_ExecMain");
+    ::ADXM_ExecMain();
+  }
+  {
+    FAF_PROFILE_ZONE_NAMED("App:REN_Frame");
+    moho::REN_Frame(gameTick, simDeltaSeconds, frameSeconds);
+  }
   if (moho::IUserSoundManager* const userSound = moho::USER_GetSound(); userSound != nullptr) {
     userSound->Frame(simDeltaSeconds, frameSeconds);
   }
@@ -1186,10 +1206,14 @@ void CScApp::Main()
       }
     }
   } else if (moho::CD3DDevice* const device = moho::D3D_GetDevice(); device != nullptr) {
+    FAF_PROFILE_ZONE_NAMED("App:Refresh");
     device->Refresh();
   }
 
-  moho::UI_ProcessIdleGC();
+  {
+    FAF_PROFILE_ZONE_NAMED("App:IdleGC");
+    moho::UI_ProcessIdleGC();
+  }
 
   if (initialized == 0) {
     InitializeSessionFromCommandLine();
