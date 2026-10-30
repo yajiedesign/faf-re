@@ -8375,6 +8375,7 @@ namespace moho
       CWldSession& session, const msvc8::vector<Entry>& entries, std::vector<UserEntity*>& targets
     )
     {
+      FAF_PROFILE_ZONE_NAMED("Sync:ResolveTargets");
       targets.resize(entries.size());
       CUserWorkerPool::Get().ParallelFor(entries.size(), 1024u, [&](const std::size_t begin, const std::size_t end) {
         for (std::size_t i = begin; i < end; ++i) {
@@ -8409,41 +8410,56 @@ namespace moho
       const ApplyWhole& applyWhole
     )
     {
+      FAF_PROFILE_ZONE_NAMED("Sync:Packet");
       std::vector<std::uint8_t> local;
       std::size_t begin = 0;
       while (begin < count) {
         std::size_t end = begin;
-        while (end < count && !isBarrier(end)) {
-          ++end;
+        {
+          FAF_PROFILE_ZONE_NAMED("Sync:BarrierScan");
+          while (end < count && !isBarrier(end)) {
+            ++end;
+          }
         }
 
         const std::size_t segmentSize = end - begin;
         if (segmentSize >= kParallelSyncMinUpdates) {
-          local.assign(segmentSize, 0u);
-          for (std::size_t i = 0; i < segmentSize; ++i) {
-            local[i] = isLocal(begin + i) ? 1u : 0u;
-          }
-          CUserWorkerPool::Get().ParallelFor(segmentSize, kParallelSyncGrain, [&](const std::size_t from, const std::size_t to) {
-            for (std::size_t i = from; i < to; ++i) {
-              if (local[i] != 0u) {
-                applyLocal(begin + i);
-              }
+          {
+            FAF_PROFILE_ZONE_NAMED("Sync:LocalScan");
+            local.assign(segmentSize, 0u);
+            for (std::size_t i = 0; i < segmentSize; ++i) {
+              local[i] = isLocal(begin + i) ? 1u : 0u;
             }
-          });
-          for (std::size_t i = 0; i < segmentSize; ++i) {
-            if (local[i] != 0u) {
-              finish(begin + i);
-            } else {
-              applyWhole(begin + i);
+          }
+          {
+            FAF_PROFILE_ZONE_NAMED("Sync:ParallelApply");
+            CUserWorkerPool::Get().ParallelFor(segmentSize, kParallelSyncGrain, [&](const std::size_t from, const std::size_t to) {
+              for (std::size_t i = from; i < to; ++i) {
+                if (local[i] != 0u) {
+                  applyLocal(begin + i);
+                }
+              }
+            });
+          }
+          {
+            FAF_PROFILE_ZONE_NAMED("Sync:FinishLoop");
+            for (std::size_t i = 0; i < segmentSize; ++i) {
+              if (local[i] != 0u) {
+                finish(begin + i);
+              } else {
+                applyWhole(begin + i);
+              }
             }
           }
         } else {
+          FAF_PROFILE_ZONE_NAMED("Sync:WholeLoop");
           for (std::size_t i = begin; i < end; ++i) {
             applyWhole(i);
           }
         }
 
         if (end < count) {
+          FAF_PROFILE_ZONE_NAMED("Sync:BarrierRecord");
           applyWhole(end);
           begin = end + 1u;
         } else {
