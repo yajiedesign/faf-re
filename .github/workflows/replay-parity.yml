@@ -27,9 +27,13 @@ on:
       game_version:
         description: FAF game version of the replays
         default: "3835"
+      after_run:
+        description: An earlier run's id; play only what it did not (no time left, not got ready) and report both
+        default: ""
 
 permissions:
   contents: read
+  actions: read  # an earlier run's results (after_run)
 
 concurrency:
   group: replay-parity
@@ -41,25 +45,36 @@ env:
   # Jobs play for this long; plan.py packs shards to it, shard.py starts nothing that would not
   # end by then. A job may run 360 minutes in all.
   PLAY_MINUTES: "300"
-  # Part of the headless build's cache key: a new value rebuilds every commit once.
+  # Part of the headless build's cache key: a new value rebuilds everything once.
   BUILD_CACHE: "v1"
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
+      # The full commit of `ref`: checkout takes a short commit id for a branch or tag name.
+      - id: commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: |
+          sha=$(gh api "repos/${{ github.repository }}/commits/$REF" --jq .sha)
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.ref }}
-      - id: commit
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      # A commit is built once: its headless binary is cached by the commit (the pinned toolchain
-      # makes the same commit the same binary). Bump BUILD_CACHE when the build steps change.
+          ref: ${{ steps.commit.outputs.sha }}
+      # The headless binary is cached by what it is built from: the git trees of the paths the
+      # build reads (the pinned toolchain makes the same sources the same binary). Commits that
+      # change only tools/, docs/ or .github/ reuse it. Bump BUILD_CACHE when the build steps change.
+      - id: sources
+        run: |
+          tree=$(git ls-tree HEAD CMakeLists.txt CMakePresets.json cmake data dependencies src tests | sha256sum | cut -c1-20)
+          echo "key=headless-$BUILD_CACHE-$tree" >> "$GITHUB_OUTPUT"
       - id: built
         uses: actions/cache/restore@v6
         with:
           path: build/linux-clang-x64-release/headless
-          key: headless-${{ env.BUILD_CACHE }}-${{ steps.commit.outputs.sha }}
+          key: ${{ steps.sources.outputs.key }}
       # The pinned toolchain (cmake/toolchains/linux-clang-pins.cmake): configure refuses another.
       - if: steps.built.outputs.cache-hit != 'true'
         run: |
@@ -82,10 +97,10 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: build/linux-clang-x64-release/headless
-          key: headless-${{ env.BUILD_CACHE }}-${{ steps.commit.outputs.sha }}
+          key: ${{ steps.sources.outputs.key }}
       - run: |
-          what=$([ "${{ steps.built.outputs.cache-hit }}" = true ] && echo "Reused the build of" || echo "Built")
-          echo "$what ${{ steps.commit.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          what=$([ "${{ steps.built.outputs.cache-hit }}" = true ] && echo "Reused the build" || echo "Built")
+          echo "$what ${{ steps.sources.outputs.key }} for ${{ steps.commit.outputs.sha }}" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: headless
@@ -108,12 +123,21 @@ jobs:
           path: cache/index
           key: index-${{ env.GAME_VERSION }}-latest
           restore-keys: index-${{ env.GAME_VERSION }}-
+      # The earlier run's results: what it played to a verdict is left out of this plan.
+      - if: inputs.after_run != ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: after
+          run-id: ${{ inputs.after_run }}
+          github-token: ${{ github.token }}
       - id: plan
         run: >
           mkdir -p cache/index &&
           python tools/parity-data/plan.py --corpus tools/parity-data/corpus/$GAME_VERSION.tsv.gz --index cache/index
           --set ${{ inputs.set }} --sample ${{ inputs.sample }} --seed ${{ inputs.seed }} --slots 4
-          --budget-minutes "$PLAY_MINUTES" --out plan.json | tee -a "$GITHUB_STEP_SUMMARY"
+          --budget-minutes "$PLAY_MINUTES" ${{ inputs.after_run != '' && '--after after' || '' }}
+          --out plan.json | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: plan
@@ -209,10 +233,18 @@ jobs:
         with:
           pattern: results-*
           path: results
+      - if: inputs.after_run != ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: after
+          run-id: ${{ inputs.after_run }}
+          github-token: ${{ github.token }}
       - run: >
           python tools/parity-data/report.py --plan plan.json --results results
+          ${{ inputs.after_run != '' && '--after after' || '' }}
           --expected tools/parity-data/expected/$GAME_VERSION.json --out report
-          --title "Replay parity: ${{ inputs.ref }}, set ${{ inputs.set }}, game version $GAME_VERSION"
+          --title "Replay parity: ${{ inputs.ref }}, set ${{ inputs.set }}, game version $GAME_VERSION${{ inputs.after_run != '' && format(', after run {0}', inputs.after_run) || '' }}"
       - if: always()
         uses: actions/upload-artifact@v7
         with:
