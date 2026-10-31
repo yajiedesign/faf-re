@@ -8656,28 +8656,27 @@ namespace moho
     // the listener is re-seated afterwards because the focus army may now exist.
     {
       FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Armies");
-    if (!beat.mNewGrids.empty()) {
-      for (const SSTIArmyConstantData& armyConstantData : beat.mNewGrids) {
-        UserArmy* const army = new UserArmy(this, armyConstantData);
-        userArmies[static_cast<std::size_t>(army->mArmyIndex)] = army;
+      if (!beat.mNewGrids.empty()) {
+        for (const SSTIArmyConstantData& armyConstantData : beat.mNewGrids) {
+          UserArmy* const army = new UserArmy(this, armyConstantData);
+          userArmies[static_cast<std::size_t>(army->mArmyIndex)] = army;
+        }
+        USER_GetSound()->SetListenerArmy(ArmyAtIndexOrNull(userArmies, FocusArmy));
       }
-      USER_GetSound()->SetListenerArmy(ArmyAtIndexOrNull(userArmies, FocusArmy));
-    }
 
-    // Army updates are positional: the Nth record belongs to the Nth army.
-    {
-      std::size_t armyIndex = 0;
-      for (const SSTIArmyVariableData& armyUpdate : beat.mArmyUpdates) {
-        (void)AssignArmyVariableData(armyUpdate, &userArmies[armyIndex]->mVarDat);
-        ++armyIndex;
+      // Army updates are positional: the Nth record belongs to the Nth army.
+      {
+        std::size_t armyIndex = 0;
+        for (const SSTIArmyVariableData& armyUpdate : beat.mArmyUpdates) {
+          (void)AssignArmyVariableData(armyUpdate, &userArmies[armyIndex]->mVarDat);
+          ++armyIndex;
+        }
       }
     }
 
     {
       FAF_PROFILE_ZONE_NAMED("WLD:DoBeat:Entities");
-      }
-
-    for (const SCreateEntityParams& createParams : beat.mNewEntities) {
+      for (const SCreateEntityParams& createParams : beat.mNewEntities) {
         AddEntity(new UserEntity(*this, createParams));
       }
 
