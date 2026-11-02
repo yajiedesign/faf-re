@@ -87,6 +87,21 @@ Headless never reads a texture, a sound or a movie, but it does ask whether some
 
 The retail maps come from FAF's map vault like any other map: their `.scmap` and Lua files are the game's (x1mp_005 and scmp_009 compared file for file; FAF adds previews and leaves out the editor's `.raw` files), and 26902315 matches every checksum on FAF's x1mp_005. The retail archives FAF's init never mounts (`schook`, `moholua`, `mohodata`, `lua`, `editor`, `ambience`) are left out.
 
+### Full packs (local only)
+
+The pack described above is the **stripped** one CI uses: every file headless does not read is an empty file of the same name. That is what the workflows build and what a parity run must use.
+
+For **local GUI runs or full-data tests** `make_pack.py` can also write a **full pack**, where every file keeps its bytes:
+
+```
+python make_pack.py build --fa <game install> --faf <FAF data folder> --init <FAF data folder>/bin/init_faf.lua --out <pack> --full
+python make_pack.py retail --fa <game install> --out <dir> --full
+```
+
+A full pack is much bigger (the game archives are about 3.7 GB, not 111 MB), so it is for local use only: **CI still uses the stripped pack**, and `--full` is not used by any workflow. The pack's `manifest.json` records the mode (`"full": true` and `"content_types": ["*"]`).
+
+`--content` is a whitelist of the types to keep the bytes of (default: `CONTENT_TYPES`, the types headless reads). It cannot be used together with `--full`: `--full` means "everything", so there is nothing to whitelist.
+
 ### Making the retail file
 
 For a new copy of the retail archives (they do not change between FAF versions):

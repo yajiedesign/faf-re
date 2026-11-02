@@ -5,8 +5,9 @@ usage: make_pack.py <command> [options]    (see README.md next to this file)
 
   types <trace>...           what a set of `headless --disk-trace` files touched: per access kind
                              and file type, and the directory listings; the content types
-  build --fa DIR --faf DIR --init FILE --out DIR [--vault DIR] [--m28 DIR] [--content EXTS]
-                             a whole pack from local data, to play from locally (layout in README.md)
+  build --fa DIR --faf DIR --init FILE --out DIR [--vault DIR] [--m28 DIR] [--content EXTS | --full]
+                             a whole pack from local data, to play from locally (layout in README.md);
+                             --full keeps every file's bytes (local GUI tests only)
   retail --fa DIR --out DIR  the retail archives alone (fa/gamedata/*.scd), the one part of the
                              CI data that does not come from FAF (prewarm.py game fetches the rest)
   verify --pack DIR --root ORIG=PACK... <trace>...
@@ -96,7 +97,10 @@ class Stats:
 
 
 def pack_archive(src, dst, content, stats):
-    """Same entries, order, names and times; bytes only for the content types."""
+    """Same entries, order, names and times; bytes only for the content types.
+
+    `content` None means the full pack: every entry keeps its bytes and its compression.
+    """
     with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
         for info in zin.infolist():
             out = zipfile.ZipInfo(info.filename, info.date_time)
@@ -104,6 +108,11 @@ def pack_archive(src, dst, content, stats):
             out.create_system = info.create_system
             if info.is_dir():
                 zout.writestr(out, b"")
+            elif content is None:
+                out.compress_type = info.compress_type
+                zout.writestr(out, zin.read(info))
+                stats.kept += 1
+                stats.kept_bytes += info.file_size
             elif ext_of(info.filename) in content:
                 out.compress_type = zipfile.ZIP_DEFLATED
                 zout.writestr(out, zin.read(info), compresslevel=9)
@@ -117,7 +126,10 @@ def pack_archive(src, dst, content, stats):
 
 
 def pack_tree(src, dst, content, stats):
-    """A folder of loose files: content types copied, the rest empty, every mtime kept."""
+    """A folder of loose files: content types copied, the rest empty, every mtime kept.
+
+    `content` None means the full pack: every file is copied with its bytes.
+    """
     for root, _dirs, files in os.walk(src):
         out_root = os.path.join(dst, os.path.relpath(root, src))
         os.makedirs(out_root, exist_ok=True)
@@ -125,7 +137,7 @@ def pack_tree(src, dst, content, stats):
             s = os.path.join(root, name)
             d = os.path.join(out_root, name)
             size = os.path.getsize(s)
-            if ext_of(name) in content:
+            if content is None or ext_of(name) in content:
                 shutil.copy2(s, d)
                 stats.kept += 1
                 stats.kept_bytes += size
@@ -182,7 +194,7 @@ def write_init(init_text, version, out):
 
 def cmd_retail(args):
     """The retail archives alone, stripped: the one part CI cannot fetch from FAF."""
-    content = set(CONTENT_TYPES)
+    content = None if args.full else set(CONTENT_TYPES)
     scd_dir = os.path.join(args.fa, "gamedata")
     total = 0
     for name in sorted(os.listdir(scd_dir)):
@@ -198,14 +210,17 @@ def cmd_retail(args):
 
 
 def cmd_build(args):
-    content = set(CONTENT_TYPES)
+    content = None if args.full else set(CONTENT_TYPES)
     if args.content:
         content = {e if e.startswith(".") else "." + e for e in args.content.lower().split(",")}
     out = args.out
     if os.path.exists(out) and os.listdir(out):
         sys.exit(f"{out} is not empty")
     nx2_dir = os.path.join(args.faf, "gamedata")
-    manifest = {"game_version": game_version(nx2_dir), "content_types": sorted(content), "sources": {}}
+    manifest = {"game_version": game_version(nx2_dir),
+                "content_types": ["*"] if content is None else sorted(content),
+                "full": content is None,
+                "sources": {}}
     print(f"game version {manifest['game_version']}")
 
     parts = []
@@ -317,10 +332,15 @@ def main():
     p.add_argument("--vault", help="vault folder with the replays' maps (maps/); left out for CI's base pack")
     p.add_argument("--init", required=True, help="FAF's init file (bin/init_faf.lua) for the game version")
     p.add_argument("--m28", help="folder of M28AI versions (m28ai.vNNNN/m28ai)")
-    p.add_argument("--content", help="comma-separated types to keep the bytes of (default: CONTENT_TYPES)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--content", help="comma-separated types to keep the bytes of (default: CONTENT_TYPES)")
+    g.add_argument("--full", action="store_true",
+                   help="local full pack: every file keeps its bytes (not for CI)")
     p.add_argument("--out", required=True)
     p = sub.add_parser("retail")
     p.add_argument("--fa", required=True, help="the game's install folder (gamedata/*.scd)")
+    p.add_argument("--full", action="store_true",
+                   help="local full pack: every file keeps its bytes (not for CI)")
     p.add_argument("--out", required=True)
     p = sub.add_parser("verify")
     p.add_argument("--pack", required=True)
