@@ -3180,6 +3180,8 @@ namespace LuaPlus
 	 */
 	struct LuaObjectSerializer : gpg::SerSaveLoadHelper<LuaObject>
 	{};
+
+#include "LuaIncrementalGcCore.inc"
 } // namespace LuaPlus
 
 namespace

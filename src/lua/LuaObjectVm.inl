@@ -520,6 +520,13 @@
 			}
 
 			if (referenced == level) {
+				if (moho::lua_IncrementalGC && moho::lua_incremental::IsUiState(state->l_G)) {
+					if (auto* const incremental = moho::lua_incremental::Find(state->l_G);
+						incremental != nullptr && incremental->initialized &&
+						moho::lua_incremental::IsDead(*incremental, candidate)) {
+						candidate->gch.marked ^= moho::lua_incremental::kWhiteBits;
+					}
+				}
 				return &candidate->uv;
 			}
 
@@ -528,7 +535,14 @@
 
 		auto* const upvalue = luaM_new<UpVal>(state);
 		upvalue->tt = LUA_TUPVALUE;
-		upvalue->marked = 1;
+		if (moho::lua_IncrementalGC && moho::lua_incremental::IsUiState(state->l_G)) {
+			const auto* const incremental = moho::lua_incremental::Find(state->l_G);
+			upvalue->marked = (incremental != nullptr && incremental->initialized)
+				? moho::lua_incremental::White(*incremental)
+				: moho::lua_incremental::kWhite0Bit;
+		} else {
+			upvalue->marked = 1;
+		}
 		upvalue->v = level;
 		upvalue->next = *link;
 		*link = reinterpret_cast<GCObject*>(upvalue);
@@ -2432,6 +2446,15 @@
 	 */
 	void luaC_collectgarbage(lua_State* const state)
 	{
+		if (moho::lua_IncrementalGC && moho::lua_incremental::IsUiState(state->l_G)) {
+			const moho::lua_incremental::SState* const incremental =
+				moho::lua_incremental::Find(state->l_G);
+			if (incremental != nullptr && incremental->frameDriven) {
+				return;
+			}
+			faf_lua51_gc_step(state); // Lua 5.1.5 lgc.c: luaC_step()
+			return;
+		}
 		RunLuaCallGate(nullptr); // engine addition, LuaCallGate.h: finalizers may reach the engine
 		FAF_PROFILE_ZONE_TRANSIENT(moho::IsSimThread() ? "Sim::LuaGC" : "UI::LuaGC");
 
@@ -2650,6 +2673,7 @@
 		const TObject* const table = luaA_index(state, idx);
 		TObject* const key = state->top - 2;
 		*luaH_set(state, static_cast<Table*>(table->value.p), key) = *(state->top - 1);
+		faf_lua51_gc_barrier_back(state, static_cast<Table*>(table->value.p)); // Lua 5.1.5 lapi.c: lua_rawset()
 		state->top -= 2;
 	}
 
@@ -2667,6 +2691,7 @@
 	{
 		const TObject* const table = luaA_index(state, idx);
 		*luaH_setnum(state, static_cast<Table*>(table->value.p), n) = *(state->top - 1);
+		faf_lua51_gc_barrier_back(state, static_cast<Table*>(table->value.p)); // Lua 5.1.5 lapi.c: lua_rawseti()
 		--state->top;
 	}
 
@@ -2694,11 +2719,19 @@
 
 		int applied = 1;
 		switch (object->tt) {
-			case LUA_TTABLE:
-				static_cast<Table*>(object->value.p)->metatable = static_cast<Table*>(metatable->value.p);
+			case LUA_TTABLE: {
+				Table* const target = static_cast<Table*>(object->value.p);
+				target->metatable = static_cast<Table*>(metatable->value.p);
+				faf_lua51_gc_barrier_back(state, target); // Lua 5.1.5 lapi.c: lua_setmetatable()
 				break;
+			}
 			case LUA_TUSERDATA:
 				static_cast<Udata*>(object->value.p)->metatable = static_cast<Table*>(metatable->value.p);
+				faf_lua51_gc_barrier_value(
+					state,
+					static_cast<GCObject*>(object->value.p),
+					metatable
+				); // Lua 5.1.5 lapi.c: lua_setmetatable()
 				break;
 			default:
 				applied = 0;
@@ -2721,6 +2754,10 @@
 	 */
 	void luaC_link(lua_State* const state, GCObject* const object, const int typeTag)
 	{
+		if (moho::lua_IncrementalGC && moho::lua_incremental::IsUiState(state->l_G)) {
+			faf_lua51_gc_link(state, object, typeTag); // Lua 5.1.5 lgc.c: luaC_link()
+			return;
+		}
 		global_State* const globalState = state->l_G;
 		object->gch.next = globalState->rootgc;
 		globalState->rootgc = object;
@@ -2968,6 +3005,14 @@
 			UpVal* const upval = &upvalObject->uv;
 			if (upval->v < level) {
 				return;
+			}
+
+			if (moho::lua_IncrementalGC && moho::lua_incremental::IsUiState(state->l_G)) {
+				upval->value = *upval->v;
+				upval->v = &upval->value;
+				state->openupval = upvalObject->gch.next;
+				faf_lua51_gc_link_upval(state, upval);
+				continue;
 			}
 
 			upval->value = *upval->v;
@@ -3677,6 +3722,11 @@ void LuaObjectDtrThunk7(LuaObject* const object)
  * binds userdata/GC callbacks, and runs standard-library init.
  */
 LuaState::LuaState(const StandardLibraries initStandardLibrary)
+	: LuaState(initStandardLibrary, static_cast<int>(moho::lua_incremental::ELuaVmRole::Baseline))
+{
+}
+
+LuaState::LuaState(const StandardLibraries initStandardLibrary, const int collectorRole)
 	: m_state(nullptr),
 	  m_luaTask(nullptr),
 	  m_ownState(0),
@@ -3690,6 +3740,10 @@ LuaState::LuaState(const StandardLibraries initStandardLibrary)
 	m_ownState = 1;
 	lua_setusergcfunction(m_state, reinterpret_cast<void(__cdecl*)(void*)>(&LuaPlusGCFunction));
 	lua_setstateuserdata(m_state, this);
+
+	if (collectorRole != static_cast<int>(moho::lua_incremental::ELuaVmRole::Baseline)) {
+		faf_lua51_gc_register_vm(m_state, collectorRole);
+	}
 
 	m_headObject.m_next = reinterpret_cast<LuaObject*>(&m_tailObject);
 	m_tailObject.m_prev = reinterpret_cast<LuaObject**>(&m_headObject.m_next);

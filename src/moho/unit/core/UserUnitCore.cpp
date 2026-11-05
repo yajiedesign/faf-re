@@ -1,4 +1,5 @@
 #include "moho/unit/core/UserUnitPrivate.h"
+#include "gpg/core/profiling/Profiler.h"
 
 namespace
 {
@@ -967,6 +968,7 @@ bool UserUnit::UnitDataUpdateRunsLua(const SSTIUnitVariableData& payload) const
 
 void UserUnit::FinishUnitDataLinks()
 {
+  FAF_PROFILE_ZONE_NAMED("Finish:Creator");
   const EntId replicatedCreator = mUnitVarDat.mCreator;
   if ((replicatedCreator & 0xF0000000u) == 0xF0000000u) {
     // 0x008C0823: the sentinel id means "no creator"; drop whatever we held.
@@ -987,6 +989,7 @@ void UserUnit::FinishUnitDataLinks()
   }
 
   if (mUnitVarDat.mDidRefresh) {
+    FAF_PROFILE_ZONE_NAMED("Finish:CommandQueues");
     if (mManager != nullptr) {
       ResyncUserCommandQueueLinks(mManager, mUnitVarDat.mCommands.start_, mUnitVarDat.mCommands.end_);
     }
