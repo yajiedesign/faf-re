@@ -9,6 +9,9 @@
 
 include(sources.cmake)
 
+# The net channel, a library of its own (no engine dependency, see its CMakeLists).
+add_subdirectory(remote/net)
+
 if(FAF_TARGET_ARCH STREQUAL "x64")
   set(_faf_default_name main_x64)
 else()
@@ -85,10 +88,14 @@ target_include_directories(faf_engine_options INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${FAF_DEPENDENCIES_DIR}/boost_1_34_1"
   "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")
-target_link_libraries(faf_engine_options INTERFACE faf_codegen faf::wx Wm3Dx9Application)
+target_link_libraries(faf_engine_options INTERFACE faf_codegen faf::wx Wm3Headers)
 
 # The engine's own objects are compiled with the very same settings.
 target_link_libraries(faf_engine PUBLIC faf_engine_options)
+# In-engine peer links (moho/net/NetlinkPeers.cpp, issue #233; client only).
+target_link_libraries(faf_engine PUBLIC faf_netlink)
+# The rejoin key's signatures (moho/net/RejoinKey.cpp) and the rejoin save's packing (issue #275).
+target_link_libraries(faf_engine PUBLIC faf_monocypher faf_zstd)
 
 set(_faf_main_options
   # C++ exceptions with extern "C" functions allowed to throw (/EHs, not
@@ -104,37 +111,24 @@ set(_faf_main_options
   # the DirectX SDK.
   "/clang:-idirafter${FAF_DXSDK_DIR}/Include")
 
-if(FAF_TARGET_ARCH STREQUAL "x64")
-  # Switches off the Win32 layout static_asserts (see the header).
-  list(APPEND _faf_main_options /FIplatform/X64LayoutAsserts.h)
-else()
+# Switches off the Win32 layout static_asserts where they don't apply (see the
+# header).
+list(APPEND _faf_main_options /FIplatform/LayoutAsserts.h)
+if(NOT FAF_TARGET_ARCH STREQUAL "x64")
   # Keeps sqrt a CRT call under the sim's _PC_24 x87 control word (see the
   # header and cmake/FafCodegen.cmake).
   list(APPEND _faf_main_options /FIplatform/X87SqrtCall.h)
 endif()
 
-# Diagnostics: the recovered tree is written against MSVC; keep clang's
-# portability chatter out of the log so real problems stand out.
-list(APPEND _faf_main_options
-  -Wno-microsoft
-  -Wno-unused-parameter -Wno-unused-variable -Wno-unused-private-field
-  -Wno-unused-function -Wno-unused-local-typedef -Wno-unused-but-set-variable
-  -Wno-unused-lambda-capture -Wno-unused-value -Wno-unused-command-line-argument
-  -Wno-missing-field-initializers -Wno-sign-compare -Wno-switch
-  -Wno-invalid-offsetof -Wno-keyword-macro -Wno-unknown-pragmas
-  -Wno-ignored-pragma-intrinsic -Wno-pragma-pack -Wno-ignored-attributes
-  -Wno-deprecated-declarations -Wno-deprecated-enum-enum-conversion
-  -Wno-nonportable-include-path -Wno-reorder-ctor
-  -Wno-delete-non-abstract-non-virtual-dtor -Wno-overloaded-virtual
-  -Wno-inconsistent-missing-override -Wno-missing-braces -Wno-braced-scalar-init
-  -Wno-char-subscripts -Wno-parentheses -Wno-dangling-else
-  -Wno-tautological-constant-out-of-range-compare
-  -Wno-tautological-undefined-compare -Wno-undefined-var-template
-  -Wno-writable-strings -Wno-comment -Wno-extra-tokens -Wno-nontrivial-memcall
-  -Wno-mismatched-tags -Wno-extra-qualification)
+include(FafWarnings)
+list(APPEND _faf_main_options ${FAF_WARNING_OPTIONS})
 
 # C and C++ only (not the x64 MASM file).
 target_compile_options(faf_engine_options INTERFACE "$<$<COMPILE_LANGUAGE:C,CXX>:${_faf_main_options}>")
+if(FAF_SYNTAX_ONLY)
+  # /Zs doesn't use the -c the build rule passes.
+  target_compile_options(faf_engine PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX>:/Zs;-Wno-unused-command-line-argument>")
+endif()
 
 # --- Per-file settings ---------------------------------------------------------------
 set(_fx11 "${FAF_DEPENDENCIES_DIR}/FX11")
@@ -195,6 +189,8 @@ set_property(SOURCE ${_boost_thread_sources} APPEND PROPERTY COMPILE_OPTIONS /W0
 set_property(SOURCE "${_boost_thread}/condition.cpp" APPEND PROPERTY COMPILE_OPTIONS /UUNICODE /U_UNICODE)
 
 set_property(SOURCE moho/movie/sfd/FfmpegSfdDecoder.cpp APPEND PROPERTY COMPILE_OPTIONS -Wno-everything)
+include(FafPrecompiledHeaders)
+faf_precompile(faf_engine)
 
 # --- Link -----------------------------------------------------------------------------
 if(FAF_TARGET_ARCH STREQUAL "x64")
@@ -328,6 +324,10 @@ include(sim_sources.cmake)
 
 set(_faf_client_sources ${FAF_ENGINE_SOURCES})
 list(REMOVE_ITEM _faf_client_sources ${FAF_SIM_SOURCES})
+if(FAF_SERVER_MODE)
+  # The oracle's golden test reads the client world (CWldSession): faf_main's alone.
+  list(APPEND _faf_client_sources remote/client/OracleGolden.cpp)
+endif()
 set(_faf_sim_objects "$<TARGET_OBJECTS:faf_engine>")
 set(_faf_client_regex "")
 set(_faf_client_count 0)
@@ -377,7 +377,7 @@ target_include_directories(faf_sim_settings INTERFACE
   "${FAF_DEPENDENCIES_DIR}/boost_1_34_1"
   "${FAF_DEPENDENCIES_DIR}/zlib-1.2.3")
 target_compile_options(faf_sim_settings INTERFACE "$<$<COMPILE_LANGUAGE:C,CXX>:${_faf_main_options}>")
-target_link_libraries(faf_sim_settings INTERFACE faf_codegen Wm3Foundation)
+target_link_libraries(faf_sim_settings INTERFACE faf_codegen Wm3Headers)
 
 # MatrixPortable.cpp (faf_main has the D3DX version) is compiled by each program that links
 # faf_sim, so its object (it has a static initialiser) links after the program's own, as
@@ -387,6 +387,8 @@ target_sources(faf_sim INTERFACE ${_faf_sim_objects} "${CMAKE_CURRENT_SOURCE_DIR
 add_dependencies(faf_sim faf_engine)
 target_link_libraries(faf_sim INTERFACE
   faf_sim_settings
+  faf_monocypher
+  faf_zstd
   ws2_32 legacy_stdio_definitions legacy_stdio_wide_specifiers
   dbghelp winmm version shlwapi faultrep
   ${_faf_zlib}
@@ -410,6 +412,9 @@ if(NOT FAF_SERVER_MODE)
 endif()
 
 add_executable(headless ${_faf_headless_sources})
+if(FAF_CALL_HASH_BUILD)
+  target_sources(headless PRIVATE headless/CallHashHooks.cpp)
+endif()
 if(FAF_TARGET_ARCH STREQUAL "x64")
   set_target_properties(headless PROPERTIES OUTPUT_NAME headless_x64)
 endif()

@@ -43,6 +43,63 @@ namespace moho
   class Unit;
   class CAniPose;
 
+#if FAF_SERVER_MODE
+  class Entity;
+  class Sim;
+  struct SSyncData;
+
+  /**
+   * Engine addition, server mode (plan §8, WP6): lets the server route what sim Lua writes for a
+   * player (remote/SyncRouting.h). Null by default and in lockstep, where nothing below changes.
+   * Calls come on the sim's thread.
+   */
+  class ISyncRouting
+  {
+  public:
+    virtual ~ISyncRouting() = default;
+
+    /** What sim Lua's `GetFocusArmy()` sees: a 0-based army or -1. */
+    [[nodiscard]] virtual std::int32_t FocusForLua() const noexcept = 0;
+    /** A command source's `SimCallback` or Lua call starts or ends (`mCurCommandSource`). */
+    virtual void EnterCommand(Sim& sim) = 0;
+    virtual void LeaveCommand(Sim& sim) = 0;
+    /** Sim Lua's `SetFocusArmy`, which on a server moves the current view and not the sim's filter. */
+    virtual void SetFocusFromLua(std::int32_t army) = 0;
+    /** A print line from sim Lua: true if it went to a player, and stays out of the packet. */
+    virtual bool Print(const msvc8::string& line) = 0;
+    /** The beat's `Sync` table, written and not yet emptied. */
+    virtual void OnSyncTable(Sim& sim, LuaPlus::LuaObject& syncTable, const SSyncData& packet) = 0;
+  };
+
+  /**
+   * Engine addition, server mode (plan WP5.1): what `Sim::Sync` tells its observer
+   * (`Sim::SetSyncObserver`). Calls come on the sim's thread, in walk order; an observer only
+   * reads.
+   */
+  class CSyncObserver
+  {
+  public:
+    virtual ~CSyncObserver() = default;
+
+    /**
+     * An entity the walk is about to sync. `Entity::Sync` clears state the packet carries
+     * (`mRequestRefreshUI`, 0x0067A10B) after copying it; an observer that rebuilds another
+     * view's packet reads it here.
+     */
+    virtual void OnEntityWillSync(Entity& entity) { (void)entity; }
+
+    /** An entity the walk just synced (its `Sync` has run): the beat's dirty run, or every entity on a focus change. */
+    virtual void OnEntitySynced(Entity& entity) { (void)entity; }
+
+    /** The walk is done and the beat's packet holds every entity record it will carry. */
+    virtual void OnSyncWalkDone(Sim& sim, const SSyncData& packet)
+    {
+      (void)sim;
+      (void)packet;
+    }
+  };
+#endif
+
   /**
    * Address: 0x004A4920 (FUN_004A4920)
    * Mangled: ?REF_UpdateMD5@Moho@@YAXAAVMD5Context@gpg@@ABVRRef@3@PAU_iobuf@@H@Z
@@ -1136,6 +1193,21 @@ namespace moho
      * publishes minimal beat packet data until full sync-body recovery.
      */
     void Sync(const SSyncFilter& filter, SSyncData*& outSyncData);
+
+#if FAF_SERVER_MODE
+    /**
+     * Engine addition, server mode (plan WP5.1, WP4.1): the sync walk's observer, null by default
+     * and in lockstep. `Sync` calls it on the sim's thread for every entity its walk syncs and
+     * once the walk is done; it must only read the sim. The server builds its views from it
+     * (remote/BeatChangeSet.h); headless's checks and the golden test use it too. One at a time.
+     * Setting it waits for a walk in progress, so once it returns the old observer gets no more calls.
+     */
+    static void SetSyncObserver(CSyncObserver* observer) noexcept;
+    /** The observer set now (null by default); one that replaces it may pass the calls on. */
+    [[nodiscard]] static CSyncObserver* SyncObserver() noexcept;
+    /** Engine addition, server mode (plan WP6): null by default and in lockstep. */
+    static void SetSyncRouting(ISyncRouting* routing) noexcept;
+#endif
 
     /**
      * Address: 0x0074AFB0 (FUN_0074AFB0, ?SaveState@Sim@Moho@@QAEXAAVWriteArchive@gpg@@@Z)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "legacy/containers/Layout.h"
 #include <Windows.h>
 
 #include <cstddef>
@@ -92,9 +93,34 @@ namespace moho
   static_assert(offsetof(SZipLocalFileHeader, mExtraFieldLength) == 0x1C, "SZipLocalFileHeader::mExtraFieldLength offset must be 0x1C");
   static_assert(sizeof(SZipLocalFileHeader) == 0x1E, "SZipLocalFileHeader size must be 0x1E");
 
+  /**
+   * Engine addition (`res_ZipKeepOpen`): while one of these lives on a thread, that thread's
+   * `CZipFile::ReadEntry` calls keep each archive open instead of opening it for every file. All of
+   * them close when it ends, as an open archive can't be replaced. Reads return the same bytes.
+   * `/nozipkeepopen` turns it off at startup.
+   */
+  class CZipFileReadScope
+  {
+  public:
+    CZipFileReadScope();
+    ~CZipFileReadScope();
+    CZipFileReadScope(const CZipFileReadScope&) = delete;
+    CZipFileReadScope& operator=(const CZipFileReadScope&) = delete;
+
+  private:
+    bool mOwnsArchives = false;
+  };
+
   class CZipFile
   {
   public:
+    /**
+     * Engine addition (plan WPR.35): whether `ReadEntry` keeps every file it decompressed for the
+     * next read, as the binary does. A program with no UI, whose loaded data lives elsewhere, turns
+     * this off before it reads anything: a second read decompresses the file again.
+     */
+    static void SetKeepEntryData(bool keep) noexcept;
+
     static constexpr std::uint32_t kInvalidEntryIndex = 0xFFFFFFFFu;
 
     /**
@@ -200,11 +226,20 @@ namespace moho
   private:
     [[nodiscard]] SZipFileCachedEntry& GetCachedEntryOrThrow(std::uint32_t entryIndex, const char* message) const;
     [[nodiscard]] const CZipFileEntry& GetEntryOrThrow(std::uint32_t entryIndex, const char* message) const;
+#if !FAF_RETAIL_LAYOUT
+    void BuildEntryIndex(const char* archivePath);
+#endif
 
   public:
     msvc8::string mPath{};                           // +0x00
     msvc8::vector<SZipFileCachedEntry> mEntries{};  // +0x1C
+#if FAF_RETAIL_LAYOUT
     SZipFileNameIndexMap mEntryByCanonicalPath{};   // +0x2C
+#else
+    // Engine change: entry indices sorted by name, in place of the binary's map. The map keeps a
+    // second copy of every name and a node per entry, for lookups only this file makes.
+    msvc8::vector<std::uint32_t> mEntryByCanonicalPath{};
+#endif
   };
 
   static_assert(offsetof(CZipFile, mEntries) == 0x1C, "CZipFile::mEntries offset must be 0x1C");

@@ -19,22 +19,6 @@ using namespace moho;
 
 namespace
 {
-  gpg::RType* CachedScrDiskWatcherTaskType()
-  {
-    if (!ScrDiskWatcherTask::sType) {
-      ScrDiskWatcherTask::sType = gpg::LookupRType(typeid(ScrDiskWatcherTask));
-    }
-    return ScrDiskWatcherTask::sType;
-  }
-
-  gpg::RType* CachedCTaskType()
-  {
-    static gpg::RType* cached = nullptr;
-    if (!cached) {
-      cached = gpg::LookupRType(typeid(CTask));
-    }
-    return cached;
-  }
 
   /**
    * Address: 0x004C1370 (FUN_004C1370, gpg::RRef_ScrDiskWatcherTask)
@@ -47,20 +31,20 @@ namespace
   {
     gpg::RRef out{};
     out.mObj = nullptr;
-    out.mType = CachedScrDiskWatcherTaskType();
+    out.mType = gpg::RTypeOf<ScrDiskWatcherTask>();
     if (!task) {
       return out;
     }
 
-    gpg::RType* dynamicType = CachedScrDiskWatcherTaskType();
+    gpg::RType* dynamicType = gpg::RTypeOf<ScrDiskWatcherTask>();
     try {
       dynamicType = gpg::LookupRType(typeid(*task));
     } catch (...) {
-      dynamicType = CachedScrDiskWatcherTaskType();
+      dynamicType = gpg::RTypeOf<ScrDiskWatcherTask>();
     }
 
     std::int32_t baseOffset = 0;
-    const bool derived = dynamicType->IsDerivedFrom(CachedScrDiskWatcherTaskType(), &baseOffset);
+    const bool derived = dynamicType->IsDerivedFrom(gpg::RTypeOf<ScrDiskWatcherTask>(), &baseOffset);
     GPG_ASSERT(derived);
     if (!derived) {
       out.mObj = task;
@@ -107,10 +91,19 @@ namespace
     return &sInstance;
   }
 
+  /**
+   * What it does:
+   * Maps one event's disk path to its mounted path, as the binary does inline
+   * in `Execute` (0x004C0D7D..0x004C0D90): the event's own path is the source
+   * and a fresh string the output of the VFS's `ToMountedPath`.
+   *
+   * The source must not be the output's own buffer: `FILE_ToMountedPath`
+   * first assigns the source to the output, and that assign frees the buffer
+   * it is reading, so every `__diskwatch` callback got an empty path.
+   */
   void ResolvePathForLua(const SDiskWatchEvent& event, msvc8::string& normalizedPath)
   {
-    normalizedPath = event.mPath;
-    (void)FILE_ToMountedPath(&normalizedPath, normalizedPath.c_str());
+    (void)FILE_ToMountedPath(&normalizedPath, event.mPath.c_str());
   }
 
   /**
@@ -272,7 +265,7 @@ void ScrDiskWatcherTaskTypeInfo::AddBase_CTask(gpg::RType* const typeInfo)
 {
   gpg::RType* taskType = CTask::sType;
   if (!taskType) {
-    taskType = CachedCTaskType();
+    taskType = gpg::RTypeOf<CTask>();
     CTask::sType = taskType;
   }
 

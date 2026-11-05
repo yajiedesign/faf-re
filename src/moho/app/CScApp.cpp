@@ -33,8 +33,10 @@
 #include "moho/misc/StartupHelpers.h"
 #include "moho/misc/StatItem.h"
 #include "moho/misc/Stats.h"
+#include "moho/sim/DesyncTelemetry.h"
 #include "moho/misc/TimeBar.h"
 #include "moho/misc/CDiskWatch.h"
+#include "moho/net/CRejoinFeed.h"
 #include "moho/net/CGpgNetInterface.h"
 #include "moho/net/Common.h"
 #include "moho/app/CWaitHandleSet.h"
@@ -51,6 +53,7 @@
 #include "moho/ui/IUIManager.h"
 #include "moho/ui/UiWorldShapes.h"
 #if FAF_SERVER_MODE
+#include "remote/client/OracleGolden.h"
 #include "remote/client/ServerConnect.h"
 #endif
 
@@ -177,11 +180,7 @@ namespace
       return;
     }
 
-    volatile long* const counter = reinterpret_cast<volatile long*>(&slot->mPrimaryValueBits);
-    long observed = 0;
-    do {
-      observed = ::InterlockedCompareExchange(counter, 0, 0);
-    } while (::InterlockedCompareExchange(counter, static_cast<long>(value), observed) != observed);
+    slot->StorePrimaryBits(value);
   }
 
   /**
@@ -368,6 +367,9 @@ namespace
       moho::CON_Execute("WIN_ShowLogDialog true");
     }
 
+    // Engine addition (issue #218): telemetry flags and the switch defaults, before /con changes them.
+    moho::TELEMETRY_Startup();
+
     // Engine addition: `/con name=value;name2=value2` runs console commands at startup, so a
     // launcher can set user-side console variables (e.g. `/con sim_ReplayLead=0`).
     if (moho::CFG_GetArgOption("/con", 1, &args) && !args.empty()) {
@@ -389,6 +391,10 @@ namespace
     moho::PlaceCurrentThread(moho::EThreadRole::Main);
 
 #if FAF_SERVER_MODE
+    // Engine addition, server mode: `/oraclegolden <file>`, the visibility oracle's golden test
+    // (remote/client/OracleGolden.h), for whatever session starts below.
+    (void)faf::remote::client::InstallOracleGoldenFromCommandLine();
+
     // Engine addition, server mode: `/connectserver` takes over startup. Without it, every
     // path below runs as before.
     switch (faf::remote::StartServerSessionFromCommandLine()) {
@@ -412,6 +418,22 @@ namespace
         }
       }
 
+      (void)moho::UI_StartSplashScreens();
+      return;
+    }
+
+    // Engine addition (issue #275): take a seat back in a running game. Without
+    // the option, every path below runs as before.
+    if (moho::CFG_GetArgOption("/rejoin", 3, &args) && args.size() >= 3) {
+      msvc8::string failureReason;
+      if (moho::REJOIN_BeginSetup(
+            args[0].c_str(), std::atoi(args[1].c_str()), static_cast<unsigned short>(std::atoi(args[2].c_str())), &failureReason
+          )) {
+        (void)moho::UI_StartRejoinScreen();
+        return;
+      }
+      gpg::Warnf("REJOIN: refused: %s", failureReason.c_str());
+      moho::WIN_OkBox("Ack!", gpg::STR_Printf("Unable to rejoin the game.\n\n%s", failureReason.c_str()).c_str());
       (void)moho::UI_StartSplashScreens();
       return;
     }
@@ -909,7 +931,7 @@ namespace
 {
   /**
    * Engine addition: which frame time advances the session clock in replays and single-player
-   * sessions (never in network sessions, which keep the binary's clock).
+   * sessions, and in network sessions when `wld_FrameClockNetwork` is set.
    * - 0: the median of the last frames, as the binary does. When one frame per beat is long (the
    *   one that applies the beat) and the rest are short, the median is a short frame, so the game
    *   runs slower than real time even though both threads keep up.
@@ -923,6 +945,33 @@ namespace
     "Replays and single player: 0 advances the game clock by the median frame time (original), 1 by "
     "the mean, 2 by each frame's own time.",
     &wld_FrameClock
+  );
+
+  /**
+   * Engine addition: lets `wld_FrameClock` apply in network sessions too, where the clock also sets
+   * when this client issues beats to the other clients. Off by default: with a retail client in the
+   * session the mean gave no reliable gain and more frames with no beat ready (docs/SWITCHES.md).
+   */
+  int wld_FrameClockNetwork = 0;
+
+  moho::TConVar<int> gTConVar_wld_FrameClockNetwork(
+    "wld_FrameClockNetwork",
+    "Network sessions: 1 applies wld_FrameClock, 0 keeps the original median frame time.",
+    &wld_FrameClockNetwork
+  );
+
+  /**
+   * Engine addition: when the clock follows real time, it starts its window afresh once the
+   * session's first tick is on screen. Otherwise the long first frame of play stays in the mean and
+   * the clock repays it by rushing the next ticks out a few milliseconds apart.
+   */
+  int wld_FrameClockOpening = 1;
+
+  moho::TConVar<int> gTConVar_wld_FrameClockOpening(
+    "wld_FrameClockOpening",
+    "1 drops the long first frame of play from the mean frame clock once the first tick is shown; 0 keeps it, and the "
+    "clock rushes the next ticks to repay it.",
+    &wld_FrameClockOpening
   );
 } // namespace
 
@@ -1133,6 +1182,15 @@ void CScApp::Main()
   }
 
   gpg::diag::FrameSamplerMark(); // debugging aid, off unless FAF_FRAME_SAMPLER is set
+  // Engine addition (wld_FrameClock): the clock may follow real time, in network sessions only with
+  // wld_FrameClockNetwork. With wld_FrameClockOpening it then drops the session's opening frames (its
+  // long first frame of play) from the window once its first tick is on screen; the median ignores
+  // one long frame, so the original clock keeps its window.
+  const bool realTimeClock = fixedFrameSeconds <= 0.0f && wld_FrameClock != 0 &&
+    (moho::SIM_GetSessionPacing() != moho::ESimSessionPacing::Network || wld_FrameClockNetwork != 0);
+  if (moho::WLD_TakeFrameClockReset() && realTimeClock && wld_FrameClockOpening != 0) {
+    framerates.Reset();
+  }
   (void)framerates.Push(frameSeconds);
   // FAF FA-Binary-Patches (hooks/GetFPS.cpp): StoreFPS keeps the frame time it
   // finds being pushed here (0x008D1A85) as OnRenderWorld's `delta`.
@@ -1147,11 +1205,28 @@ void CScApp::Main()
   }
 
   float smoothedFrameSeconds = fixedFrameSeconds > 0.0f ? fixedFrameSeconds : framerates.Median();
-  // Engine addition (wld_FrameClock): outside network sessions the clock may follow real time.
-  if (fixedFrameSeconds <= 0.0f && wld_FrameClock != 0 &&
-      moho::SIM_GetSessionPacing() != moho::ESimSessionPacing::Network) {
+  if (realTimeClock) {
     smoothedFrameSeconds = wld_FrameClock == 2 ? frameSeconds : framerates.Mean();
   }
+  // Engine addition (issue #275): false outside a client started with /rejoin.
+  if (moho::REJOIN_SetupPending()) {
+    msvc8::string failureReason;
+    bool failed = false;
+    msvc8::auto_ptr<moho::SWldSessionInfo> sessionInfo = moho::REJOIN_PollSetup(&failureReason, &failed);
+    if (sessionInfo.get() != nullptr) {
+      moho::UI_UpdateRejoinScreen("", -1.0f);
+      moho::WLD_BeginSession(sessionInfo);
+    } else if (failed) {
+      gpg::Warnf("REJOIN: refused: %s", failureReason.c_str());
+      moho::UI_UpdateRejoinScreen("", -1.0f);
+      moho::WIN_OkBox("Ack!", gpg::STR_Printf("Unable to rejoin the game.\n\n%s", failureReason.c_str()).c_str());
+      (void)moho::UI_StartSplashScreens();
+    } else {
+      const float progress = moho::REJOIN_SetupProgress();
+      moho::UI_UpdateRejoinScreen(progress >= 0.0f ? "transfer" : "connecting", progress);
+    }
+  }
+
   bool frameKeepsGoing = true;
   {
     FAF_PROFILE_ZONE_NAMED("App:WLD_Frame");

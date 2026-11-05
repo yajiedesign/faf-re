@@ -1,4 +1,6 @@
+#include "moho/lua/ScrLuaUserData.h"
 #include "moho/audio/CSndParams.h"
+#include "moho/lua/CScrLuaInitForm.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -118,9 +120,10 @@ namespace
    * Only the CRITICAL_SECTION backing makes that legal, which is why this tree
    * models the two registry lanes with `std::recursive_mutex` instead. Folding
    * the three locks back into this one is a lock-topology change that wants
-   * its own pass.
+   * its own pass. With the two registry lanes on their own lock, this one has
+   * one section and it never re-enters, so a plain mutex is enough here.
    */
-  boost::mutex gSharedAmbientLoopMutex;
+  std::mutex gSharedAmbientLoopMutex;
 
   /**
    * Address: 0x010A92A0 (`msvc8::map<CSndParams*, HSndEntityLoop*>`; `_Myhead`
@@ -174,16 +177,6 @@ namespace
   constexpr const char* kSoundHelpText = "Sound( {cue,bank,cutoff} ) - Make a sound parameters object";
   constexpr const char* kRpcSoundHelpText = "RPCSound( {cue,bank,cutoff} ) - Make a sound parameters object";
   constexpr const char* kGetCueBankHelpText = "cue,bank = GetCueBank(params)";
-
-  [[nodiscard]] gpg::RType* ResolveSParamKeyType()
-  {
-    gpg::RType* type = moho::SParamKey::sType;
-    if (type == nullptr) {
-      type = gpg::LookupRType(typeid(moho::SParamKey));
-      moho::SParamKey::sType = type;
-    }
-    return type;
-  }
 
   [[nodiscard]] msvc8::string SndVarNameOrEmpty(const moho::CSndVar* const value)
   {
@@ -562,20 +555,6 @@ namespace
     return created;
   }
 
-  [[nodiscard]] moho::CScrLuaInitFormSet& CoreLuaInitSet()
-  {
-    // Every file that wants this set must resolve the one that already
-    // exists. Declaring a fresh static here creates a second set with the
-    // same name, and SCR_FindLuaInitFormSet returns only the first - so
-    // half the binders never get run.
-    if (moho::CScrLuaInitFormSet* const existing = moho::SCR_FindLuaInitFormSet("Core"); existing != nullptr) {
-      return *existing;
-    }
-
-    static moho::CScrLuaInitFormSet sSet("Core");
-    return sSet;
-  }
-
   [[nodiscard]] LuaPlus::LuaState* ResolveBindingState(lua_State* const luaContext) noexcept
   {
     return luaContext != nullptr ? luaContext->stateUserData : nullptr;
@@ -594,7 +573,7 @@ namespace
       return &gDefaultSharedAmbientLoop;
     }
 
-    boost::mutex::scoped_lock lock(gSharedAmbientLoopMutex);
+    std::lock_guard<std::mutex> lock(gSharedAmbientLoopMutex);
 
     const auto existing = gSharedAmbientLoopsByParams.find(params);
     if (existing != gSharedAmbientLoopsByParams.end()) {
@@ -606,30 +585,6 @@ namespace
     auto* const loop = new moho::HSndEntityLoop(params);
     (void)gSharedAmbientLoopsByParams.insert({params, loop});
     return loop;
-  }
-
-  /**
-   * The reflected reference is assembled from the userdata HEADER, not read out
-   * of its payload. This fork carries the `gpg::RType*` in `Udata::len`, and the
-   * value itself starts one header past the allocation, which is exactly what
-   * `LuaPlus::LuaObject::GetUserData` (0x00907540) does:
-   *
-   *     lea edx, [ecx+10h]   ; mObj  = payload, laid out after the header
-   *     mov ecx, [ecx+0Ch]   ; mType = Udata::len reinterpreted as RType*
-   *
-   * Reading `*(gpg::RRef*)lua_touserdata(...)` instead - as this helper used to -
-   * takes the first eight payload bytes as if they were a reference. For a
-   * `_c_object` slot those bytes are the `CScriptObject*` value followed by
-   * whatever the allocator left, so every upcast failed and each caller reported
-   * "Expected a game object" for a perfectly good object.
-   */
-  [[nodiscard]] gpg::RRef ExtractLuaUserDataRef(const LuaPlus::LuaObject& userDataObject)
-  {
-    if (!userDataObject.IsUserData()) {
-      return gpg::RRef{};
-    }
-
-    return userDataObject.GetUserData();
   }
 
   [[nodiscard]] msvc8::string ReadRequiredTableStringField(
@@ -811,7 +766,7 @@ namespace moho
       object = object.GetByName("_c_object");
     }
 
-    const gpg::RRef userDataRef = ExtractLuaUserDataRef(object);
+    const gpg::RRef userDataRef = moho::SCR_UserDataRef(object);
     return TryUpcastCSndParamsSlotOrThrow(userDataRef);
   }
 
@@ -918,10 +873,7 @@ namespace moho
       return 0;
     }
 
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kSoundHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kSoundHelpText);
 
     LuaPlus::LuaStackObject paramsTable(state, 1);
     CSndParams* const params = BuildSndParamsFromLuaTable(paramsTable, false);
@@ -940,7 +892,7 @@ namespace moho
    */
   CScrLuaInitForm* func_Sound_LuaFuncDef()
   {
-    static CScrLuaBinder binder(CoreLuaInitSet(), "Sound", &cfunc_Sound, nullptr, "<global>", kSoundHelpText);
+    static CScrLuaBinder binder(moho::SCR_CoreLuaInitSet(), "Sound", &cfunc_Sound, nullptr, "<global>", kSoundHelpText);
     return &binder;
   }
 
@@ -967,10 +919,7 @@ namespace moho
       return 0;
     }
 
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kRpcSoundHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kRpcSoundHelpText);
 
     LuaPlus::LuaStackObject paramsTable(state, 1);
     CSndParams* const params = BuildSndParamsFromLuaTable(paramsTable, true);
@@ -989,7 +938,7 @@ namespace moho
    */
   CScrLuaInitForm* func_RPCSound_LuaFuncDef()
   {
-    static CScrLuaBinder binder(CoreLuaInitSet(), "RPCSound", &cfunc_RPCSound, nullptr, "<global>", kRpcSoundHelpText);
+    static CScrLuaBinder binder(moho::SCR_CoreLuaInitSet(), "RPCSound", &cfunc_RPCSound, nullptr, "<global>", kRpcSoundHelpText);
     return &binder;
   }
 
@@ -1016,10 +965,7 @@ namespace moho
       return 0;
     }
 
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kGetCueBankHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kGetCueBankHelpText);
 
     LuaPlus::LuaStackObject paramsArg(state, 1);
     LuaPlus::LuaObject paramsObject(paramsArg);
@@ -1051,7 +997,7 @@ namespace moho
   CScrLuaInitForm* func_GetCueBank_LuaFuncDef()
   {
     static CScrLuaBinder
-      binder(CoreLuaInitSet(), "GetCueBank", &cfunc_GetCueBank, nullptr, "<global>", kGetCueBankHelpText);
+      binder(moho::SCR_CoreLuaInitSet(), "GetCueBank", &cfunc_GetCueBank, nullptr, "<global>", kGetCueBankHelpText);
     return &binder;
   }
 } // namespace moho
@@ -1072,7 +1018,7 @@ namespace
   moho::CScrLuaInitForm* register_moho_sound_methods()
   {
     static moho::CScrLuaClassBinder binder(
-      CoreLuaInitSet(), "moho.sound_methods", &moho::CScrLuaMetatableFactory<moho::HSound>::Instance(), "HSound", ""
+      moho::SCR_CoreLuaInitSet(), "moho.sound_methods", &moho::CScrLuaMetatableFactory<moho::HSound>::Instance(), "HSound", ""
     );
     return &binder;
   }
@@ -1112,7 +1058,7 @@ namespace moho
   {
     SParamKey key{};
     const gpg::RRef owner{};
-    archive.Read(ResolveSParamKeyType(), &key, owner);
+    archive.Read(gpg::RTypeOf<moho::SParamKey>(), &key, owner);
     result.SetOwned(gpg::MakeRRef(FindOrCreateSndParamsByKey(key)), 1u);
   }
 
@@ -1124,7 +1070,7 @@ namespace moho
   )
   {
     const SParamKey key = BuildSParamKeyFromParams(*this);
-    archive.Write(ResolveSParamKeyType(), &key, gpg::RRef{});
+    archive.Write(gpg::RTypeOf<moho::SParamKey>(), &key, gpg::RRef{});
     result.SetOwned(1u);
   }
 

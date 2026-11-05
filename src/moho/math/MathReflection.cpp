@@ -25,14 +25,6 @@
 
 namespace
 {
-  [[nodiscard]] gpg::RType* ResolveVector3fType()
-  {
-    static gpg::RType* cached = nullptr;
-    if (cached == nullptr) {
-      cached = gpg::LookupRType(typeid(Wm3::Vector3f));
-    }
-    return cached;
-  }
 
   /**
    * Address: 0x004EABF0 (FUN_004EABF0)
@@ -108,7 +100,7 @@ namespace moho
    * Address: 0x00BC32E0 (FUN_00BC32E0, dynamic initializer for `math_GlobalRandomMutex`)
    * Address: 0x00BEE680 (FUN_00BEE680, dynamic atexit destructor for `math_GlobalRandomMutex`)
    */
-  boost::mutex math_GlobalRandomMutex;
+  std::mutex math_GlobalRandomMutex;
 
   VMatrix4 VMatrix4::NaN{};
 
@@ -121,7 +113,7 @@ namespace moho
    */
   double MathGlobalRandomUnitScaled(const float scale)
   {
-    boost::mutex::scoped_lock randomLock(math_GlobalRandomMutex);
+    std::lock_guard<std::mutex> randomLock(math_GlobalRandomMutex);
     const float unit = CMersenneTwister::ToUnitFloat(math_GlobalRandomStream.twister.NextUInt32());
     return static_cast<double>(unit * scale);
   }
@@ -135,7 +127,7 @@ namespace moho
    */
   double MathGlobalRandomUnitSafe()
   {
-    boost::mutex::scoped_lock randomLock(math_GlobalRandomMutex);
+    std::lock_guard<std::mutex> randomLock(math_GlobalRandomMutex);
     const float unit = CMersenneTwister::ToUnitFloat(math_GlobalRandomStream.twister.NextUInt32());
     return static_cast<double>(unit);
   }
@@ -149,7 +141,7 @@ namespace moho
    */
   double MathGlobalRandomRange(const float minValue, const float maxValue)
   {
-    boost::mutex::scoped_lock randomLock(math_GlobalRandomMutex);
+    std::lock_guard<std::mutex> randomLock(math_GlobalRandomMutex);
     const float unit = CMersenneTwister::ToUnitFloat(math_GlobalRandomStream.twister.NextUInt32());
     return static_cast<double>(minValue + (maxValue - minValue) * unit);
   }
@@ -209,9 +201,12 @@ namespace moho
     const float wx = twoW * orientation.x;
     const float wy = twoW * orientation.y;
     const float wz = twoW * orientation.z;
-    const float xy = twoX * orientation.y;
-    const float xz = twoX * orientation.z;
-    const float yz = twoY * orientation.z;
+    // 0x004EC5D5..0x004EC611 doubles the later lane of each mixed product, as
+    // VMatrix4::Set does: (2y)x, (2z)x, (2z)y. The other choice overflows to
+    // infinity where the binary stays finite once a lane passes FLT_MAX / 2.
+    const float xy = twoY * orientation.x;
+    const float xz = twoZ * orientation.x;
+    const float yz = twoZ * orientation.y;
 
     vX.x = 1.0f - (zz + yy);
     vX.y = wz + xy;
@@ -1309,9 +1304,8 @@ namespace
 // 0x00A8ECD3) are defined in legacy/math/X87Math.cpp, next to the helpers that
 // read the lane.
 
-// CRT `ceil` (0x00A840A0) and its x87 fallback (0x00A9AC84) are recovered in
-// moho/misc/CrtRuntimeHelpers.cpp with the rest of the statically linked CRT;
-// this build gets `ceil` from the DLL CRT.
+// CRT `ceil` (0x00A840A0) and its x87 fallback (0x00A9AC84) belong to the
+// binary's statically linked CRT; this build gets `ceil` from the DLL CRT.
 
 // Phase-1 pre-registration: run these descriptor registrations ahead of
 // every consumer that calls gpg::LookupRType. See StaticInitPhase.h.
@@ -1362,9 +1356,9 @@ namespace moho
     }
 
     const gpg::RRef ownerRef{};
-    archive->Read(ResolveVector3fType(), &vX, ownerRef);
-    archive->Read(ResolveVector3fType(), &vY, ownerRef);
-    archive->Read(ResolveVector3fType(), &vZ, ownerRef);
+    archive->Read(gpg::RTypeOf<Wm3::Vector3f>(), &vX, ownerRef);
+    archive->Read(gpg::RTypeOf<Wm3::Vector3f>(), &vY, ownerRef);
+    archive->Read(gpg::RTypeOf<Wm3::Vector3f>(), &vZ, ownerRef);
   }
 
   /**
@@ -1378,9 +1372,9 @@ namespace moho
     }
 
     const gpg::RRef ownerRef{};
-    archive->Write(ResolveVector3fType(), &vX, ownerRef);
-    archive->Write(ResolveVector3fType(), &vY, ownerRef);
-    archive->Write(ResolveVector3fType(), &vZ, ownerRef);
+    archive->Write(gpg::RTypeOf<Wm3::Vector3f>(), &vX, ownerRef);
+    archive->Write(gpg::RTypeOf<Wm3::Vector3f>(), &vY, ownerRef);
+    archive->Write(gpg::RTypeOf<Wm3::Vector3f>(), &vZ, ownerRef);
   }
 } // namespace moho
 

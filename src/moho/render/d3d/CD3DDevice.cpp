@@ -29,6 +29,7 @@
 #include "gpg/gal/backends/d3d9/DeviceD3D9.hpp"
 #include "gpg/gal/Effect.hpp"
 #include "gpg/gal/EffectTechnique.hpp"
+#include "moho/console/CConCommand.h"
 #include "moho/misc/FileWaitHandleSet.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/misc/StartupHelpers.h"
@@ -80,13 +81,7 @@ namespace
       return;
     }
 
-    volatile long* const counter = reinterpret_cast<volatile long*>(&item->mPrimaryValueBits);
-    const long nextBits = static_cast<long>(FloatToBits(value));
-
-    long observed = 0;
-    do {
-      observed = ::InterlockedCompareExchange(counter, 0, 0);
-    } while (::InterlockedCompareExchange(counter, nextBits, observed) != observed);
+    item->StorePrimaryBits(static_cast<std::int32_t>(FloatToBits(value)));
   }
 
   moho::StatItem* EnsureEngineIntStat(moho::StatItem*& slot, const char* const statName)
@@ -108,12 +103,7 @@ namespace
       return 0;
     }
 
-    volatile long* const counter = reinterpret_cast<volatile long*>(&item->mPrimaryValueBits);
-    long observed = 0;
-    do {
-      observed = ::InterlockedCompareExchange(counter, 0, 0);
-    } while (::InterlockedCompareExchange(counter, 0, observed) != observed);
-    return static_cast<int>(observed);
+    return static_cast<int>(item->ExchangePrimaryBits(0));
   }
 
   int AddToStatCounter(moho::StatItem* const item, const unsigned int amount)
@@ -122,8 +112,7 @@ namespace
       return 0;
     }
 
-    volatile long* const counter = reinterpret_cast<volatile long*>(&item->mPrimaryValueBits);
-    return static_cast<int>(::InterlockedExchangeAdd(counter, static_cast<long>(amount)));
+    return static_cast<int>(item->AddPrimaryBits(static_cast<std::int32_t>(amount)));
   }
 
   template <class T>
@@ -653,10 +642,47 @@ namespace moho
    * What it does:
    * Triggers a viewport refresh for the active device window and reports success.
    */
+  bool ren_DirectPaint = true;
+
+  namespace
+  {
+    bool sDirectPaintPending = false;
+
+    TConVar<bool> gTConVar_ren_DirectPaint(
+      "ren_DirectPaint",
+      "The main loop draws each frame directly (1, the default), or the frame draws in a WM_PAINT message "
+      "as in the original (0). Read each frame.",
+      &ren_DirectPaint
+    );
+  } // namespace
+
   bool CD3DDevice::Refresh()
   {
     if (WRenViewport* const viewport = GetViewport(); viewport != nullptr) {
+      // A hidden window gets no WM_PAINT, so it draws nothing here either.
+      const HWND window = reinterpret_cast<HWND>(static_cast<std::uintptr_t>(viewport->GetHandle()));
+      if (ren_DirectPaint && gpg::gal::Device::IsReady() && ::IsWindowVisible(window) != FALSE) {
+        sDirectPaintPending = true;
+        return true;
+      }
       viewport->Refresh(true, nullptr);
+    }
+    return true;
+  }
+
+  bool D3D_IsDirectPaintPending() noexcept
+  {
+    return sDirectPaintPending;
+  }
+
+  bool D3D_RunDirectPaint()
+  {
+    if (!sDirectPaintPending) {
+      return false;
+    }
+    sDirectPaintPending = false;
+    if (WRenViewport* const viewport = D3D_GetDevice()->GetViewport(); viewport != nullptr) {
+      viewport->PaintWithoutMessage();
     }
     return true;
   }
@@ -1796,7 +1822,7 @@ namespace moho
    * Address: 0x004305F0 (FUN_004305F0, ?REN_Init@Moho@@YAXXZ)
    *
    * What it does:
-   * Enumerates `/fonts/*.ttf`, loads each font file into memory, and registers
+   * Enumerates `/fonts/ *.ttf`, loads each font file into memory, and registers
    * successful payloads with `AddFontMemResourceEx`.
    */
   void REN_Init()

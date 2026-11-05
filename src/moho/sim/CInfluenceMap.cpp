@@ -15,6 +15,7 @@
 #include "gpg/core/algorithms/MD5.h"
 #include "gpg/core/containers/String.h"
 #include "moho/ai/IAiReconDB.h"
+#include "moho/command/SSTITarget.h"
 #include "moho/console/CConAlias.h"
 #include "moho/entity/Entity.h"
 #include "moho/entity/EntityCategoryLookupResolver.h"
@@ -1817,6 +1818,20 @@ namespace moho
    */
   float InfluenceGrid::GetThreat(const EThreatType threatType, const int army) const
   {
+    // `cmp edx, 0Eh; ja` (0x00715750) returns 0 for any type outside 0..14.
+    if (static_cast<std::uint32_t>(threatType) > static_cast<std::uint32_t>(THREATTYPE_Unknown)) {
+      return 0.0f;
+    }
+
+    // OverallNotAssigned leaves the cell's own threat out, and for one army
+    // returns that army's lane as is (0x00715788..0x00715799), so a -0 stays
+    // -0. The binary indexes `threats` without a bound; an army past the end
+    // reads 0 here.
+    if (threatType == THREATTYPE_OverallNotAssigned && army >= 0) {
+      const std::size_t armyIndex = static_cast<std::size_t>(army);
+      return armyIndex < threats.size() ? threats[armyIndex].overallInfluence : 0.0f;
+    }
+
     float result = (threatType == THREATTYPE_OverallNotAssigned) ? 0.0f : threat.ValueByType(threatType);
 
     if (army >= 0) {
@@ -2787,7 +2802,7 @@ namespace moho
 
     static gpg::RType* entIdType = nullptr;
     if (entIdType == nullptr) {
-      entIdType = gpg::LookupRType(typeid(moho::EntId));
+      entIdType = gpg::RTypeOf<moho::EntIdValue>(); // `Moho::EntId`, not `int`
     }
     archive->Read(entIdType, &entityId, ownerRef);
 
@@ -2838,7 +2853,7 @@ namespace moho
 
     static gpg::RType* entIdType = nullptr;
     if (entIdType == nullptr) {
-      entIdType = gpg::LookupRType(typeid(moho::EntId));
+      entIdType = gpg::RTypeOf<moho::EntIdValue>(); // `Moho::EntId`, not `int`
     }
     archive->Write(entIdType, &entityId, ownerRef);
 

@@ -1,4 +1,6 @@
 #include "Prop.h"
+#include "moho/lua/CScrLuaInitForm.h"
+#include "moho/lua/CScrLuaObjectFactory.h"
 
 #include <cmath>
 #include <cstdint>
@@ -9,6 +11,7 @@
 #include "gpg/core/containers/Rect2.h"
 #include "gpg/core/reflection/Reflection.h"
 #include "gpg/core/utils/Global.h"
+#include "legacy/math/X87Math.h"
 #include "moho/entity/EntityDb.h"
 #include "moho/entity/EVisibilityModeTypeInfo.h"
 #include "moho/lua/CScrLuaBinder.h"
@@ -34,7 +37,6 @@ namespace
   constexpr const char* kPropLuaClassName = "Prop";
   constexpr const char* kPropAddBoundedPropName = "AddBoundedProp";
   constexpr const char* kPropAddBoundedPropHelpText = "Prop:AddBoundedProp(priority)";
-  constexpr const char* kLuaExpectedArgsWarning = "%s\n  expected %d args, but got %d";
   constexpr const char* kSplitPropName = "SplitProp";
   constexpr const char* kSplitPropHelpText =
     "SplitProp(original, blueprint_name) -- split a prop into multiple child props, one per bone; "
@@ -60,20 +62,6 @@ namespace
     }
     GPG_ASSERT(cache != nullptr);
     return cache;
-  }
-
-  [[nodiscard]] moho::CScrLuaInitFormSet& SimLuaInitSet()
-  {
-    // Every file that wants this set must resolve the one that already
-    // exists. Declaring a fresh static here creates a second set with the
-    // same name, and SCR_FindLuaInitFormSet returns only the first - so
-    // half the binders never get run.
-    if (moho::CScrLuaInitFormSet* const existing = moho::SCR_FindLuaInitFormSet("Sim"); existing != nullptr) {
-      return *existing;
-    }
-
-    static moho::CScrLuaInitFormSet sSet("Sim");
-    return sSet;
   }
 
 } // namespace
@@ -144,7 +132,7 @@ namespace moho
   CScrLuaInitForm* func_PropAddBoundedProp_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      SimLuaInitSet(),
+      moho::SCR_SimLuaInitSet(),
       kPropAddBoundedPropName,
       &cfunc_PropAddBoundedProp,
       &CScrLuaMetatableFactory<Prop>::Instance(),
@@ -176,10 +164,7 @@ namespace moho
   int cfunc_PropAddBoundedPropL(LuaPlus::LuaState* const state)
   {
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 2) {
-      LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kPropAddBoundedPropHelpText, 2, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 2, kPropAddBoundedPropHelpText);
 
     const LuaPlus::LuaObject propObject(LuaPlus::LuaStackObject(state, 1));
     Prop* const prop = SCR_FromLua_Prop(propObject, state);
@@ -190,7 +175,7 @@ namespace moho
     }
 
     const float priorityValue = static_cast<float>(lua_tonumber(rawState, 2));
-    prop->mPriorityInfo.mPriority = static_cast<std::int32_t>(std::ceil(priorityValue));
+    prop->mPriorityInfo.mPriority = msvc8::CeilToIntX87(priorityValue); // 0x006FD093..0x006FD0A6
 
     Sim* const sim = prop->SimulationRef;
     prop->mPriorityInfo.mBoundedTick = static_cast<std::int32_t>(sim->mCurTick);
@@ -207,7 +192,7 @@ namespace moho
   CScrLuaInitForm* func_SplitProp_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      SimLuaInitSet(),
+      moho::SCR_SimLuaInitSet(),
       kSplitPropName,
       &cfunc_SplitProp,
       nullptr,
@@ -240,10 +225,7 @@ namespace moho
   int cfunc_SplitPropL(LuaPlus::LuaState* const state)
   {
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 2) {
-      LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kSplitPropHelpText, 2, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 2, kSplitPropHelpText);
 
     const LuaPlus::LuaObject propObject(LuaPlus::LuaStackObject(state, 1));
     Prop* const prop = SCR_FromLua_Prop(propObject, state);
@@ -282,7 +264,7 @@ namespace moho
   CScrLuaInitForm* func_CreatePropHPR_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      SimLuaInitSet(),
+      moho::SCR_SimLuaInitSet(),
       kCreatePropHPRName,
       &cfunc_CreatePropHPR,
       nullptr,
@@ -317,10 +299,7 @@ namespace moho
   int cfunc_CreatePropHPRL(LuaPlus::LuaState* const state)
   {
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 7) {
-      LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kCreatePropHPRHelpText, 7, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 7, kCreatePropHPRHelpText);
 
     Sim* const sim = lua_getglobaluserdata(rawState);
 

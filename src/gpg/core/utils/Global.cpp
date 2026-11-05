@@ -1,5 +1,6 @@
 #include "Global.h"
 #include "gpg/core/profiling/Profiler.h"
+#include "lua/LuaArena.h"
 
 #include <Windows.h>
 
@@ -28,10 +29,18 @@ namespace
 {
     constexpr std::uint32_t kPageShift = 12u;
     constexpr std::uint32_t kPageSizeBytes = (1u << kPageShift);
+#if defined(_M_X64) || defined(__x86_64__)
     constexpr std::uint32_t kMaxPageIndex = 0xC0000u;
+    constexpr std::uint32_t kPageOwnerMapBytes = 0x3FF000u;
+#else
+    // One owner per 4 KiB page in the x86 address space, including LAA addresses.
+    // The coalescing limit is exclusive: page 0x100000 is beyond 4 GiB.
+    constexpr std::uint32_t kMaxPageIndex = 0x100000u;
+    constexpr std::uint32_t kPageOwnerMapBytes = 0x400000u;
+    static_assert(kPageOwnerMapBytes / 4u == kMaxPageIndex);
+#endif
     constexpr std::uint32_t kSmallBlockClassCount = 44u;
     constexpr std::uint32_t kFreeRegionBucketCount = 256u;
-    constexpr std::uint32_t kPageOwnerMapBytes = 0x3FF000u;
     constexpr std::uint32_t kPrimaryHeapReserveBytes = 0x20000000u;
     constexpr std::uint32_t kThreadCacheSizeBytes = 0x214u;
     constexpr std::uint32_t kHeapRecordSizeBytes = 0x28u;
@@ -361,6 +370,10 @@ namespace
 
     void ReserveAddressSpaceBelow4Gb() noexcept
     {
+#if INTPTR_MAX != INT32_MAX
+        // Lua's objects live below 4 GB on purpose, so their range goes first.
+        lua::ArenaReserve();
+#endif
         constexpr std::uintptr_t kLowAddressLimit = 0x100000000ull;
         constexpr std::uintptr_t kAllocationGranularity = 0x10000u;
 
@@ -1154,7 +1167,7 @@ namespace
         tailRecord->kind = 0;
 
         SetPageOwnerRange(tailAddress, tailPages, tailRecord);
-        InsertRecordIntoFreeBucket(tailRecord);
+        (void)InsertRecordIntoFreeBucket(tailRecord);
 
         record->sizePages = requestedPages;
         if (gNextAvailableHeapRecord == nullptr) {
@@ -1183,7 +1196,7 @@ namespace
         if (pageEnd < kMaxPageIndex) {
             HeapRecord* const right = gPageOwnerByPage[pageEnd];
             if (right != nullptr && right->recordTag == kRecordTagFree && right->reservedBase == record->reservedBase) {
-                PopHeapRecord(right);
+                (void)PopHeapRecord(right);
                 record->sizePages += right->sizePages;
                 SetPageOwnerRange(right->allocation, right->sizePages, record);
                 mergedRight = right;
@@ -1193,7 +1206,7 @@ namespace
         if (pageBegin > 0u) {
             HeapRecord* const left = gPageOwnerByPage[pageBegin - 1u];
             if (left != nullptr && left->recordTag == kRecordTagFree && left->reservedBase == record->reservedBase) {
-                PopHeapRecord(left);
+                (void)PopHeapRecord(left);
                 record->sizePages += left->sizePages;
                 record->allocation = left->allocation;
                 SetPageOwnerRange(left->allocation, left->sizePages, record);
@@ -1243,7 +1256,7 @@ namespace
 
         if (static_cast<std::uint32_t>(owner->blocks) == fullBlockCount) {
             UnlinkRecord(owner);
-            ReleaseHeapRecord(owner);
+            (void)ReleaseHeapRecord(owner);
             gHeapCommitted -= regionBytes;
             gHeapInSmallBlocks -= regionBytes;
         }
@@ -1267,7 +1280,7 @@ namespace
             std::int32_t remainingFlush = initialFlushCount;
             while (remainingFlush > 0) {
                 SmallBlockNode* const node = PopLaneNode(lane);
-                PushHeapBlock(node, static_cast<std::int32_t>(kind));
+                (void)PushHeapBlock(node, static_cast<std::int32_t>(kind));
                 --remainingFlush;
             }
 
@@ -1293,7 +1306,7 @@ namespace
         TrimThreadCache(cache, true);
 
         const std::uint32_t recordKind = GetSmallBlockIndex(kThreadCacheSizeBytes);
-        PushHeapBlock(reinterpret_cast<SmallBlockNode*>(cache), static_cast<std::int32_t>(recordKind));
+        (void)PushHeapBlock(reinterpret_cast<SmallBlockNode*>(cache), static_cast<std::int32_t>(recordKind));
 
         gThreadHeapCache = kThreadCacheDisabled;
         ::LeaveCriticalSection(&gAllocatorSentinel);
@@ -1390,7 +1403,7 @@ namespace
             if (totalPages <= requiredPages) {
                 if (metadataRecord != nullptr) {
                     const std::uint32_t recordKind = GetSmallBlockIndex(kHeapRecordSizeBytes);
-                    PushHeapBlock(reinterpret_cast<SmallBlockNode*>(metadataRecord), static_cast<std::int32_t>(recordKind));
+                    (void)PushHeapBlock(reinterpret_cast<SmallBlockNode*>(metadataRecord), static_cast<std::int32_t>(recordKind));
                 }
                 return false;
             }
@@ -1416,7 +1429,7 @@ namespace
             metadataRecord->lowWatermark = 0;
 
             SetPageOwnerRange(commitAddress, totalPages, metadataRecord);
-            ReleaseHeapRecord(metadataRecord);
+            (void)ReleaseHeapRecord(metadataRecord);
             return true;
         }
 
@@ -1693,7 +1706,7 @@ namespace
             ::EnterCriticalSection(&gAllocatorSentinel);
             hasLock = 1;
         } else {
-            InitAllocatorSentinel(&hasLock);
+            (void)InitAllocatorSentinel(&hasLock);
         }
 
         SmallBlockRequestLane request{};
@@ -2406,3 +2419,7 @@ void gpg::SetThreadName([[maybe_unused]] const unsigned int id, [[maybe_unused]]
 {
   FAF_PROFILE_SET_THREAD_NAME(name);
 }
+
+#if defined(_WIN32) && !defined(_M_X64) && !defined(__x86_64__)
+#include "../../../../tests/memory/AllocatorBoundsNative.inl"
+#endif

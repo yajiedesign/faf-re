@@ -14,6 +14,7 @@
 #include "moho/render/camera/GeomCamera3.h"
 #include "moho/render/ID3DIndexSheet.h"
 #include "moho/render/ID3DTextureSheet.h"
+#include "gpg/gal/Device.hpp"
 #include "moho/render/ID3DVertexStream.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DIndexSheet.h"
@@ -1090,6 +1091,18 @@ namespace moho
 
     ID3DVertexStream* const vertexStream = runtime->mVertexSheets[runtime->mCurVertexSheet]->GetVertStream(0);
     const std::uint32_t vertexCount = static_cast<std::uint32_t>(runtime->mVertices.size());
+    // Engine addition: the draw below reads only these vertices and indices.
+    {
+      ID3DVertexStream::BufferHandle vertexBuffer;
+      gpg::gal::Device* const galDevice = gpg::gal::Device::GetInstance();
+      if (vertexStream->GetBuffer(vertexBuffer)) {
+        galDevice->CopyLockedRangeOnly(*vertexBuffer);
+      }
+      CD3DIndexSheet::BufferHandle indexBuffer;
+      if (runtime->mIndexSheet->GetBuffer(indexBuffer)) {
+        galDevice->CopyLockedRangeOnly(*indexBuffer);
+      }
+    }
     void* const lockedVertices = vertexStream->Lock(0, static_cast<int>(vertexCount), false, true);
     // Raw GPU upload: vertex blob into the locked D3D stream.
     std::copy_n(runtime->mVertices.data(), vertexCount, static_cast<Vertex*>(lockedVertices));
@@ -1611,6 +1624,9 @@ namespace moho
    *
    * What it does:
    * Clips one quad against `clipRect` and remaps UVs to the clipped position.
+   * A quad whose edges all lie inside `clipRect` is drawn as it is, with no
+   * emptiness test (0x00454E2D..0x00454F3B): CMauiBitmap::Draw passes the same
+   * rect twice, so an inverted control rect draws the texture flipped.
    */
   void DRAW_ClippedQuad(
     CD3DPrimBatcher* const primBatcher,
@@ -1621,6 +1637,16 @@ namespace moho
   )
   {
     if (primBatcher == nullptr) {
+      return;
+    }
+
+    if (quadRect.x0 >= clipRect.x0 && quadRect.x1 <= clipRect.x1 && quadRect.z0 >= clipRect.z0 &&
+        quadRect.z1 <= clipRect.z1) {
+      const CD3DPrimBatcher::Vertex topLeft = MakeVertex({quadRect.x0, quadRect.z0, 0.0f}, color, uvRect.x0, uvRect.z0);
+      const CD3DPrimBatcher::Vertex topRight = MakeVertex({quadRect.x1, quadRect.z0, 0.0f}, color, uvRect.x1, uvRect.z0);
+      const CD3DPrimBatcher::Vertex bottomRight = MakeVertex({quadRect.x1, quadRect.z1, 0.0f}, color, uvRect.x1, uvRect.z1);
+      const CD3DPrimBatcher::Vertex bottomLeft = MakeVertex({quadRect.x0, quadRect.z1, 0.0f}, color, uvRect.x0, uvRect.z1);
+      primBatcher->DrawQuad(topLeft, topRight, bottomRight, bottomLeft);
       return;
     }
 

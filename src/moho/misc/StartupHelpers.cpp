@@ -1,4 +1,5 @@
 #include "moho/misc/StartupHelpers.h"
+#include "moho/lua/CScrLuaInitForm.h"
 
 #include "legacy/containers/AutoPtr.h"
 #include "legacy/containers/Set.h"
@@ -47,6 +48,7 @@
 #include "moho/sim/Sim.h"
 #include "moho/sim/STIMap.h"
 #include "moho/sim/SpecialFileType.h"
+#include "moho/core/ThreadPlacement.h"
 #include "moho/task/CTaskThread.h"
 #include "lua/LuaCrashDump.h"
 
@@ -302,34 +304,6 @@ namespace
     return luaContext ? luaContext->stateUserData : nullptr;
   }
 
-  [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
-  {
-    // Every file that wants this set must resolve the one that already
-    // exists. Declaring a fresh static here creates a second set with the
-    // same name, and SCR_FindLuaInitFormSet returns only the first - so
-    // half the binders never get run.
-    if (moho::CScrLuaInitFormSet* const existing = moho::SCR_FindLuaInitFormSet("User"); existing != nullptr) {
-      return *existing;
-    }
-
-    static moho::CScrLuaInitFormSet sSet("User");
-    return sSet;
-  }
-
-  [[nodiscard]] moho::CScrLuaInitFormSet& CoreLuaInitSet()
-  {
-    // Every file that wants this set must resolve the one that already
-    // exists. Declaring a fresh static here creates a second set with the
-    // same name, and SCR_FindLuaInitFormSet returns only the first - so
-    // half the binders never get run.
-    if (moho::CScrLuaInitFormSet* const existing = moho::SCR_FindLuaInitFormSet("Core"); existing != nullptr) {
-      return *existing;
-    }
-
-    static moho::CScrLuaInitFormSet sSet("Core");
-    return sSet;
-  }
-
   [[nodiscard]] moho::CScrLuaInitFormSet& UnsafeLuaInitSet()
   {
     // Every file that wants this set must resolve the one that already
@@ -420,7 +394,8 @@ namespace
     }
 
     const DWORD_PTR affinityMask = static_cast<DWORD_PTR>(static_cast<std::uint32_t>(luaL_checknumber(state, 1)));
-    const BOOL result = ::SetProcessAffinityMask(::GetCurrentProcess(), affinityMask);
+    // Engine change: a server given its CPUs keeps them (ThreadPlacement.h).
+    const BOOL result = moho::ProcessCpusAreLocked() ? TRUE : ::SetProcessAffinityMask(::GetCurrentProcess(), affinityMask);
     lua_pushboolean(state, result != FALSE ? 1 : 0);
     return 1;
   }
@@ -1118,6 +1093,23 @@ namespace
 
 namespace moho
 {
+  /// See the declaration (#247): one lock for every thread that touches the preferences state.
+  /// FAF_PREFS_NOLOCK=1 (test only, tests/prefs) gives each thread a lock of its own, so the
+  /// threads no longer exclude each other and the race the lock prevents comes back.
+  std::recursive_mutex& USER_PreferencesLock()
+  {
+    static const bool sPerThread = [] {
+      char value[4] = {};
+      return ::GetEnvironmentVariableA("FAF_PREFS_NOLOCK", value, sizeof(value)) == 1u && value[0] == '1';
+    }();
+    if (sPerThread) {
+      thread_local std::recursive_mutex tLock;
+      return tLock;
+    }
+    static std::recursive_mutex sLock;
+    return sLock;
+  }
+
   /**
    * RTTI `.?AVCUserPrefs@Moho@@`, vftable 0x00E4E344 (20 slots), 0x84 bytes:
    * `USER_GetPreferences` allocates it with `operator new(0x84)` (0x008C913A).
@@ -1178,6 +1170,7 @@ namespace moho
      */
     bool GetBoolean(const msvc8::string& key, const bool fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const LuaPlus::LuaObject value = LookupKey(key);
       if (value.IsNil()) {
         return fallback;
@@ -1195,6 +1188,7 @@ namespace moho
      */
     std::int32_t GetInteger(const msvc8::string& key, const std::int32_t fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const LuaPlus::LuaObject value = LookupKey(key);
       if (value.IsNil()) {
         return fallback;
@@ -1212,6 +1206,7 @@ namespace moho
      */
     float GetNumber(const msvc8::string& key, const float fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const LuaPlus::LuaObject value = LookupKey(key);
       if (value.IsNil()) {
         return fallback;
@@ -1229,6 +1224,7 @@ namespace moho
      */
     std::uint32_t GetHex(const msvc8::string& key, const std::uint32_t fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const LuaPlus::LuaObject value = LookupKey(key);
       if (!value.IsConvertibleToString()) {
         return fallback;
@@ -1255,6 +1251,7 @@ namespace moho
      */
     msvc8::string GetString(const msvc8::string& key, const msvc8::string& fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const LuaPlus::LuaObject value = LookupKey(key);
       if (value.IsNil()) {
         return fallback;
@@ -1275,6 +1272,7 @@ namespace moho
     msvc8::list<msvc8::string>
     GetStringArr(const msvc8::string& key, const msvc8::list<msvc8::string>& fallback) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       msvc8::list<msvc8::string> outValues = fallback;
 
       const LuaPlus::LuaObject value = LookupKey(key);
@@ -1302,6 +1300,7 @@ namespace moho
      */
     void SetBoolean(const msvc8::string& key, const bool value) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceBooleanRecursive(&mState, &mRoot, key, value);
     }
 
@@ -1315,6 +1314,7 @@ namespace moho
      */
     void SetInteger(const msvc8::string& key, const std::int32_t value) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceIntegerRecursive(&mState, &mRoot, key, value);
     }
 
@@ -1328,6 +1328,7 @@ namespace moho
      */
     void SetNumber(const msvc8::string& key, const float value) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceNumberRecursive(&mState, &mRoot, key, value);
     }
 
@@ -1340,6 +1341,7 @@ namespace moho
      */
     void SetHex(const msvc8::string& key, const std::uint32_t value) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       const msvc8::string valueText = gpg::STR_Printf("0x%08x", static_cast<unsigned int>(value));
       SetPreferenceStringRecursive(&mState, &mRoot, key, valueText);
     }
@@ -1354,6 +1356,7 @@ namespace moho
      */
     void SetString(const msvc8::string& key, const msvc8::string& value) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceStringRecursive(&mState, &mRoot, key, value);
     }
 
@@ -1367,6 +1370,7 @@ namespace moho
      */
     void SetStringArr(const msvc8::string& key, const msvc8::list<msvc8::string>& values) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceStringArrayRecursive(&mState, &mRoot, key, values);
     }
 
@@ -1383,6 +1387,7 @@ namespace moho
      */
     LuaPlus::LuaObject LookupCurrentOption(const msvc8::string& key) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       LuaPlus::LuaObject currentProfile = mRoot.Lookup("profile.current");
       if (currentProfile.IsNil()) {
         return currentProfile;
@@ -1413,6 +1418,7 @@ namespace moho
      */
     LuaPlus::LuaObject LookupKey(const msvc8::string& key) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       if (mRoot.IsNil()) {
         return LuaPlus::LuaObject(mRoot);
       }
@@ -1431,6 +1437,7 @@ namespace moho
      */
     LuaPlus::LuaObject GetPreferenceTable() override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       return mRoot;
     }
 
@@ -1444,6 +1451,7 @@ namespace moho
      */
     void SetObject(const msvc8::string& key, void* const valueObject) override
     {
+      const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
       SetPreferenceObjectRecursive(&mState, &mRoot, key, *static_cast<LuaPlus::LuaObject*>(valueObject));
     }
 
@@ -2065,10 +2073,7 @@ int moho::cfunc_SHGetFolderPathL(LuaPlus::LuaState* const state)
   }
 
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 1) {
-    LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kSHGetFolderPathHelpText, 1, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 1, kSHGetFolderPathHelpText);
 
   LuaPlus::LuaStackObject idArg(state, 1);
   const char* keyText = lua_tostring(rawState, 1);
@@ -2141,7 +2146,7 @@ moho::CScrLuaInitForm* moho::func_SHGetFolderPath_LuaFuncDef()
 moho::CScrLuaInitFormSet* moho::register_coreInitFormSet()
 {
   CScrLuaInitFormSet* const previousHead = CScrLuaInitFormSet::sSets;
-  CScrLuaInitFormSet& coreSet = CoreLuaInitSet();
+  CScrLuaInitFormSet& coreSet = moho::SCR_CoreLuaInitSet();
   coreSet.mNextSet = previousHead;
   CScrLuaInitFormSet::sSets = &coreSet;
   return previousHead;
@@ -2157,7 +2162,7 @@ moho::CScrLuaInitFormSet* moho::register_coreInitFormSet()
 moho::CScrLuaInitFormSet* moho::register_userInitFormSet()
 {
   CScrLuaInitFormSet* const previousHead = CScrLuaInitFormSet::sSets;
-  CScrLuaInitFormSet& userSet = UserLuaInitSet();
+  CScrLuaInitFormSet& userSet = moho::SCR_UserLuaInitSet();
   userSet.mNextSet = previousHead;
   CScrLuaInitFormSet::sSets = &userSet;
   return previousHead;
@@ -2248,7 +2253,7 @@ int moho::cfunc_GetMovieDuration(lua_State* const luaContext)
 moho::CScrLuaInitForm* moho::func_GetMovieDuration_LuaFuncDef()
 {
   static CScrLuaBinder binder(
-    CoreLuaInitSet(),
+    moho::SCR_CoreLuaInitSet(),
     "GetMovieDuration",
     &moho::cfunc_GetMovieDuration,
     nullptr,
@@ -2268,12 +2273,7 @@ moho::CScrLuaInitForm* moho::func_GetMovieDuration_LuaFuncDef()
 int moho::cfunc_GetMovieDurationL(LuaPlus::LuaState* const state)
 {
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 1) {
-    LuaPlus::LuaState::Error(
-      state, "%s\n  expected %d args, but got %d", kGetMovieDurationHelpText, 1, argumentCount
-    );
-  }
+  moho::SCR_ExpectExactArgs(state, 1, kGetMovieDurationHelpText);
 
   LuaPlus::LuaStackObject moviePathArg(state, 1);
   const char* moviePath = lua_tostring(rawState, 1);
@@ -2609,7 +2609,6 @@ namespace
    * What it does:
    * Parses one leading root token span and reports token start/length.
    */
-  [[nodiscard]]
   void ParsePathRootTokenSpan(const msvc8::string& path, std::uint32_t* const outStart, std::uint32_t* const outLength)
   {
     if (outStart != nullptr) {
@@ -4464,7 +4463,10 @@ void moho::USER_SavePreferences()
     return;
   }
 
-  SerializePreferenceRootTable(outputStream, preferences->GetPreferenceTable());
+  {
+    const std::lock_guard<std::recursive_mutex> lock(USER_PreferencesLock());
+    SerializePreferenceRootTable(outputStream, preferences->GetPreferenceTable());
+  }
 
   if (std::filebuf* const fileBuffer = outputStream.rdbuf(); fileBuffer != nullptr) {
     if (fileBuffer->close() == nullptr) {

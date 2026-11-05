@@ -140,13 +140,13 @@ char* gpg::STR_EncodeUtf8Char(
     if (chr >= 0x800) {
       if (!limit || dest + 3 <= limit) {
         dest[0] = (chr >> 12) | 0xE0;
-        dest[1] = (chr >> 6) & 0x3F | 0x80;
-        dest[2] = chr & 0x3F | 0x80;
+        dest[1] = ((chr >> 6) & 0x3F) | 0x80;
+        dest[2] = (chr & 0x3F) | 0x80;
         return dest + 3;
       }
     } else if (!limit || dest + 2 <= limit) {
       dest[0] = (chr >> 6) | 0xC0;
-      dest[1] = chr & 0x3F | 0x80;
+      dest[1] = (chr & 0x3F) | 0x80;
       return dest + 2;
     }
   } else if (!limit || dest + 1 <= limit) {
@@ -576,7 +576,7 @@ bool gpg::STR_IsIdent(
 )
 {
   char c = *str++;
-  if (c == '\0' || (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && c != '_') {
+  if (c == '\0' || ((c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && c != '_')) {
     return false;
   }
   c = *str++;
@@ -1177,10 +1177,7 @@ msvc8::string gpg::STR_Va(
   // string silently produced an empty result - every Logf/Die/exception
   // message the engine formatted came out blank.
   //
-  // Concatenation is the wrapper's supported route for longer strings: it
-  // stages them in the thread-local arena behind get_concat_buffer and adopts
-  // that storage, which is the same lifetime contract every operator+ already
-  // relies on.
+  // Concatenation is the wrapper's supported route for longer strings.
   // 0x00938E1F / 0x00938E6B call MSVC8's `_vsnprintf`, whose truncation signal
   // is a -1 return; the binary's `while (n == -1)` loop is built on that.
   // `std::vsnprintf` here is the C99/UCRT function, which instead returns the

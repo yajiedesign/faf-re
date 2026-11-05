@@ -106,12 +106,14 @@ namespace gpg::gal
 
     constexpr char kBlitSource[] = R"hlsl(
 struct BlitVertex { float4 position : SV_Position; float2 uv : TEXCOORD0; };
+// The source rect in texture coordinates: xy its top-left corner, zw its size.
+cbuffer BlitSource : register(b0) { float4 faf_sourceRect; };
 BlitVertex BlitVS(uint id : SV_VertexID)
 {
     BlitVertex o;
     float2 p = float2((id << 1) & 2, id & 2);
     o.position = float4(p * float2(2, -2) + float2(-1, 1), 0, 1);
-    o.uv = p;
+    o.uv = faf_sourceRect.xy + p * faf_sourceRect.zw;
     return o;
 }
 Texture2D faf_source : register(t0);
@@ -342,8 +344,25 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     std::uint64_t textureVersion = 0;
     const RenderTarget* tableSurface = nullptr; // the colour target bound when the table was built
     D3D12_GPU_DESCRIPTOR_HANDLE table{};
-    std::shared_ptr<const std::vector<effects::TextureBinding>> tableBindings;
+    std::vector<effects::TextureBinding> tableBindings;
   };
+
+  namespace
+  {
+    const effects::TextureBinding kNoTextureBinding{};
+
+    // A slot's handles are copied only when they changed: each copy is an atomic increment, and a
+    // decal draw keeps all but a few of its effect's textures.
+    void KeepBinding(effects::TextureBinding& slot, const effects::TextureBinding& binding)
+    {
+      if (slot.texture.get() != binding.texture.get()) {
+        slot.texture = binding.texture;
+      }
+      if (slot.renderTarget.get() != binding.renderTarget.get()) {
+        slot.renderTarget = binding.renderTarget;
+      }
+    }
+  } // namespace
 
   // ---------------------------------------------------------------------------
   // Construction and setup
@@ -385,6 +404,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mCursor.Destroy();
     mUpload.Release();
     mPlacedTextures.Release();
+    mSharedBuffers.Release();
     mPlacedBuffers.Release();
     mRtvPool.Release();
     mDsvPool.Release();
@@ -500,6 +520,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     mUpload.Initialize(mDevice.Get());
     mPlacedTextures.Initialize(mDevice.Get(), D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES, L"placed textures");
     mPlacedBuffers.Initialize(mDevice.Get(), D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS, L"placed buffers");
+    mSharedBuffers.Initialize(&mPlacedBuffers);
     mRtvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 256U);
     mDsvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256U);
     mSrvPool.Initialize(mDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4096U);
@@ -1280,6 +1301,26 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     FinishDraw();
   }
 
+  void DeviceD3D12::ReleaseBufferCopy(VertexBuffer& buffer)
+  {
+    static_cast<VertexBufferD3D12&>(buffer).Storage().ReleaseCopy();
+  }
+
+  void DeviceD3D12::ReleaseBufferCopy(IndexBuffer& buffer)
+  {
+    static_cast<IndexBufferD3D12&>(buffer).Storage().ReleaseCopy();
+  }
+
+  void DeviceD3D12::CopyLockedRangeOnly(VertexBuffer& buffer)
+  {
+    static_cast<VertexBufferD3D12&>(buffer).Storage().CopyLockedRangeOnly();
+  }
+
+  void DeviceD3D12::CopyLockedRangeOnly(IndexBuffer& buffer)
+  {
+    static_cast<IndexBufferD3D12&>(buffer).Storage().CopyLockedRangeOnly();
+  }
+
   bool DeviceD3D12::CopyVertexBufferRegion(
     VertexBuffer& destination, const std::uint32_t destinationOffset, VertexBuffer& source, const std::uint32_t sourceOffset,
     const std::uint32_t byteCount
@@ -1303,12 +1344,18 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     if (sourceResource == nullptr) {
       return false;
     }
+    // Two buffers sharing one large buffer: it cannot be source and destination at once.
+    if (target->resource.Get() == sourceResource) {
+      return false;
+    }
     // In command order: earlier draws reading the destination are recorded
     // before this barrier, and later draws move it back to VERTEX_AND_CONSTANT
     // in PrepareForDraw.
     Transition(*target, D3D12_RESOURCE_STATE_COPY_DEST);
     FlushBarriers();
-    mList->CopyBufferRegion(target->resource.Get(), destinationOffset, sourceResource, sourceBase + sourceOffset, byteCount);
+    mList->CopyBufferRegion(
+      target->resource.Get(), to.ResourceOffset() + destinationOffset, sourceResource, sourceBase + sourceOffset, byteCount
+    );
     return true;
   }
 
@@ -1476,6 +1523,15 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     Garbage garbage;
     garbage.serial = RecordingSerial();
     garbage.resource = std::move(resource);
+    mGarbage.push_back(std::move(garbage));
+  }
+
+  void DeviceD3D12::RetireSharedRange(ComPtr<IUnknown> range)
+  {
+    const std::lock_guard<std::recursive_mutex> lock(mMutex);
+    Garbage garbage;
+    garbage.serial = RecordingSerial();
+    garbage.sharedRange = std::move(range);
     mGarbage.push_back(std::move(garbage));
   }
 
@@ -1989,9 +2045,22 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     RenderTargetD3D12::Buffer& from = sourceTarget->Current();
     RenderTargetD3D12::Buffer& to = destinationTarget->Current();
 
-    if (sourceContext->width_ == destinationContext->width_ && sourceContext->height_ == destinationContext->height_ &&
-        sourceTarget->Format() == destinationTarget->Format()) {
-      // As D3D10: a direct copy; only the destination rect's corner is used.
+    // As D3D9 StretchRect: a null rect is the whole surface, and the source
+    // rect is stretched over the destination rect. The refraction copy of a
+    // split-screen view relies on this: it passes the view's rect and no
+    // destination rect, and the particle shaders sample the copy with
+    // view-relative coordinates.
+    const RECT fromRect =
+      (sourceRect != nullptr) ? *sourceRect
+                              : RECT{0, 0, static_cast<LONG>(sourceContext->width_), static_cast<LONG>(sourceContext->height_)};
+    const RECT toRect =
+      (destinationRect != nullptr)
+        ? *destinationRect
+        : RECT{0, 0, static_cast<LONG>(destinationContext->width_), static_cast<LONG>(destinationContext->height_)};
+
+    if (fromRect.right - fromRect.left == toRect.right - toRect.left &&
+        fromRect.bottom - fromRect.top == toRect.bottom - toRect.top && sourceTarget->Format() == destinationTarget->Format()) {
+      // Same size: a direct copy.
       Transition(from.resource, D3D12_RESOURCE_STATE_COPY_SOURCE);
       Transition(to.resource, D3D12_RESOURCE_STATE_COPY_DEST);
       FlushBarriers();
@@ -2002,33 +2071,38 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       origin.pResource = from.resource.resource.Get();
       origin.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
       D3D12_BOX box{};
-      const D3D12_BOX* boxPointer = nullptr;
-      if (sourceRect != nullptr) {
-        box.left = static_cast<UINT>(sourceRect->left);
-        box.top = static_cast<UINT>(sourceRect->top);
-        box.right = static_cast<UINT>(sourceRect->right);
-        box.bottom = static_cast<UINT>(sourceRect->bottom);
-        box.front = 0U;
-        box.back = 1U;
-        boxPointer = &box;
-      }
-      const UINT x = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->left) : 0U;
-      const UINT y = (destinationRect != nullptr) ? static_cast<UINT>(destinationRect->top) : 0U;
+      box.left = static_cast<UINT>(fromRect.left);
+      box.top = static_cast<UINT>(fromRect.top);
+      box.right = static_cast<UINT>(fromRect.right);
+      box.bottom = static_cast<UINT>(fromRect.bottom);
+      box.front = 0U;
+      box.back = 1U;
       MarkDraw("StretchRect copy");
-      mList->CopyTextureRegion(&target, x, y, 0U, &origin, boxPointer);
+      mList->CopyTextureRegion(&target, static_cast<UINT>(toRect.left), static_cast<UINT>(toRect.top), 0U, &origin, &box);
       FinishDraw();
       return;
     }
-    BlitTexture(from.shaderResourceView, from.resource, to, destinationTarget->Format(), destinationContext->width_, destinationContext->height_);
+    BlitTexture(
+      from.shaderResourceView,
+      from.resource,
+      sourceContext->width_,
+      sourceContext->height_,
+      fromRect,
+      to,
+      destinationTarget->Format(),
+      toRect
+    );
   }
 
   void DeviceD3D12::BlitTexture(
     const D3D12_CPU_DESCRIPTOR_HANDLE source,
     d3d12::TrackedResource& sourceResource,
+    const std::uint32_t sourceWidth,
+    const std::uint32_t sourceHeight,
+    const RECT& sourceRect,
     RenderTargetD3D12::Buffer& destination,
     const DXGI_FORMAT destinationFormat,
-    const std::uint32_t width,
-    const std::uint32_t height
+    const RECT& destinationRect
   )
   {
     ComPtr<ID3D12PipelineState>& pipeline = mBlitPipelines[destinationFormat];
@@ -2056,6 +2130,20 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       CheckHresult("DeviceD3D12.cpp", __LINE__, mDevice->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline)));
     }
 
+    // The draw covers the viewport, which is the destination rect, and its
+    // texture coordinates cover the source rect. Scaling the viewport instead
+    // would leave the viewport bounds (-32768..32767) for small rects.
+    // Allocated first: an upload can hand the recorded commands to the GPU.
+    const float sourceUv[4] = {
+      static_cast<float>(sourceRect.left) / static_cast<float>(sourceWidth),
+      static_cast<float>(sourceRect.top) / static_cast<float>(sourceHeight),
+      static_cast<float>(sourceRect.right - sourceRect.left) / static_cast<float>(sourceWidth),
+      static_cast<float>(sourceRect.bottom - sourceRect.top) / static_cast<float>(sourceHeight),
+    };
+    const d3d12::UploadAllocation constants =
+      AllocateUpload(D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT);
+    std::memcpy(constants.cpu, sourceUv, sizeof(sourceUv));
+
     D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
     const D3D12_GPU_DESCRIPTOR_HANDLE table = AllocateTable(effects::kMaxTextureSlots, cpu);
     mDevice->CopyDescriptorsSimple(1U, cpu, source, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -2067,12 +2155,19 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     Transition(destination.resource, D3D12_RESOURCE_STATE_RENDER_TARGET);
     FlushBarriers();
     mList->OMSetRenderTargets(1U, &destination.renderTargetView, FALSE, nullptr);
-    const D3D12_VIEWPORT viewport{0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height), 0.0f, 1.0f};
-    const D3D12_RECT scissor{0, 0, static_cast<LONG>(width), static_cast<LONG>(height)};
+    const D3D12_VIEWPORT viewport{
+      static_cast<float>(destinationRect.left),
+      static_cast<float>(destinationRect.top),
+      static_cast<float>(destinationRect.right - destinationRect.left),
+      static_cast<float>(destinationRect.bottom - destinationRect.top),
+      0.0f,
+      1.0f
+    };
+    const D3D12_RECT scissor{destinationRect.left, destinationRect.top, destinationRect.right, destinationRect.bottom};
     mList->RSSetViewports(1U, &viewport);
     mList->RSSetScissorRects(1U, &scissor);
     mList->SetPipelineState(pipeline.Get());
-    mList->SetGraphicsRootConstantBufferView(0U, 0U);
+    mList->SetGraphicsRootConstantBufferView(0U, constants.gpu);
     mList->SetGraphicsRootDescriptorTable(1U, table);
     mList->SetGraphicsRootDescriptorTable(2U, mBlitSamplers);
     mList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -2772,8 +2867,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         state.tableSurface != outputContext_.surface.get()) {
       const auto& slots = program.Modern().textures;
       const auto& slotParameters = program.TextureSlotParameters();
-      auto bindings = std::make_shared<std::vector<effects::TextureBinding>>();
-      bindings->reserve(slots.size());
+      std::vector<effects::TextureBinding>& bindings = state.tableBindings;
+      bindings.resize(std::min<std::size_t>(slots.size(), effects::kMaxTextureSlots));
       D3D12_CPU_DESCRIPTOR_HANDLE cpu{};
       const D3D12_GPU_DESCRIPTOR_HANDLE table = AllocateTable(effects::kMaxTextureSlots, cpu);
       const UINT increment = mFrames[mFrameIndex].views.Increment();
@@ -2781,8 +2876,8 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
       for (std::size_t index = 0U; index < slots.size() && index < effects::kMaxTextureSlots; ++index) {
         const effects::TextureSlot& slot = slots[index];
         const std::int32_t parameter = slotParameters[index];
-        const effects::TextureBinding binding =
-          (parameter >= 0) ? parameters.Binding(static_cast<std::uint32_t>(parameter)) : effects::TextureBinding{};
+        const effects::TextureBinding& binding =
+          (parameter >= 0) ? parameters.Binding(static_cast<std::uint32_t>(parameter)) : kNoTextureBinding;
         D3D12_CPU_DESCRIPTOR_HANDLE view = mNullViews[static_cast<int>(slot.dimension)];
         if (binding.texture != nullptr) {
           auto* const texture = static_cast<TextureD3D12*>(binding.texture.get());
@@ -2801,7 +2896,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
             if (logged.size() < 32U && logged.insert(techniqueName).second) {
               gpg::Logf("D3D12: %s samples its own colour target; bound as a null view", techniqueName.c_str());
             }
-            bindings->push_back(effects::TextureBinding{});
+            KeepBinding(bindings[index], kNoTextureBinding);
             written = static_cast<std::uint32_t>(index + 1U);
             D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
             destination.ptr += static_cast<SIZE_T>(index) * increment;
@@ -2813,7 +2908,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         D3D12_CPU_DESCRIPTOR_HANDLE destination = cpu;
         destination.ptr += static_cast<SIZE_T>(index) * increment;
         mDevice->CopyDescriptorsSimple(1U, destination, view, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        bindings->push_back(binding);
+        KeepBinding(bindings[index], binding);
         written = static_cast<std::uint32_t>(index + 1U);
       }
       if (written < effects::kMaxTextureSlots) {
@@ -2822,7 +2917,6 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
         mDevice->CopyDescriptorsSimple(effects::kMaxTextureSlots - written, rest, mNullViewRun, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
       }
       state.table = table;
-      state.tableBindings = std::move(bindings);
       state.tableFrame = mFrameCount;
       state.tableEpoch = mArenaEpoch;
       state.textureVersion = parameters.TextureVersion();
@@ -2831,7 +2925,7 @@ float4 SolidPS(float4 position : SV_Position) : SV_Target0 { return float4(1, 0,
     bound.textures = state.table;
     bound.tableFrame = state.tableFrame;
     bound.tableEpoch = state.tableEpoch;
-    bound.sampled = state.tableBindings;
+    bound.sampled = &state.tableBindings;
     bound.samplers = state.samplers;
     bound.techniqueIndex = technique;
     bound.passIndex = pass;

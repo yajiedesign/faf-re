@@ -1,3 +1,4 @@
+#include "moho/lua/CScrLuaInitForm.h"
 #include "moho/misc/SessionStartup.h"
 
 #include <Windows.h>
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
@@ -31,6 +33,8 @@
 #include "moho/misc/LaunchInfoBase.h"
 #include "moho/misc/StartupHelpers.h"
 #include "moho/misc/StringUtils.h"
+#include "moho/net/CRejoinFeed.h"
+#include "moho/net/NetConVars.h"
 #include "moho/sim/CWldSessionLoaderImpl.h"
 #include "moho/net/CClientManagerImpl.h"
 #include "moho/net/Common.h"
@@ -103,11 +107,7 @@ namespace
            header.mGameIdPart4 == moho::APP_GetGameIdPart(3);
   }
 
-  enum class EGpgNetOpenMode : int
-  {
-    Read = 1,
-    Write = 2,
-  };
+  using moho::EGpgNetOpenMode;
 
   constexpr std::uint8_t kInvalidSourceIndex = 255u;
   constexpr const char* kSessionSendChatMessageHelpText = "SessionSendChatMessage([client-or-clients,] message)";
@@ -136,22 +136,6 @@ namespace
     return luaContext ? luaContext->stateUserData : nullptr;
   }
 
-  [[nodiscard]] moho::CScrLuaInitFormSet& UserLuaInitSet()
-  {
-    // Look the set up before making one. Several translation units reach for
-    // the same set during static init, and CScrLuaInitFormSet's ctor pushes
-    // onto the front of a single global list - so a second set with the same
-    // name does not merge, it *hides* the first, and every form already linked
-    // into that one silently stops running.
-    if (moho::CScrLuaInitFormSet* const existing = moho::SCR_FindLuaInitFormSet("User");
-        existing != nullptr) {
-      return *existing;
-    }
-
-    static moho::CScrLuaInitFormSet set("User");
-    return set;
-  }
-
   void EnsureDirectoryExistsOrThrow(const msvc8::string& directoryPath)
   {
     const std::wstring widePath = gpg::STR_Utf8ToWide(directoryPath.c_str());
@@ -160,20 +144,11 @@ namespace
     }
   }
 
-  [[nodiscard]] gpg::RType* CachedSessionSaveDataType()
-  {
-    static gpg::RType* cached = nullptr;
-    if (!cached) {
-      cached = gpg::LookupRType(typeid(moho::SSessionSaveData));
-    }
-    return cached;
-  }
-
   [[nodiscard]] gpg::RRef MakeSessionSaveDataRef(moho::SSessionSaveData* const saveData)
   {
     gpg::RRef out{};
     out.mObj = saveData;
-    out.mType = CachedSessionSaveDataType();
+    out.mType = gpg::RTypeOf<moho::SSessionSaveData>();
     return out;
   }
 
@@ -217,148 +192,6 @@ namespace
     return current;
   }
 
-
-  /**
-   * Address: 0x0088BBB0 (FUN_0088BBB0, sub_88BBB0)
-   *
-   * What it does:
-   * Seeds one local command source, applies it to all army launch source sets,
-   * and binds a one-client local client-manager lane for single-player startup.
-   */
-  void SetupSinglePlayerCommandSourceLane(moho::SWldSessionInfo& sessionInfo, const char* playerName)
-  {
-    auto* const launchInfo = sessionInfo.mLaunchInfo.get();
-    if (launchInfo == nullptr) {
-      return;
-    }
-
-    const char* const localPlayerName = playerName != nullptr ? playerName : "";
-
-    moho::SSTICommandSource localCommandSource{};
-    localCommandSource.mIndex = 0u;
-    localCommandSource.mName = localPlayerName;
-    localCommandSource.mTimeouts = -1;
-    moho::AppendSSTICommandSource(launchInfo->mCommandSources.mSrcs, localCommandSource);
-
-    sessionInfo.mSourceId = 0u;
-
-    moho::BVIntSet localSourceSet{};
-    (void)localSourceSet.Add(0u);
-    for (moho::ArmyLaunchInfo& armySourceInfo : launchInfo->mArmyLaunchInfo) {
-      armySourceInfo.mUnitSources = localSourceSet;
-    }
-
-    moho::IClientManager* const createdManager = moho::CLIENT_CreateClientManager(1u, nullptr, 0, true);
-    if (createdManager != sessionInfo.mClientManager && sessionInfo.mClientManager != nullptr) {
-      delete sessionInfo.mClientManager;
-    }
-    sessionInfo.mClientManager = createdManager;
-
-    if (sessionInfo.mClientManager != nullptr) {
-      sessionInfo.mClientManager->CreateLocalClient(localPlayerName, 0, 0, sessionInfo.mSourceId);
-    }
-  }
-
-  /**
-   * Address: 0x00875690 (FUN_00875690, func_OpenGPGNet)
-   *
-   * What it does:
-   * Opens one local file stream for replay/network URI fallback according to
-   * recovered GPGNet mode semantics.
-   */
-  [[nodiscard]] std::unique_ptr<gpg::Stream> OpenGPGNet(const gpg::StrArg filename, const EGpgNetOpenMode mode)
-  {
-    switch (mode) {
-    case EGpgNetOpenMode::Read: {
-      msvc8::auto_ptr<gpg::Stream> openedStream = moho::DISK_OpenFileRead(filename);
-      return std::unique_ptr<gpg::Stream>(openedStream.release());
-    }
-    case EGpgNetOpenMode::Write: {
-      msvc8::auto_ptr<gpg::Stream> openedStream = moho::DISK_OpenFileWrite(filename);
-      return std::unique_ptr<gpg::Stream>(openedStream.release());
-    }
-    default:
-      throw std::runtime_error("unexpected mode in OpenGPGNet.");
-    }
-  }
-
-  /**
-   * Address: 0x008754D0 (FUN_008754D0, sub_8754D0)
-   *
-   * What it does:
-   * Connects to GPGNet host endpoint, emits one mode byte plus replay request
-   * path payload, and returns the live TCP stream lane.
-   */
-  [[nodiscard]]
-  std::unique_ptr<gpg::Stream> OpenGPGNetSocket(
-    const gpg::StrArg host, const msvc8::string& requestPath, const EGpgNetOpenMode mode
-  )
-  {
-    constexpr u_short kDefaultGpgNetPort = 15000;
-
-    u_long address = 0;
-    u_short port = 0;
-    if (!moho::NET_GetAddrInfo(host, kDefaultGpgNetPort, true, address, port)) {
-      gpg::Logf("NET_GetAddrInfo(%s) failed: %s", host, moho::NET_GetWinsockErrorString());
-      return {};
-    }
-
-    moho::INetTCPSocket* socket = moho::NET_TCPConnect(address, port);
-    if (socket == nullptr) {
-      const msvc8::string hostName = moho::NET_GetHostName(address);
-      gpg::Logf("NET_TCPConnect(%s:%d) failed.", hostName.c_str(), static_cast<int>(port));
-      return {};
-    }
-
-    std::unique_ptr<gpg::Stream> socketStream(socket);
-
-    const char modeByte = [&]() -> char {
-      switch (mode) {
-      case EGpgNetOpenMode::Read:
-        return 'G';
-      case EGpgNetOpenMode::Write:
-        return 'P';
-      default:
-        throw std::runtime_error("unexpected mode in OpenGPGNet.");
-      }
-    }();
-
-    socketStream->Write(&modeByte, 1u);
-    socketStream->Write(requestPath);
-    socketStream->VirtFlush();
-    return socketStream;
-  }
-
-  /**
-   * Address: 0x00875770 (FUN_00875770, func_GPGNetOpenURI)
-   *
-   * What it does:
-   * Resolves `gpgnet://` URI streams or falls back to local file open policy
-   * for plain/drive-letter paths.
-   */
-  [[nodiscard]]
-  std::unique_ptr<gpg::Stream> OpenGPGNetURI(const gpg::StrArg uri, const EGpgNetOpenMode mode)
-  {
-    msvc8::string scheme{};
-    msvc8::string authority{};
-    msvc8::string uriPath{};
-    msvc8::string uriQuery{};
-    msvc8::string uriFragment{};
-    if (!moho::URI_Split(uri, &scheme, &authority, &uriPath, &uriQuery, &uriFragment)) {
-      return OpenGPGNet(uri, mode);
-    }
-
-    if (gpg::STR_CompareNoCase(scheme.c_str(), "gpgnet:") == 0 && gpg::STR_StartsWith(authority.c_str(), "//")) {
-      const msvc8::string requestPath = uriPath + uriQuery + uriFragment;
-      return OpenGPGNetSocket(authority.c_str() + 2, requestPath, mode);
-    }
-
-    if (scheme.size() == 2u) {
-      return OpenGPGNet(uri, mode);
-    }
-
-    return {};
-  }
 } // namespace
 
 namespace moho
@@ -434,7 +267,11 @@ namespace moho
       replayPath = FILE_SuggestedExt((replayDirectory + name).c_str(), USER_GetReplayExt().c_str());
     }
 
-    std::unique_ptr<gpg::Stream> replayStream = OpenGPGNetURI(replayPath.c_str(), EGpgNetOpenMode::Write);
+    std::unique_ptr<gpg::Stream> replayStream = moho::VCR_OpenGPGNetURI(replayPath.c_str(), EGpgNetOpenMode::Write);
+    // Engine addition (issue #275): a peer back from a restart gets this recording from here.
+    if (net_RejoinAccept != 0 && replayStream != nullptr) {
+      replayStream = REJOIN_WrapRecording(std::move(replayStream));
+    }
     gpg::Stream* const stream = replayStream.get();
     if (stream == nullptr) {
       // Two clients sharing one profile both target LastGame; the second open
@@ -491,10 +328,55 @@ namespace moho
     }
 
     stream->Write(launchInfo->mInitSeed);
+    if (net_RejoinAccept != 0) {
+      REJOIN_SealRecordingHeader(stream);
+    }
 
     return msvc8::auto_ptr<gpg::Stream>(replayStream.release());
   }
 
+
+  /**
+   * Address: 0x0088BBB0 (FUN_0088BBB0, sub_88BBB0)
+   *
+   * What it does:
+   * Seeds one local command source, applies it to all army launch source sets,
+   * and binds a one-client local client-manager lane for single-player startup.
+   * `WLD_SetupSessionInfo` and the session restart (0x0088C9D0) both use it.
+   */
+  void SetupSinglePlayerCommandSourceLane(SWldSessionInfo& sessionInfo, const char* playerName)
+  {
+    auto* const launchInfo = sessionInfo.mLaunchInfo.get();
+    if (launchInfo == nullptr) {
+      return;
+    }
+
+    const char* const localPlayerName = playerName != nullptr ? playerName : "";
+
+    SSTICommandSource localCommandSource{};
+    localCommandSource.mIndex = 0u;
+    localCommandSource.mName = localPlayerName;
+    localCommandSource.mTimeouts = -1;
+    AppendSSTICommandSource(launchInfo->mCommandSources.mSrcs, localCommandSource);
+
+    sessionInfo.mSourceId = 0u;
+
+    BVIntSet localSourceSet{};
+    (void)localSourceSet.Add(0u);
+    for (ArmyLaunchInfo& armySourceInfo : launchInfo->mArmyLaunchInfo) {
+      armySourceInfo.mUnitSources = localSourceSet;
+    }
+
+    IClientManager* const createdManager = CLIENT_CreateClientManager(1u, nullptr, 0, true);
+    if (createdManager != sessionInfo.mClientManager && sessionInfo.mClientManager != nullptr) {
+      delete sessionInfo.mClientManager;
+    }
+    sessionInfo.mClientManager = createdManager;
+
+    if (sessionInfo.mClientManager != nullptr) {
+      sessionInfo.mClientManager->CreateLocalClient(localPlayerName, 0, 0, sessionInfo.mSourceId);
+    }
+  }
 
   /**
    * Address: 0x0088CBC0 (FUN_0088CBC0)
@@ -569,7 +451,7 @@ namespace moho
   CScrLuaInitForm* func_LaunchReplaySession_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "LaunchReplaySession",
       &moho::cfunc_LaunchReplaySession,
       nullptr,
@@ -588,10 +470,7 @@ namespace moho
    */
   int cfunc_LaunchReplaySessionL(LuaPlus::LuaState* const state)
   {
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kLaunchReplaySessionHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kLaunchReplaySessionHelpText);
 
     LuaPlus::LuaStackObject filenameArg(state, 1);
     const char* replayFilename = lua_tostring(state->m_state, 1);
@@ -631,7 +510,7 @@ namespace moho
   CScrLuaInitForm* func_LaunchSinglePlayerSession_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "LaunchSinglePlayerSession",
       &moho::cfunc_LaunchSinglePlayerSession,
       nullptr,
@@ -651,10 +530,7 @@ namespace moho
    */
   int cfunc_LaunchSinglePlayerSessionL(LuaPlus::LuaState* const state)
   {
-    const int argumentCount = lua_gettop(state->m_state);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kLaunchSinglePlayerSessionHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kLaunchSinglePlayerSessionHelpText);
 
     if (WLD_GetFrameAction() != EWldFrameAction::Inactive) {
       LuaPlus::LuaState::Error(state, kLaunchSinglePlayerSessionBusyMessage);
@@ -687,7 +563,7 @@ namespace moho
   CScrLuaInitForm* func_SessionSendChatMessage_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "SessionSendChatMessage",
       &moho::cfunc_SessionSendChatMessage,
       nullptr,
@@ -817,7 +693,7 @@ namespace moho
   CScrLuaInitForm* func_SessionGetCommandSourceNames_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "SessionGetCommandSourceNames",
       &moho::cfunc_SessionGetCommandSourceNames,
       nullptr,
@@ -839,11 +715,7 @@ namespace moho
       return 0;
     }
 
-    lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 0) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kSessionGetCommandSourceNamesHelpText, 0, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 0, kSessionGetCommandSourceNamesHelpText);
 
     CWldSession* const session = WLD_GetActiveSession();
     if (session == nullptr) {
@@ -882,10 +754,7 @@ namespace moho
   int cfunc_LoadSavedGameL(LuaPlus::LuaState* const state)
   {
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 1) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kLoadSavedGameHelpText, 1, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 1, kLoadSavedGameHelpText);
 
     LuaPlus::LuaStackObject filenameArg(state, 1);
     const char* const filename = lua_tostring(rawState, 1);
@@ -925,7 +794,7 @@ namespace moho
   CScrLuaInitForm* func_LoadSavedGame_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "LoadSavedGame",
       &moho::cfunc_LoadSavedGame,
       nullptr,
@@ -961,10 +830,7 @@ namespace moho
   int cfunc_PrefetchSessionL(LuaPlus::LuaState* const state)
   {
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 3) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kPrefetchSessionHelpText, 3, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 3, kPrefetchSessionHelpText);
 
     LuaPlus::LuaStackObject mapNameArg(state, 1);
     const char* const mapName = lua_tostring(rawState, 1);
@@ -992,7 +858,7 @@ namespace moho
   CScrLuaInitForm* func_PrefetchSession_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "PrefetchSession",
       &moho::cfunc_PrefetchSession,
       nullptr,
@@ -1011,7 +877,7 @@ namespace moho
   CScrLuaInitForm* func_GetSessionClients_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "GetSessionClients",
       &moho::cfunc_GetSessionClients,
       nullptr,
@@ -1047,13 +913,7 @@ namespace moho
    */
   int cfunc_GetSessionClientsL(LuaPlus::LuaState* const state)
   {
-    lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 0) {
-      LuaPlus::LuaState::Error(
-        state, "%s\n  expected %d args, but got %d", kGetSessionClientsHelpText, 0, argumentCount
-      );
-    }
+    moho::SCR_ExpectExactArgs(state, 0, kGetSessionClientsHelpText);
 
     LuaPlus::LuaObject clientsTable{};
 
@@ -1083,6 +943,37 @@ namespace moho
       clientEntry.SetNumber("ping", client->GetStatusMetricA());
       clientEntry.SetNumber("quiet", client->GetStatusMetricB());
       clientEntry.SetBoolean("local", static_cast<IClient*>(client) == localClient);
+
+      // Engine addition (issue #275): only while this client takes its seat back.
+      // Once it is on its way back it isn't reported as quiet, so FAF's Connectivity
+      // dialog doesn't open and auto-eject it; /fafengine's hook of that dialog shows
+      // a panel with the stage instead.
+      {
+        std::scoped_lock rejoinLock(clientManager->mLock);
+        SRejoinStatus rejoin{};
+        if (static_cast<IClient*>(client) != localClient) {
+          rejoin = clientManager->mPeerFeatures->RejoinStatus(static_cast<int>(clientIndex));
+        } else if (clientManager->mRejoinFeed != nullptr) {
+          rejoin = clientManager->mRejoinFeed->Status();
+        }
+        // The link's loss is only noticed long after it goes quiet. This is when
+        // FAF's dialog opens, so the panel says why from the same moment.
+        constexpr float kQuietMilliseconds = 5000.0f;
+        if (rejoin.stage == ERejoinStage::None && static_cast<IClient*>(client) != localClient &&
+            static_cast<float>(client->GetStatusMetricB()) > kQuietMilliseconds &&
+            clientManager->mPeerFeatures->EveryoneSupports(*clientManager, EPeerFeature::Rejoin)) {
+          rejoin.stage = ERejoinStage::Lost;
+        }
+        if (rejoin.stage != ERejoinStage::None) {
+          clientEntry.SetString("rejoinStage", RejoinStageName(rejoin.stage));
+          if (rejoin.progress >= 0.0f) {
+            clientEntry.SetNumber("rejoinProgress", rejoin.progress);
+          }
+          if (rejoin.stage != ERejoinStage::Lost) {
+            clientEntry.SetNumber("quiet", 0.0f);
+          }
+        }
+      }
 
       LuaPlus::LuaObject commandSources{};
       commandSources.AssignNewTable(state, 0, 0);
@@ -1132,7 +1023,7 @@ namespace moho
   CScrLuaInitForm* func_InternalSaveGame_LuaFuncDef()
   {
     static CScrLuaBinder binder(
-      UserLuaInitSet(),
+      moho::SCR_UserLuaInitSet(),
       "InternalSaveGame",
       &moho::cfunc_InternalSaveGame,
       nullptr,
@@ -1157,10 +1048,7 @@ namespace moho
     }
 
     lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount != 3) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected %d args, but got %d", kInternalSaveGameHelpText, 3, argumentCount);
-    }
+    moho::SCR_ExpectExactArgs(state, 3, kInternalSaveGameHelpText);
 
     const msvc8::string saveGameDirectory = USER_GetSaveGameDir();
     EnsureDirectoryExistsOrThrow(saveGameDirectory);

@@ -13,6 +13,7 @@
 #include "gpg/gal/Matrix.h"
 #include "gpg/core/reflection/Reflection.h"
 #include "moho/ai/CAiReconDBImpl.h"
+#include "moho/effects/rendering/CEffectManagerImpl.h"
 #include "moho/effects/rendering/IEffectManager.h"
 #include "moho/entity/Entity.h"
 #include "moho/math/QuaternionMath.h"
@@ -107,53 +108,6 @@ namespace
     return lodCutoff <= 0.0f || ProjectViewportDepthRow1(viewport, emitterPosition) <= lodCutoff;
   }
 
-  [[nodiscard]] gpg::RType* ResolveCEffectImplType()
-  {
-    if (!moho::CEffectImpl::sType) {
-      moho::CEffectImpl::sType = gpg::LookupRType(typeid(moho::CEffectImpl));
-    }
-
-    return moho::CEffectImpl::sType;
-  }
-
-  [[nodiscard]] gpg::RType* ResolveEmitterRType()
-  {
-    static gpg::RType* sEmitterType = nullptr;
-    if (!sEmitterType) {
-      sEmitterType = gpg::LookupRType(typeid(moho::EmitterType));
-    }
-
-    return sEmitterType;
-  }
-
-  [[nodiscard]] gpg::RType* ResolveFastVectorSEfxCurveType()
-  {
-    static gpg::RType* sFastVectorSEfxCurveType = nullptr;
-    if (!sFastVectorSEfxCurveType) {
-      sFastVectorSEfxCurveType = gpg::LookupRType(typeid(gpg::fastvector<moho::SEfxCurve>));
-    }
-
-    return sFastVectorSEfxCurveType;
-  }
-
-  [[nodiscard]] gpg::RType* ResolveSWorldParticleType()
-  {
-    if (!moho::SWorldParticle::sType) {
-      moho::SWorldParticle::sType = gpg::LookupRType(typeid(moho::SWorldParticle));
-    }
-
-    return moho::SWorldParticle::sType;
-  }
-
-  [[nodiscard]] gpg::RType* ResolveVector3fType()
-  {
-    static gpg::RType* sVector3fType = nullptr;
-    if (!sVector3fType) {
-      sVector3fType = gpg::LookupRType(typeid(Wm3::Vector3f));
-    }
-
-    return sVector3fType;
-  }
 } // namespace
 
 namespace moho
@@ -284,28 +238,30 @@ namespace moho
 
     mBlueprint = const_cast<REmitterBlueprint*>(blueprint);
     if (blueprint != nullptr) {
-      gpg::fastvector_n<SEfxCurve, kEmitterCurveCount>& curves = mCurves;
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_XDIR_CURVE], blueprint->XDirectionCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_YDIR_CURVE], blueprint->YDirectionCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_ZDIR_CURVE], blueprint->ZDirectionCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_EMITRATE_CURVE], blueprint->EmitRateCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_LIFETIME_CURVE], blueprint->LifetimeCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_VELOCITY_CURVE], blueprint->VelocityCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_X_ACCEL_CURVE], blueprint->XAccelCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_Y_ACCEL_CURVE], blueprint->YAccelCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_Z_ACCEL_CURVE], blueprint->ZAccelCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_RESISTANCE_CURVE], blueprint->ResistanceCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_SIZE_CURVE], blueprint->SizeCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_X_POSITION_CURVE], blueprint->XPosCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_Y_POSITION_CURVE], blueprint->YPosCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_Z_POSITION_CURVE], blueprint->ZPosCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_BEGINSIZE_CURVE], blueprint->StartSizeCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_ENDSIZE_CURVE], blueprint->EndSizeCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_ROTATION_CURVE], blueprint->InitialRotationCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_ROTATION_RATE_CURVE], blueprint->RotationRateCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_FRAMERATE_CURVE], blueprint->FrameRateCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_TEXTURESELECTION_CURVE], blueprint->TextureSelectionCurve);
-      BuildEmitterCurveFromBlueprint(curves[EMITTER_RAMPSELECTION_CURVE], blueprint->RampSelectionCurve);
+      if (!EFFECT_LifetimeOnly()) {
+        gpg::fastvector_n<SEfxCurve, kEmitterCurveCount>& curves = mCurves;
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_XDIR_CURVE], blueprint->XDirectionCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_YDIR_CURVE], blueprint->YDirectionCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_ZDIR_CURVE], blueprint->ZDirectionCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_EMITRATE_CURVE], blueprint->EmitRateCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_LIFETIME_CURVE], blueprint->LifetimeCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_VELOCITY_CURVE], blueprint->VelocityCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_X_ACCEL_CURVE], blueprint->XAccelCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_Y_ACCEL_CURVE], blueprint->YAccelCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_Z_ACCEL_CURVE], blueprint->ZAccelCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_RESISTANCE_CURVE], blueprint->ResistanceCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_SIZE_CURVE], blueprint->SizeCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_X_POSITION_CURVE], blueprint->XPosCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_Y_POSITION_CURVE], blueprint->YPosCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_Z_POSITION_CURVE], blueprint->ZPosCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_BEGINSIZE_CURVE], blueprint->StartSizeCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_ENDSIZE_CURVE], blueprint->EndSizeCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_ROTATION_CURVE], blueprint->InitialRotationCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_ROTATION_RATE_CURVE], blueprint->RotationRateCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_FRAMERATE_CURVE], blueprint->FrameRateCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_TEXTURESELECTION_CURVE], blueprint->TextureSelectionCurve);
+        BuildEmitterCurveFromBlueprint(curves[EMITTER_RAMPSELECTION_CURVE], blueprint->RampSelectionCurve);
+      }
 
       SetFloatParam(EFFECT_LIFETIME, blueprint->Lifetime);
       SetFloatParam(EFFECT_REPEATTIME, blueprint->RepeatTime);
@@ -718,22 +674,22 @@ namespace moho
   {
     const gpg::RRef nullOwner{};
 
-    archive->Read(ResolveCEffectImplType(), static_cast<CEffectImpl*>(this), nullOwner);
-    archive->Read(ResolveEmitterRType(), &mEmitterType, nullOwner);
-    archive->Read(ResolveFastVectorSEfxCurveType(), &mCurves, nullOwner);
+    archive->Read(gpg::RTypeOf<moho::CEffectImpl>(), static_cast<CEffectImpl*>(this), nullOwner);
+    archive->Read(gpg::RTypeOf<moho::EmitterType>(), &mEmitterType, nullOwner);
+    archive->Read(gpg::RTypeOf<gpg::fastvector<moho::SEfxCurve>>(), &mCurves, nullOwner);
 
     const gpg::RRef blueprintOwner{};
     (void)archive->ReadPointer(&mBlueprint, &blueprintOwner);
 
     archive->ReadFloat(&mTotalEmissions);
     archive->ReadInt(reinterpret_cast<int*>(&mLife));
-    archive->Read(ResolveSWorldParticleType(), &mParticle, nullOwner);
+    archive->Read(gpg::RTypeOf<moho::SWorldParticle>(), &mParticle, nullOwner);
     archive->ReadBool(&mValid);
     archive->ReadInt(reinterpret_cast<int*>(&mZCurveMask));
     archive->ReadInt(&mMaxLifetime);
     archive->ReadBool(&mVisible);
     archive->ReadUInt(&mLastUpdate);
-    archive->Read(ResolveVector3fType(), &mPos, nullOwner);
+    archive->Read(gpg::RTypeOf<Wm3::Vector3f>(), &mPos, nullOwner);
   }
 
   /**
@@ -747,21 +703,21 @@ namespace moho
   {
     gpg::RRef nullOwner{};
 
-    archive->Write(ResolveCEffectImplType(), static_cast<const CEffectImpl*>(this), nullOwner);
-    archive->Write(ResolveEmitterRType(), &mEmitterType, nullOwner);
-    archive->Write(ResolveFastVectorSEfxCurveType(), &mCurves, nullOwner);
+    archive->Write(gpg::RTypeOf<moho::CEffectImpl>(), static_cast<const CEffectImpl*>(this), nullOwner);
+    archive->Write(gpg::RTypeOf<moho::EmitterType>(), &mEmitterType, nullOwner);
+    archive->Write(gpg::RTypeOf<gpg::fastvector<moho::SEfxCurve>>(), &mCurves, nullOwner);
 
     archive->WritePointer<moho::REmitterBlueprint>(mBlueprint, gpg::TrackedPointerState::Unowned, nullOwner);
 
     archive->WriteFloat(mTotalEmissions);
     archive->WriteInt(static_cast<int>(mLife));
-    archive->Write(ResolveSWorldParticleType(), &mParticle, nullOwner);
+    archive->Write(gpg::RTypeOf<moho::SWorldParticle>(), &mParticle, nullOwner);
     archive->WriteBool(mValid);
     archive->WriteInt(static_cast<int>(mZCurveMask));
     archive->WriteInt(mMaxLifetime);
     archive->WriteBool(mVisible);
     archive->WriteUInt(mLastUpdate);
-    archive->Write(ResolveVector3fType(), &mPos, nullOwner);
+    archive->Write(gpg::RTypeOf<Wm3::Vector3f>(), &mPos, nullOwner);
   }
 
   /**
@@ -1125,6 +1081,12 @@ namespace moho
    */
   void CEfxEmitter::OnTick()
   {
+    if (EFFECT_LifetimeOnly()) {
+      if (!ProcessLifetime()) {
+        ++mLife;
+      }
+      return;
+    }
     const float* const start = mParams.start_;
     if ((start[EFFECT_EMITIFVISIBLE] > 0.0f || start[EFFECT_CREATEIFVISIBLE] > 0.0f)
         && (mManager->GetSim()->mCurTick % 3u) == 0u) {
@@ -1149,8 +1111,7 @@ namespace moho
     }
 
     PrepareTickStats();
-    _InterlockedExchangeAdd(
-      reinterpret_cast<volatile platform::InterlockedLong*>(&sEngineStatRenderActiveEmitters->mPrimaryValueBits), 1);
+    sEngineStatRenderActiveEmitters->AddPrimaryBits(1);
 
     if (!mValid) {
       UpdateCurve();
@@ -1167,10 +1128,10 @@ namespace moho
     }
 
     for (mLife = static_cast<std::uint32_t>(subTicks); subTicks > 0; --subTicks) {
-      Tick(subTicks);
+      (void)Tick(subTicks);
     }
     mLife = 0u;
-    Tick(0);
+    (void)Tick(0);
 
     mParams.start_[EFFECT_TICKCOUNT] =
       mParams.start_[EFFECT_TICKINCREMENT] + mParams.start_[EFFECT_TICKCOUNT];

@@ -32,6 +32,7 @@
 #include "moho/misc/StartupHelpers.h"
 
 #include "moho/net/INetNATTraversalProviderWeakPtrReflection.h"
+#include "moho/net/NetlinkPeers.h"
 #include "moho/sim/ISTIDriver.h"
 #include "moho/sim/SimDriver.h"
 #include "moho/ui/IUIManager.h"
@@ -47,7 +48,6 @@ using namespace moho;
 
 namespace
 {
-  constexpr const char* kLuaExpectedArgsWarning = "%s\n  expected %d args, but got %d";
   constexpr const char* kLuaExpectedAtLeastArgsWarning = "%s\n  expected at least %d args, but got %d";
   constexpr const char* kGpgNetActiveHelpText = "bool GpgNetActive()";
   constexpr const char* kGpgNetSendHelpText = "GpgNetSend(cmd,args...)";
@@ -554,6 +554,7 @@ void moho::GPGNET_Attach(
  */
 void moho::GPGNET_Shutdown()
 {
+  NETLINK_Shutdown(); // engine addition (issue #233): in-engine links go with GPGNet
   sGPGNet.reset();
 }
 
@@ -599,10 +600,7 @@ int moho::cfunc_GpgNetActiveL(
     return 0;
   }
 
-  const int argumentCount = lua_gettop(state->m_state);
-  if (argumentCount != 0) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kGpgNetActiveHelpText, 0, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 0, kGpgNetActiveHelpText);
 
   lua_pushboolean(state->m_state, GPGNET_GetPtr() ? 1 : 0);
   (void)lua_gettop(state->m_state);
@@ -1166,6 +1164,9 @@ void CGpgNetInterface::WriteCommand(
     return;
   }
 
+  // Engine addition (issue #274): GameEnded from the lobby script stops the
+  // native links' restarts.
+  NATIVENET_OnGameMessage(name);
   WriteCommandName(name);
 
   const uint32_t argc = static_cast<uint32_t>(GetCommandArgCount(args));
@@ -1448,7 +1449,10 @@ void CGpgNetInterface::PullTask()
 
     try {
       const auto commandName = command.mName.view();
-      if (commandName == "Test") {
+      if (NATIVENET_HandleCommand(command.mName, command.mArgs)) {
+        // Engine addition (issue #274): native mode's own messages. The lobby
+        // server's JoinGame / ConnectToPeer go on below, rewritten.
+      } else if (commandName == "Test") {
         Test(command.mArgs);
       } else if (commandName == "Connected") {
         Connected(command.mArgs);
@@ -1470,7 +1474,8 @@ void CGpgNetInterface::PullTask()
         SendNatPacket(command.mArgs);
       } else if (commandName == "EjectPlayer") {
         EjectPlayer(command.mArgs);
-      } else {
+      } else if (!NETLINK_HandleCommand(command.mName, command.mArgs)) {
+        // Engine addition (issue #233): Netlink* commands are in-engine links'.
         LogUnknownCommand(command.mName);
       }
     } catch (const std::exception& ex) {
@@ -1539,6 +1544,12 @@ void CGpgNetInterface::Connected(
   gpg::Logf("GPGNET: entering idle state.");
   SNetCommandArg stateArg(msvc8::string("Idle"));
   WriteCommandWith1Arg("GameState", &stateArg);
+  // Engine addition (issue #233): with net_InEngineLinks 1, ask the adapter
+  // to leave the peer links to the game.
+  NETLINK_SayHello(*this);
+  // Engine addition (issue #274): with net_NativeNet 1 there is no adapter;
+  // the game links every peer itself.
+  NATIVENET_Start();
 }
 
 /**
@@ -2118,10 +2129,7 @@ int moho::cfunc_LaunchGPGNetL(LuaPlus::LuaState* const state)
   }
 
   lua_State* const rawState = state->m_state;
-  const int argumentCount = lua_gettop(rawState);
-  if (argumentCount != 0) {
-    LuaPlus::LuaState::Error(state, kLuaExpectedArgsWarning, kLaunchGPGNetHelpText, 0, argumentCount);
-  }
+  moho::SCR_ExpectExactArgs(state, 0, kLaunchGPGNetHelpText);
 
   HWND ownerWindow = nullptr;
   if (moho::sMainWindow != nullptr) {

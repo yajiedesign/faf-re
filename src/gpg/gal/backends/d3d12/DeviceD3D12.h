@@ -140,6 +140,10 @@ namespace gpg::gal
     void BeginProfileRegion(std::uint32_t region) override;
     void EndProfileRegion(std::uint32_t region) override;
     bool ReadGpuBuffer(GpuBuffer& buffer, std::uint32_t firstElement, std::uint32_t count, void* out) override;
+    void ReleaseBufferCopy(VertexBuffer& buffer) override;
+    void ReleaseBufferCopy(IndexBuffer& buffer) override;
+    void CopyLockedRangeOnly(VertexBuffer& buffer) override;
+    void CopyLockedRangeOnly(IndexBuffer& buffer) override;
     bool CopyVertexBufferRegion(
       VertexBuffer& destination, std::uint32_t destinationOffset, VertexBuffer& source, std::uint32_t sourceOffset, std::uint32_t byteCount
     ) override;
@@ -154,6 +158,7 @@ namespace gpg::gal
     [[nodiscard]] ID3D12Device* Native() const noexcept { return mDevice.Get(); }
     /** Engine addition (gal::gPlacedResources): where static buffers are placed. */
     [[nodiscard]] d3d12::PlacedHeapAllocator& PlacedBuffers() noexcept { return mPlacedBuffers; }
+    [[nodiscard]] d3d12::SharedBufferAllocator& SharedBuffers() noexcept { return mSharedBuffers; }
     [[nodiscard]] std::recursive_mutex& Mutex() noexcept { return mMutex; }
     /** The submission the commands being recorded belong to. */
     [[nodiscard]] std::uint64_t RecordingSerial() const noexcept { return mSubmittedSerial + 1U; }
@@ -171,6 +176,7 @@ namespace gpg::gal
     void ReadTexture(d3d12::TrackedResource& source, imaging::Image& image);
     /** Keeps `resource` and frees `descriptors` once the GPU is done with the commands recorded so far. */
     void Retire(Microsoft::WRL::ComPtr<ID3D12Resource> resource);
+    void RetireSharedRange(Microsoft::WRL::ComPtr<IUnknown> range);
     void RetireDescriptor(D3D12_DESCRIPTOR_HEAP_TYPE type, D3D12_CPU_DESCRIPTOR_HANDLE handle);
     [[nodiscard]] D3D12_CPU_DESCRIPTOR_HANDLE AllocateDescriptor(D3D12_DESCRIPTOR_HEAP_TYPE type);
 
@@ -201,7 +207,7 @@ namespace gpg::gal
       std::uint64_t tableFrame = 0;               // the frame's view arena the table is in
       std::uint64_t tableEpoch = 0;
       D3D12_GPU_DESCRIPTOR_HANDLE samplers{};
-      std::shared_ptr<const std::vector<effects::TextureBinding>> sampled; // what the texture table holds
+      const std::vector<effects::TextureBinding>* sampled = nullptr; // what the texture table holds, in the effect's state
       std::uint32_t techniqueIndex = 0;
       std::uint32_t passIndex = 0;
       const char* technique = ""; // diagnostics
@@ -274,13 +280,19 @@ namespace gpg::gal
     void EndProfileFrame();
     void CollectProfileFrames();
 
+    /**
+     * Draws `sourceRect` of the source (`sourceWidth` x `sourceHeight`) into
+     * `destinationRect` of the destination, stretched with linear filtering.
+     */
     void BlitTexture(
       D3D12_CPU_DESCRIPTOR_HANDLE source,
       d3d12::TrackedResource& sourceResource,
+      std::uint32_t sourceWidth,
+      std::uint32_t sourceHeight,
+      const RECT& sourceRect,
       RenderTargetD3D12::Buffer& destination,
       DXGI_FORMAT destinationFormat,
-      std::uint32_t width,
-      std::uint32_t height
+      const RECT& destinationRect
     );
 
     // ---- core objects --------------------------------------------------------
@@ -313,6 +325,7 @@ namespace gpg::gal
     {
       std::uint64_t serial = 0;
       Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+      Microsoft::WRL::ComPtr<IUnknown> sharedRange; // a shared buffer's range, given back with the entry
       D3D12_DESCRIPTOR_HEAP_TYPE type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
       D3D12_CPU_DESCRIPTOR_HANDLE descriptor{};
     };
@@ -321,6 +334,7 @@ namespace gpg::gal
     d3d12::UploadAllocator mUpload;
     d3d12::PlacedHeapAllocator mPlacedTextures; // engine addition: gal::gPlacedResources
     d3d12::PlacedHeapAllocator mPlacedBuffers;
+    d3d12::SharedBufferAllocator mSharedBuffers; // engine addition: gal::gSharedBuffers
     d3d12::DescriptorPool mRtvPool;
     d3d12::DescriptorPool mDsvPool;
     d3d12::DescriptorPool mSrvPool;
