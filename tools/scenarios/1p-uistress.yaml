@@ -1,0 +1,40 @@
+name: 1p-uistress
+description: >
+  UI allocation stress for the Lua incremental-GC performance runs. A real
+  skirmish on faf_re_uistress (Dual Gap terrain): 900 idle UEF T1 tanks in two
+  blocks plus a factory that keeps building, and a UI hook that flips the
+  camera between the minimum and maximum zoom eight times a second so the
+  strategic-icon, selection and overlay passes re-project continuously. The
+  sim is never issued orders, so the load is the UI's own Lua allocation.
+  Setup: tools/perf/uistress/map copied into the vault as maps/faf_re_uistress,
+  with any real map's scmap and save copied in as faf_re_uistress.scmap /
+  faf_re_uistress_save.lua (this run used dualgap_adaptive.v0014); copy
+  init_uistress.lua into the FAF bin folder. The exe is a build in bin_x64.
+timeout: 6m
+
+mode: direct
+lobby: auto
+map: faf_re_uistress
+gameOptions:
+  Victory: sandbox
+
+game:
+  exe: '%ProgramData%\FAForever\bin_x64\main_x64.exe'
+  init: init_uistress.lua
+  nosound: true
+
+players:
+  - { uid: 1, name: UiStress, faction: uef, args: ['/title', 'uistress'] }
+
+steps:
+  - start: all
+  - host: 1
+  - waitState: { uids: all, state: Launching, timeout: 3m }
+  - wait: 125s
+
+expect:
+  allLaunched: true
+  noCrash: true
+  logsContain:
+    - { uids: all, pattern: 'UISTRESS spawned tanks=' }
+    - { uids: all, pattern: 'UISTRESS flips=' }
