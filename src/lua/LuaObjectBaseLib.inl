@@ -1450,12 +1450,14 @@ extern "C" void luaV_settable(
 			Table* const metatable = table->metatable;
 			if ((metatable->flags & kNoNewIndexTagMethodFlag) != 0) {
 				*slot = *val;
+				faf_lua51_gc_barrier_back(state, table); // Lua 5.1.5 lvm.c: luaV_settable()
 				return;
 			}
 
 			handler = luaT_gettm(metatable, kTagMethodNewIndex, state->l_G->tmname[kTagMethodNewIndex]);
 			if (handler == nullptr) {
 				*slot = *val;
+				faf_lua51_gc_barrier_back(state, table); // Lua 5.1.5 lvm.c: luaV_settable()
 				return;
 			}
 		} else {

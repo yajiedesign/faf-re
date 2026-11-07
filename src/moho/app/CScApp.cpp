@@ -5,14 +5,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -28,6 +31,7 @@
 #include "moho/audio/IUserSoundManager.h"
 #include "moho/audio/SofdecRuntime.h"
 #include "moho/lua/CScrLuaObjectFactory.h"
+#include "lua/LuaIncrementalGc.h"
 #include "moho/misc/ScrDebugHooks.h"
 #include "moho/misc/SessionStartup.h"
 #include "moho/misc/StartupHelpers.h"
@@ -329,6 +333,30 @@ namespace
     frontEndData.SetString("replay_filename", replayPath.c_str());
   }
 
+  /// Case-insensitive console command name comparison, matching the console's
+  /// own command lookup.
+  [[nodiscard]] bool IsCommandName(const std::string& token, const char* name)
+  {
+    if (name == nullptr) {
+      return false;
+    }
+
+    const std::size_t nameLength = std::strlen(name);
+    if (token.size() != nameLength) {
+      return false;
+    }
+
+    for (std::size_t index = 0; index < nameLength; ++index) {
+      const unsigned char left = static_cast<unsigned char>(token[index]);
+      const unsigned char right = static_cast<unsigned char>(name[index]);
+      if (std::tolower(left) != std::tolower(right)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
   [[nodiscard]] msvc8::string ResolveLoadPath(gpg::StrArg requestedPath)
   {
     msvc8::string loadPath;
@@ -342,6 +370,55 @@ namespace
     }
 
     return moho::USER_GetSaveGameDir() + loadPath + "." + moho::USER_GetSaveGameExt();
+  }
+
+  /**
+   * Engine addition: applies the startup-only `lua_IncrementalGC` convar from
+   * `/con` before the UI VMs are created.
+   *
+   * The collector role of a Lua VM is fixed when the VM is created, so the
+   * convar value has to reach the live runtime flag (`moho::lua_IncrementalGC`)
+   * before `USER_GetLuaState()` creates the front-end UI root. Only the
+   * `lua_IncrementalGC` segment of `/con` is executed here; every other con
+   * command stays with the late `InitializeSessionFromCommandLine()` pass.
+   *
+   * The parsing mirrors that pass: `=` becomes a space, `;` separates the
+   * segments. A segment whose first token is the convar name (compared
+   * case-insensitively, like the console command lookup itself) is executed.
+   */
+  void ApplyEarlyLuaIncrementalGcCommand()
+  {
+    msvc8::vector<msvc8::string> args;
+
+    if (moho::CFG_GetArgOption("/con", 1, &args) && !args.empty()) {
+      std::string commands = args[0].c_str();
+      std::replace(commands.begin(), commands.end(), '=', ' ');
+      std::size_t begin = 0;
+      while (begin <= commands.size()) {
+        const std::size_t end = std::min(commands.find(';', begin), commands.size());
+        if (end > begin) {
+          const std::string segment = commands.substr(begin, end - begin);
+
+          std::size_t tokenBegin = 0;
+          while (tokenBegin < segment.size() &&
+                 (segment[tokenBegin] == ' ' || segment[tokenBegin] == '\t')) {
+            ++tokenBegin;
+          }
+          std::size_t tokenEnd = segment.find_first_of(" \t", tokenBegin);
+          const std::string token = segment.substr(tokenBegin, tokenEnd - tokenBegin);
+
+          if (IsCommandName(token, "lua_IncrementalGC")) {
+            moho::CON_Execute(segment.c_str());
+          }
+        }
+        begin = end + 1;
+      }
+      args.clear();
+    }
+
+    // The convar is bound to the configured value; copy it into the live
+    // runtime flag, which the UI VMs read when they are created.
+    moho::CaptureIncrementalGcStartupSetting();
   }
 
   /**
@@ -1044,6 +1121,12 @@ bool CScApp::Init()
   if (!AppInitCommonServices()) {
     return false;
   }
+
+  // Engine addition: `lua_IncrementalGC` is a startup-only switch - the
+  // collector role of a Lua VM is fixed when the VM is created. Apply the
+  // `/con lua_IncrementalGC=...` value here, before USER_GetLuaState() builds
+  // the front-end UI root, and copy it into the live runtime flag.
+  ApplyEarlyLuaIncrementalGcCommand();
 
   msvc8::vector<msvc8::string> preferenceArgs;
   if (moho::CFG_GetArgOption("/prefs", 1, &preferenceArgs) && !preferenceArgs.empty()) {

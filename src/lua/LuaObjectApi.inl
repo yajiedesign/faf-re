@@ -1250,6 +1250,11 @@
 		}
 
 		static_cast<GCObject*>(object->value.p)->cl.l.g = *state->top;
+		faf_lua51_gc_barrier_value(
+			state,
+			static_cast<GCObject*>(object->value.p),
+			state->top
+		); // Lua 5.1.5 lapi.c: lua_replace()/setfenv barrier
 		return 1;
 	}
 

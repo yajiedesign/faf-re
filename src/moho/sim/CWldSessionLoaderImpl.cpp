@@ -16,6 +16,7 @@
 #include "moho/sim/CWldMap.h"
 #include "moho/sim/RRuleGameRules.h"
 #include "lua/LuaCrashDump.h"
+#include "lua/LuaIncrementalGc.h"
 
 namespace moho
 {
@@ -129,7 +130,10 @@ namespace moho
         (void)marker;
       }
 
-      auto* const createdState = new LuaPlus::LuaState(LuaPlus::LuaState::LIB_BASE);
+      auto* const createdState = new LuaPlus::LuaState(
+        LuaPlus::LuaState::LIB_BASE,
+        static_cast<int>(moho::lua_incremental::ELuaVmRole::SessionUi)
+      );
       if (LuaPlus::LuaState* const previousState = scenario->mState;
           createdState != previousState && previousState != nullptr) {
         delete previousState;

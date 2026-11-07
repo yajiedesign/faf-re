@@ -1128,6 +1128,11 @@
 					break;
 				}
 				*cl->upvals[upIndex]->v = *ra;
+				faf_lua51_gc_barrier_value(
+					L,
+					reinterpret_cast<GCObject*>(cl->upvals[upIndex]),
+					ra
+				); // Lua 5.1.5 lvm.c: OP_SETUPVAL
 				break;
 			}
 
@@ -1518,6 +1523,7 @@
 				const int batchBase = bc & ~static_cast<int>(kLuaFieldsPerFlushM1);
 				for (; n > 0; --n) {
 					*luaH_setnum(L, table, batchBase + n) = ra[n];
+					faf_lua51_gc_barrier_back(L, table); // Lua 5.1.5 lvm.c: OP_SETLIST
 				}
 				break;
 			}
@@ -1540,6 +1546,11 @@
 					closure->l.upvals[up] = (LuaGetOpcode(*pc) == kOpGetUpval)
 						? cl->upvals[index]
 						: luaF_findupval(L, base + index);
+					faf_lua51_gc_barrier_f(
+						L,
+						reinterpret_cast<GCObject*>(closure),
+						reinterpret_cast<GCObject*>(closure->l.upvals[up])
+					); // Lua 5.1.5 lvm.c: OP_CLOSURE
 				}
 
 				ra->tt = static_cast<int>(closure->l.tt);
@@ -3235,6 +3246,7 @@
 	 */
 	void lua_close(lua_State* const state)
 	{
+		faf_lua51_gc_release(state->l_G); // drop any incremental state before 5.0 teardown
 		lua_State* const mainThread = state->l_G->mainthread;
 
 		luaF_close(mainThread, mainThread->stack);
