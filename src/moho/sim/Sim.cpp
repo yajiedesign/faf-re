@@ -1,5 +1,11 @@
 #include "moho/lua/ScrLuaUserData.h"
 #include "moho/sim/SimPrivate2.h"
+#include "moho/sim/SimBlockLane.h"
+
+#include <mutex>
+#include <thread>
+
+#include "platform/X87Precision.h"
 
 namespace moho
 {
@@ -101,20 +107,20 @@ moho::CPrfTimeLogItem::~CPrfTimeLogItem()
 }
 namespace
 {
-  [[nodiscard]] msvc8::string BuildMd5TraceIndent(const std::size_t indentDepth)
+  [[nodiscard]] fa::string BuildMd5TraceIndent(const std::size_t indentDepth)
   {
-    msvc8::string indent{};
+    fa::string indent{};
     (void)indent.resize(indentDepth * 2u, ' ');
     return indent;
   }
 
-  void PrintMd5TraceLexical(FILE* const traceFile, const std::size_t indentDepth, const msvc8::string& lexical)
+  void PrintMd5TraceLexical(FILE* const traceFile, const std::size_t indentDepth, const fa::string& lexical)
   {
     if (traceFile == nullptr) {
       return;
     }
 
-    const msvc8::string indent = BuildMd5TraceIndent(indentDepth);
+    const fa::string indent = BuildMd5TraceIndent(indentDepth);
     std::fprintf(traceFile, "%s%s\n", indent.c_str(), lexical.c_str());
   }
 
@@ -124,7 +130,7 @@ namespace
       return;
     }
 
-    const msvc8::string indent = BuildMd5TraceIndent(indentDepth);
+    const fa::string indent = BuildMd5TraceIndent(indentDepth);
     std::fprintf(traceFile, "%s%s:\n", indent.c_str(), fieldName != nullptr ? fieldName : "");
   }
 
@@ -134,10 +140,11 @@ namespace
       return;
     }
 
-    const msvc8::string indent = BuildMd5TraceIndent(indentDepth);
+    const fa::string indent = BuildMd5TraceIndent(indentDepth);
     std::fprintf(traceFile, "%s[%u]:\n", indent.c_str(), index);
   }
 }
+
 
 
 
@@ -173,11 +180,11 @@ void moho::REF_UpdateMD5(
     return;
   }
 
-  if (refType == gpg::RTypeOf<msvc8::string>()) {
+  if (refType == gpg::RTypeOf<fa::string>()) {
     if (traceFile != nullptr) {
       PrintMd5TraceLexical(traceFile, depth, ref.GetLexical());
     }
-    const auto& stringValue = *static_cast<const msvc8::string*>(ref.mObj);
+    const auto& stringValue = *static_cast<const fa::string*>(ref.mObj);
     md5.Update(stringValue.c_str(), stringValue.size() + 1u);
     return;
   }
@@ -195,7 +202,7 @@ void moho::REF_UpdateMD5(
     if (pointerCount != 0u) {
       REF_UpdateMD5(md5, pointerType->SubscriptIndex(ref.mObj, 0), traceFile, indentDepth);
     } else if (traceFile != nullptr) {
-      const msvc8::string indent = BuildMd5TraceIndent(depth);
+      const fa::string indent = BuildMd5TraceIndent(depth);
       std::fprintf(traceFile, "%s<NULL>\n", indent.c_str());
     }
     return;
@@ -240,64 +247,6 @@ namespace
   constexpr const char* kUnknownArmyMessage = "Unknown army: %s";
   constexpr const char* kUnexpectedArmyTypeMessage = "Unexpected type for army object";
 
-  [[nodiscard]] bool ParseRectFromLuaArguments(
-    LuaPlus::LuaState* const state,
-    const char* const helpText,
-    gpg::Rect2f& outRect
-  )
-  {
-    if (!state || !state->m_state) {
-      return false;
-    }
-
-    lua_State* const rawState = state->m_state;
-    const int argumentCount = lua_gettop(rawState);
-    if (argumentCount < 1 || argumentCount > 4) {
-      LuaPlus::LuaState::Error(state, "%s\n  expected between %d and %d args, but got %d", helpText, 1, 4, argumentCount);
-    }
-
-    if (argumentCount == 1) {
-      const LuaPlus::LuaObject rectObject(LuaPlus::LuaStackObject(state, 1));
-      outRect = SCR_FromLuaCopy<gpg::Rect2f>(rectObject);
-      return true;
-    }
-
-    LuaPlus::LuaStackObject x0Arg(state, 1);
-    if (lua_type(rawState, 1) != LUA_TNUMBER) {
-      x0Arg.TypeError("number");
-    }
-    outRect.x0 = static_cast<float>(lua_tonumber(rawState, 1));
-
-    LuaPlus::LuaStackObject z0Arg(state, 2);
-    if (lua_type(rawState, 2) != LUA_TNUMBER) {
-      z0Arg.TypeError("number");
-    }
-    outRect.z0 = static_cast<float>(lua_tonumber(rawState, 2));
-
-    LuaPlus::LuaStackObject x1Arg(state, 3);
-    if (lua_type(rawState, 3) != LUA_TNUMBER) {
-      x1Arg.TypeError("number");
-    }
-    outRect.x1 = static_cast<float>(lua_tonumber(rawState, 3));
-
-    LuaPlus::LuaStackObject z1Arg(state, 4);
-    if (lua_type(rawState, 4) != LUA_TNUMBER) {
-      z1Arg.TypeError("number");
-    }
-    outRect.z1 = static_cast<float>(lua_tonumber(rawState, 4));
-    return true;
-  }
-
-  [[nodiscard]] bool IsEntityPositionInsideRect(const Entity* const entity, const gpg::Rect2f& rect) noexcept
-  {
-    if (entity == nullptr) {
-      return false;
-    }
-
-    const Wm3::Vec3f& position = entity->GetPositionWm3();
-    return rect.Contains(position.x, position.z);
-  }
-
   /**
    * Address: 0x005794A0 (FUN_005794A0)
    *
@@ -322,64 +271,12 @@ namespace
 
 
 
-  [[nodiscard]] IUnit* ResolveIUnitBridge(UserUnit* const unit) noexcept
-  {
-    return unit ? static_cast<IUnit*>(unit) : nullptr;
-  }
-
-  [[nodiscard]] const IUnit* ResolveIUnitBridge(const UserUnit* const unit) noexcept
-  {
-    return unit ? static_cast<const IUnit*>(unit) : nullptr;
-  }
-
-
-  [[nodiscard]] UserEntity*
-  FindUserSessionEntityById(CWldSession* const session, const std::int32_t entityId) noexcept
-  {
-    if (session == nullptr) {
-      return nullptr;
-    }
-
-    return session->LookupEntityId(entityId);
-  }
 
 
 
 
 
 
-
-  [[nodiscard]] EntityCategorySet* ResolveEntityCategorySetFromLuaObject(const LuaPlus::LuaObject& object)
-  {
-    LuaPlus::LuaObject payload(object);
-    if (payload.IsTable()) {
-      payload = moho::SCR_GetLuaTableField(payload.GetActiveState(), payload, "_c_object");
-    }
-
-    if (!payload.IsUserData()) {
-      return nullptr;
-    }
-
-    const gpg::RRef userDataRef = moho::SCR_UserDataRef(payload);
-    if (!userDataRef.mObj) {
-      return nullptr;
-    }
-
-    if (gpg::RType* const expectedType = gpg::RTypeOf<EntityCategorySet>(); expectedType != nullptr) {
-      const gpg::RRef upcast = gpg::REF_UpcastPtr(userDataRef, expectedType);
-      if (upcast.mObj != nullptr) {
-        return static_cast<EntityCategorySet*>(upcast.mObj);
-      }
-    }
-
-    const char* const typeName = userDataRef.GetTypeName();
-    if (typeName != nullptr
-        && (std::strstr(typeName, "EntityCategory") != nullptr || std::strstr(typeName, "BVSet") != nullptr)) {
-      return static_cast<EntityCategorySet*>(userDataRef.mObj);
-    }
-
-    return nullptr;
-  }
 
   template <class THandler>
   void ForEachSelectedUnit(EntitySetTemplate<Unit>* const selectedUnits, THandler&& handler)
@@ -432,11 +329,6 @@ namespace
     return packedValue != nullptr ? (*packedValue & 0x00FFFFFFu) : 0u;
   }
 
-  [[nodiscard]]
-  BVIntSet& AsBitSet(SimSubRes3& slot) noexcept
-  {
-    return *reinterpret_cast<BVIntSet*>(&slot);
-  }
   [[nodiscard]] CUnitCommand* AddIssueDataToCommandDb(
     CCommandDB* const commandDb,
     const SSTICommandIssueData& issueData
@@ -778,7 +670,7 @@ namespace
    * What it does:
    * Core Sim load-serialization routine used by Sim serializer callback.
    */
-  gpg::RType* FindRTypeByNameAny(const std::initializer_list<const char*>& names)
+  [[maybe_unused]] gpg::RType* FindRTypeByNameAny(const std::initializer_list<const char*>& names)
   {
     gpg::TypeMap& map = gpg::GetRTypeMap();
     for (const char* name : names) {
@@ -799,13 +691,6 @@ namespace
     return nullptr;
   }
 
-  gpg::RType* RequireRTypeByNameAny(const std::initializer_list<const char*>& names)
-  {
-    gpg::RType* type = FindRTypeByNameAny(names);
-    GPG_ASSERT(type != nullptr);
-    return type;
-  }
-
 
   bool IsSimDebugCheatsEnabled()
   {
@@ -822,7 +707,7 @@ namespace
     return moho::console::PlatformGetCallStack(outFrames, 0x10u);
   }
 
-  void FormatCallStack(msvc8::string* outText, const int frameCount, const std::uintptr_t* frames)
+  void FormatCallStack(fa::string* outText, const int frameCount, const std::uintptr_t* frames)
   {
     moho::console::PlatformFormatCallstack(outText, frameCount, frames);
   }
@@ -1202,10 +1087,10 @@ namespace
    * it has one (`IAiBuilder` slot 8, 0x00764C2B), otherwise the unit's command
    * queue (`Unit::CommandQueue` +0x4B4, list at +0x0C).
    */
-  [[nodiscard]] const msvc8::vector<WeakPtr<CUnitCommand>>* PathPreviewCommandList(Unit& unit)
+  [[nodiscard]] const fa::vector<WeakPtr<CUnitCommand>>* PathPreviewCommandList(Unit& unit)
   {
     if (IAiBuilder* const builder = unit.AiBuilder; builder != nullptr) {
-      const msvc8::vector<WeakPtr<CUnitCommand>>& factoryQueue = builder->BuilderGetFactoryCommandQueue();
+      const fa::vector<WeakPtr<CUnitCommand>>& factoryQueue = builder->BuilderGetFactoryCommandQueue();
       if (!factoryQueue.empty()) {
         return &factoryQueue;
       }
@@ -1237,7 +1122,7 @@ namespace
    */
   Wm3::Vector3f* PathPreviewResolveEndPosition(Wm3::Vector3f* const outPos, Unit* const unit)
   {
-    if (const msvc8::vector<WeakPtr<CUnitCommand>>* const commands = PathPreviewCommandList(*unit); commands != nullptr) {
+    if (const fa::vector<WeakPtr<CUnitCommand>>* const commands = PathPreviewCommandList(*unit); commands != nullptr) {
       // Newest first. The binary dereferences each command without a null
       // test (`[esi+98h]` at 0x00764C80), so a dead entry is not skipped here.
       for (std::size_t index = commands->size(); index != 0u; --index) {

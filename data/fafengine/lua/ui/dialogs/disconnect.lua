@@ -12,8 +12,11 @@
 -- clients announced rejoin, this never shows. If a returning player stops reporting,
 -- the engine says "lost" again and the Connectivity dialog comes back. A player who
 -- is back gets the announcement a defeated player gets.
+--
+-- FAF's Lua may carry these rows itself (issue #327): its disconnect.lua then defines its
+-- own GetSessionClients in this module, and this block steps aside.
 
-do
+if not rawget(getfenv(1), 'GetSessionClients') then
     local UIUtil = import("/lua/ui/uiutil.lua")
     local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
     local Bitmap = import("/lua/maui/bitmap.lua").Bitmap
@@ -24,7 +27,19 @@ do
     local dialog = false
     local stages = {}
     local stageStarts = {}
+    local returnStarts = {}
     local announcedBack = {}
+
+    -- The wait before a lagging player's eject button unlocks in `CreateDialog` above. A returning
+    -- player's button waits as long from when their return began, so a click meant for the game
+    -- can't land on it when the dialog opens.
+    local function EjectDelay()
+        local delay = SessionGetScenarioInfo().Options.DisconnectionDelay02
+        if delay then
+            return tonumber(delay) - 5
+        end
+        return 85
+    end
 
     local function ElapsedText(seconds)
         return string.format("%d:%02d", math.floor(seconds / 60), math.mod(math.floor(seconds), 60))
@@ -35,6 +50,15 @@ do
             return string.format(": %d%%", math.floor(client.rejoinProgress * 100))
         end
         return ''
+    end
+
+    --- A returning player reports every second. Loading a map can go quiet by itself.
+    local function IsSilent(client)
+        local allowed = 5
+        if client.rejoinStage == 'loading' then
+            allowed = 30
+        end
+        return client.rejoinSilent and client.rejoinSilent > allowed
     end
 
     --- What the row says for the stage the player is in.
@@ -52,8 +76,8 @@ do
     end
 
     --- As /lua/ui/game/gameresult.lua tells of a defeated player: the announcement
-    --- goes to that player's line on the score board. FAF's option to hide player
-    --- names can leave no line to find, which still shows it, from the top.
+    --- goes to that player's line on the score board. With no line to find (FAF's
+    --- option to hide player names, or no score board), it still shows, from the top.
     local function AnnounceBack(client)
         LOG('REJOIN: showing ' .. client.name .. ' as back')
 
@@ -64,8 +88,8 @@ do
             text = LOCF("<LOC rejoin_0007>%s is back in the game!", client.name)
         end
         for army, info in GetArmiesTable().armiesTable do
-            if info.nickname == client.name then
-                import("/lua/ui/game/score.lua").ArmyAnnounce(army, text)
+            -- false: no line for that army (FAForever/fa#7373). A score board that returns nothing showed it.
+            if info.nickname == client.name and import("/lua/ui/game/score.lua").ArmyAnnounce(army, text) ~= false then
                 return
             end
         end
@@ -124,6 +148,7 @@ do
         slot.eject.OnClick = function(self, modifiers)
             EjectSessionClient(index)
         end
+        slot.eject:Disable()
 
         return slot
     end
@@ -176,9 +201,24 @@ do
         if IsReturning(client) then
             slot.ping:Hide()
             slot.status:Show()
-            slot.status:SetText(StageText(index, client))
             slot.track:Show()
-            if client.rejoinProgress then
+            if IsSilent(client) then
+                slot.status:SetText(LOCF("<LOC rejoin_0008>No response for %s", ElapsedText(client.rejoinSilent)))
+                slot.status:SetColor('FFe24f2d')
+                slot.fill:SetSolidColor('ff707070')
+                if not slot.silent then
+                    slot.silent = true
+                    LOG('REJOIN: showing ' .. client.name .. ' as not responding')
+                end
+            else
+                slot.status:SetText(StageText(index, client))
+                slot.status:SetColor('FFbadbdb')
+                slot.fill:SetSolidColor('ff4fa0e0')
+                slot.silent = false
+            end
+            if IsSilent(client) then
+                -- The bar stays where it stopped.
+            elseif client.rejoinProgress then
                 LayoutHelpers.AtLeftTopIn(slot.fill, slot.track, 0, 0)
                 LayoutHelpers.SetWidth(slot.fill, math.max(1, trackWidth * client.rejoinProgress))
             else
@@ -189,6 +229,13 @@ do
                 LayoutHelpers.SetWidth(slot.fill, blockWidth)
             end
             slot.eject:Show()
+            if GetSystemTimeSeconds() - returnStarts[index] >= EjectDelay() then
+                if slot.eject:IsDisabled() then
+                    slot.eject:Enable()
+                end
+            elseif not slot.eject:IsDisabled() then
+                slot.eject:Disable()
+            end
         else
             slot.status:Hide()
             slot.track:Hide()
@@ -226,15 +273,20 @@ do
     local engineClients = GetSessionClients
 
     --- What the Connectivity dialog above goes by: it opens on any vote to eject, and a vote
-    --- against a returning player shows on their row in this dialog instead.
+    --- against a returning player shows on their row in this dialog instead. The engine's list
+    --- is cached (/lua/ui/override/sessionclients.lua), and this dialog reads the votes from it,
+    --- so the list it hands on is a copy.
     function GetSessionClients()
         local clients = engineClients() or {}
-        for _, client in clients do
+        local copy = {}
+        for index, client in clients do
             if IsReturning(client) then
+                client = table.copy(client)
                 client.ejectedBy = {}
             end
+            copy[index] = client
         end
-        return clients
+        return copy
     end
 
     --- The rest of what opens the Connectivity dialog: see `Update` above.
@@ -271,6 +323,7 @@ do
             local stage = client.rejoinStage
             if stage == 'back' then
                 stages[index] = nil
+                returnStarts[index] = nil
                 if not announcedBack[index] then
                     announcedBack[index] = true
                     AnnounceBack(client)
@@ -288,6 +341,9 @@ do
                 end
                 if IsReturning(client) then
                     anyReturning = true
+                    returnStarts[index] = returnStarts[index] or GetSystemTimeSeconds()
+                else
+                    returnStarts[index] = nil
                 end
             end
         end

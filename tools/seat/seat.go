@@ -132,6 +132,12 @@ type Seat struct {
 	adapterC chan struct{}
 	once     sync.Once
 	contract *contractLink
+	bridge   *jarBridge
+
+	// Native mode: what the lobby server said about the peers, and whether the
+	// next game to connect is one coming back (native.go).
+	nativePeers     []gpgnet.Message
+	nativeReturning bool
 }
 
 // New validates cfg and opens the seat's GPGNet endpoint and lobby port.
@@ -155,6 +161,9 @@ func New(cfg Config, job *procs.Job, sink func(journal.Record)) (*Seat, error) {
 				s.once.Do(func() { close(s.adapterC) })
 			}
 			s.emit(journal.Record{Kind: journal.GpgConnect, UID: uid, Text: remote})
+			if cfg.Native != nil {
+				s.nativeOnConnected()
+			}
 		},
 		Message: s.onMessage,
 		Disconnected: func(err error) {
@@ -453,17 +462,27 @@ func (s *Seat) RejoinElsewhere(peers string, source int) error {
 //
 // keyOf, when above 0, starts it with that player's key instead of its own: the test
 // that a player who is not this seat's gets nothing.
-func (s *Seat) Rejoin(peers string, source, keyOf int) error {
+func (s *Seat) Rejoin(peers string, source, keyOf int, launcher bool) error {
 	c, uid := s.cfg, s.cfg.UID
 	dir := c.Dir
 	if dir == "" {
 		dir = filepath.Dir(c.Exe)
 	}
 	var args []string
-	base := c.GameArgs(0)
+	gpgPort := s.endpoint.Port()
+	if c.Contract != nil {
+		gpgPort = s.adapterPort
+		if s.bridge != nil {
+			gpgPort = s.bridge.ln.Addr().(*net.TCPAddr).Port
+		}
+	}
+	base := c.GameArgs(gpgPort)
 	for i := 0; i < len(base); i++ {
 		switch base[i] {
 		case "/gpgnet":
+			if launcher {
+				break
+			}
 			i++
 			continue
 		case "/log":
@@ -531,6 +550,7 @@ func (s *Seat) onMessage(m gpgnet.Message) {
 func (s *Seat) Send(m gpgnet.Message) error {
 	if s.cfg.Native != nil {
 		m = s.nativeOutgoing(m)
+		s.nativeRemember(m)
 	}
 	if s.cfg.Native == nil && (m.Command == "JoinGame" || m.Command == "ConnectToPeer") && len(m.Args) > 0 {
 		if addr, ok := m.Args[0].(string); ok {
@@ -559,6 +579,10 @@ func (s *Seat) Kill() {
 	s.mu.Unlock()
 	if game != nil {
 		game.Kill()
+	}
+	// A game's crash leaves an adapter that was asked to keep its session: that is what it is for.
+	if s.cfg.Contract != nil && s.cfg.Contract.KeepSession > 0 {
+		return
 	}
 	if adapter != nil {
 		adapter.Kill()

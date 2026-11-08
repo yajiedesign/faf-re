@@ -5,8 +5,12 @@
 -- in a client started with /rejoin. Before the map loads there is no other screen,
 -- while it loads this sits over the loading screen, and while the game so far runs
 -- it covers the game, so nobody watches it run at full speed.
+--
+-- FAF's Lua may carry these screens itself (issue #327); its uimain.lua then defines
+-- UpdateRejoinScreen and this block steps aside. Likewise Escape and the timeline. rawget on the
+-- module: FAF's Lua errors on reading a global that doesn't exist.
 
-do
+if not rawget(getfenv(1), 'UpdateRejoinScreen') then
     local UIUtil = import("/lua/ui/uiutil.lua")
     local LayoutHelpers = import("/lua/maui/layouthelpers.lua")
     local Bitmap = import("/lua/maui/bitmap.lua").Bitmap
@@ -72,15 +76,19 @@ do
     end
 
     local function StageText(stage, progress)
-        local percent = string.format("%d%%", math.floor(progress * 100))
+        -- No measure: the travelling block alone says it is under way.
+        local percent = ''
+        if progress >= 0 then
+            percent = string.format(": %d%%", math.floor(progress * 100))
+        end
         if stage == 'connecting' then
             return LOC("<LOC rejoin_0010>Reconnecting to the game")
         elseif stage == 'transfer' then
-            return LOC("<LOC rejoin_0011>Reconnecting: receiving the game so far") .. ': ' .. percent
+            return LOC("<LOC rejoin_0011>Reconnecting: receiving the game so far") .. percent
         elseif stage == 'loading' then
             return LOC("<LOC rejoin_0012>Rejoining the game: loading the map")
         end
-        return LOC("<LOC rejoin_0013>Rejoining the game: catching up") .. ': ' .. percent
+        return LOC("<LOC rejoin_0013>Rejoining the game: catching up") .. percent
     end
 
     --- `stage` is 'connecting', 'transfer', 'loading' or 'catchingUp', with `progress`
@@ -131,5 +139,14 @@ do
 
     function StartRejoinScreen()
         UpdateRejoinScreen('connecting', -1)
+    end
+end
+
+if not DiskGetFileInfo('/lua/ui/game/replay_timeline.lua') then
+    local OldEscapeHandler = EscapeHandler
+    function EscapeHandler()
+        if not import('/fafengine/modules/lua/ui/game/replay_timeline.lua').OnEscape() then
+            OldEscapeHandler()
+        end
     end
 end

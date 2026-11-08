@@ -869,7 +869,7 @@
 	{
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
+			const int integerKey = fa::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey) {
 				return luaH_getnum(t, integerKey);
 			}
@@ -895,7 +895,7 @@
 
 		if (key->tt == LUA_TNUMBER) {
 			const float numericKey = key->value.n;
-			const int integerKey = msvc8::TruncateToInt(numericKey); // the binary's cvttss2si
+			const int integerKey = fa::TruncateToInt(numericKey); // the binary's cvttss2si
 			if (static_cast<float>(integerKey) == numericKey && integerKey >= 1) {
 				const int zeroBased = integerKey - 1;
 				if ((zeroBased & 0xFF000000) == 0 && integerKey <= table->sizearray) {

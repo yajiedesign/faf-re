@@ -73,7 +73,7 @@ namespace
 
     const char* const expected = expectedType->GetName();
     const char* const actual = source.GetTypeName();
-    const msvc8::string message = gpg::STR_Printf(
+    const fa::string message = gpg::STR_Printf(
       "Error detected in archive: expected a pointer to an object of type \"%s\" but got an object of type \"%s\" "
       "instead",
       expected ? expected : "Sim",
@@ -204,7 +204,7 @@ namespace
  */
 unsigned int moho::FORMATION_GetNumScripts(LuaPlus::LuaState* const state, const EFormationType formationType)
 {
-  msvc8::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
+  fa::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
 
   LuaPlus::LuaObject module = SCR_ImportLuaModule(state, kFormationModulePath);
   if (module.IsNil()) {
@@ -238,7 +238,7 @@ const char* moho::FORMATION_GetScriptName(
     return nullptr;
   }
 
-  msvc8::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
+  fa::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
 
   LuaPlus::LuaObject module = SCR_ImportLuaModule(state, kFormationModulePath);
   if (module.IsNil()) {
@@ -272,7 +272,7 @@ int moho::FORMATION_GetScriptIndex(
   const EFormationType formationType
 )
 {
-  msvc8::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
+  fa::string bucketName{kFormationBuckets[ToFormationBucketIndex(formationType)]};
 
   LuaPlus::LuaObject module = SCR_ImportLuaModule(state, kFormationModulePath);
   if (module.IsNil()) {
@@ -494,6 +494,10 @@ moho::SFormationScriptResult moho::FORMATION_RunScript(
   scriptFunc.PushStack(state);
   unitTable.PushStack(state);
   if (LuaCallProtected(rawState, 1, 1) != 0) {
+    // MY1-KEEP: upstream does not have this. If this hunk conflicts, check whether
+    // upstream has since adopted an equivalent fix; if yes drop ours, if no keep ours
+    // and tell the user.
+
     // Non-throwing read: a failed luaD_call can leave a non-string on the slot
     // (the overflow guard throws lua_ErrorError without pushing a message), and
     // GetString would raise from inside this error path.

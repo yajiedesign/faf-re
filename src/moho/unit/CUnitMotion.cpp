@@ -1,4 +1,5 @@
 #include "moho/unit/CUnitMotion.h"
+#include "moho/misc/EconomyRequestRelease.h"
 #include "moho/sim/SimArchiveMode.h"
 #include "legacy/math/X87Math.h"
 
@@ -106,7 +107,7 @@ namespace moho
   [[nodiscard]] float RandomInRange(moho::CMersenneTwister& twister, const float lower, const float upper) noexcept
   {
     constexpr float kInvTwoTo32 = 2.3283064365386963e-10f; // 0x2F800000 at 0x00E4F7B0
-    return lower + msvc8::MulTwisterWord(upper - lower, twister.NextUInt32()) * kInvTwoTo32;
+    return lower + fa::MulTwisterWord(upper - lower, twister.NextUInt32()) * kInvTwoTo32;
   }
 
   // Water surface used on maps that have no water at all: far enough below any
@@ -531,14 +532,6 @@ namespace moho
       return elevation;
     }
 
-    [[nodiscard]] gpg::RRef MakeCUnitMotionRef(CUnitMotion* const value) noexcept
-    {
-      gpg::RRef out{};
-      out.mObj = value;
-      out.mType = CUnitMotion::StaticGetClass();
-      return out;
-    }
-
     template <class TObject>
     [[nodiscard]] gpg::RType* ResolveCachedType()
     {
@@ -570,7 +563,7 @@ namespace moho
       const char* const expectedName =
         ResolveCachedType<TObject>() ? ResolveCachedType<TObject>()->GetName() : fallbackName;
       const char* const actualName = tracked.type ? tracked.type->GetName() : "null";
-      const msvc8::string message = gpg::STR_Printf(
+      const fa::string message = gpg::STR_Printf(
         "Error detected in archive: expected a pointer to an object of type \"%s\" but got an object of type \"%s\" "
         "instead",
         expectedName ? expectedName : fallbackName,
@@ -661,17 +654,6 @@ namespace moho
       return event == UMVE_Bottom || event == UMVE_Hover;
     }
 
-    void DestroyEconomyRequestPointer(CEconRequest*& request) noexcept
-    {
-      if (!request) {
-        return;
-      }
-
-      request->mNode.ListUnlink();
-      delete request;
-      request = nullptr;
-    }
-
     void ReplaceEconomyRequestPointer(CEconRequest*& request, CEconRequest* const replacement) noexcept
     {
       DestroyEconomyRequestPointer(request);
@@ -689,16 +671,6 @@ namespace moho
         request->mNode.ListLinkBefore(&economy->registrationNode);
       }
       return request;
-    }
-
-    [[nodiscard]] SEconValue TakeGrantedResourcesAndReset(CEconRequest* const request) noexcept
-    {
-      SEconValue out{};
-      out.energy = request->mGranted.energy;
-      out.mass = request->mGranted.mass;
-      request->mGranted.energy = 0.0f;
-      request->mGranted.mass = 0.0f;
-      return out;
     }
 
     void ClearMaintenanceCost(Unit* const unit) noexcept
@@ -2176,8 +2148,8 @@ namespace moho
         const SFootprint& footprint = unit->GetFootprint();
         SOCellPos cellPos{};
         // 0x006C09EB / 0x006C0A11: `fld; fistp` -- rounded, then the low word.
-        cellPos.x = static_cast<std::int16_t>(msvc8::RoundToInt(currentPos.x - (footprint.mSizeX * kFootprintHalfExtentScale)));
-        cellPos.z = static_cast<std::int16_t>(msvc8::RoundToInt(currentPos.z - (footprint.mSizeZ * kFootprintHalfExtentScale)));
+        cellPos.x = static_cast<std::int16_t>(fa::RoundToInt(currentPos.x - (footprint.mSizeX * kFootprintHalfExtentScale)));
+        cellPos.z = static_cast<std::int16_t>(fa::RoundToInt(currentPos.z - (footprint.mSizeZ * kFootprintHalfExtentScale)));
 
         COGrid* const oGrid = unit->SimulationRef->mOGrid;
         EOccupancyCaps mobileCaps = OCCUPY_MobileCheck(footprint, *mapData, cellPos);
@@ -2563,7 +2535,7 @@ namespace moho
     // 0x006C336C..0x006C3380: `fld phase; fmul pi; fsin; fmul base; fst` --
     // neither `phase * pi` nor the sine is stored, so only the product rounds
     // to float (a denormal phase keeps its argument; difffuzz).
-    const float curveDiveSpeed = msvc8::SinOfProductTimes(depthPhase, kPi, baseDiveSpeed);
+    const float curveDiveSpeed = fa::SinOfProductTimes(depthPhase, kPi, baseDiveSpeed);
     // 0x006C3384..0x006C338F: `comiss min, curve; ja` keeps the minimum only
     // when it is strictly greater, so a NaN curve speed is taken.
     mDivingSpeed = (minDiveSpeed > curveDiveSpeed) ? minDiveSpeed : curveDiveSpeed;
@@ -2750,7 +2722,7 @@ namespace moho
         const Wm3::Quaternionf& orientation = unit->mVarDat.mCurTransform.orient_;
         const float headingY = ((orientation.z * orientation.x) + (orientation.w * orientation.y)) * 2.0f;
         const float headingX = 1.0f - (((orientation.y * orientation.y) + (orientation.x * orientation.x)) * 2.0f);
-        const float headingDelta = NormalizeAngleSignedRadians(msvc8::Atan2Difference(
+        const float headingDelta = NormalizeAngleSignedRadians(fa::Atan2Difference(
           targetPosition.x - unitPosition.x, targetPosition.z - unitPosition.z, headingY, headingX
         ));
         const Wm3::Vector3f forward = moho::QuatForwardAxis(unit->GetTransform().orient_);
@@ -3147,7 +3119,7 @@ namespace moho
 
     // 0x006BDB12 spills the first angle; 0x006BDB2A subtracts the second
     // while it still has x87 precision, before the delta is stored as float.
-    float turnDelta = msvc8::Atan2Difference(
+    float turnDelta = fa::Atan2Difference(
       selectedPlanarVector.x, selectedPlanarVector.z, referenceVector.x, referenceVector.z
     );
     if (turnDelta <= 3.1415927f) {
@@ -3176,10 +3148,10 @@ namespace moho
     // literals: 0x006BDBE7 forms them as `sin * 0.0f`, so they carry the sign
     // of the sine (-0.0f for a turn to the other side).
     const float halfTurnAngle = (turnDelta * 10.0f) * 0.5f;
-    const float sinHalfTurn = msvc8::sin(halfTurnAngle);
+    const float sinHalfTurn = fa::sin(halfTurnAngle);
     const float signedZeroLane = sinHalfTurn * 0.0f;
     const Wm3::Quaternionf turnQuaternion{
-      msvc8::cos(halfTurnAngle),
+      fa::cos(halfTurnAngle),
       signedZeroLane,
       sinHalfTurn,
       signedZeroLane,
@@ -3376,8 +3348,8 @@ namespace moho
     // 0x006BE340..0x006BE352 rounds the circling point to an integer
     // height sample in both water modes. The dry-flight path calls the
     // map's water-clamped integer sampler (0x006BE3AF -> 0x006BC400).
-    const std::int32_t sampleX = msvc8::RoundToInt(aimX);
-    const std::int32_t sampleZ = msvc8::RoundToInt(aimZ);
+    const std::int32_t sampleX = fa::RoundToInt(aimX);
+    const std::int32_t sampleZ = fa::RoundToInt(aimZ);
     float terrainElevation;
     if (air.FlyInWater) {
       STIMap* const mapData = sim->mMapData;
@@ -3642,8 +3614,8 @@ namespace moho
     const auto rollBreakOff = [&]() {
       mCombatState = ACS_BreakOff;
       // 0x006BD235..0x006BD27C: inline ceil, then cvttss2si.
-      const auto minTicks = msvc8::CeilToIntX87((breakOffDist / maxAirSpeed) * 10.0f);
-      const auto maxTicks = msvc8::TruncateToInt(static_cast<float>(minTicks) * air.RandomBreakOffDistanceMult);
+      const auto minTicks = fa::CeilToIntX87((breakOffDist / maxAirSpeed) * 10.0f);
+      const auto maxTicks = fa::TruncateToInt(static_cast<float>(minTicks) * air.RandomBreakOffDistanceMult);
       mCombatStateTimeoutTick = curTick + static_cast<std::uint32_t>(RandomUniformIntRange(minTicks, maxTicks, randomStream));
     };
 
@@ -3686,7 +3658,7 @@ namespace moho
         }
 
         if (!triggerBreakOff) {
-          const auto sustainedTurnThresholdTicks = msvc8::FloorToIntX87(air.SustainedTurnThreshold * 10.0f); // 0x006BD1A0..0x006BD1C4
+          const auto sustainedTurnThresholdTicks = fa::FloorToIntX87(air.SustainedTurnThreshold * 10.0f); // 0x006BD1A0..0x006BD1C4
           if (mSustainedTurnTicks > sustainedTurnThresholdTicks) {
             triggerBreakOff = true;
           }

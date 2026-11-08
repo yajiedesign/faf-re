@@ -212,6 +212,10 @@ inline moho::Sim* lua_getglobaluserdata_typed(lua_State* state)
 #ifdef __cplusplus
 extern "C"
 {
+// MY1-KEEP: upstream does not have this. If this hunk conflicts, check whether
+// upstream has since adopted an equivalent fix; if yes drop ours, if no keep ours
+// and tell the user.
+
 // noexcept(false) is load-bearing, for the same reason luaM_realloc carries it
 // (see LuaObject.cpp). ExceptionHandling=Sync expands to /EHsc, which implies
 // /EHc: MSVC then assumes an extern "C" function cannot throw. The optimizer

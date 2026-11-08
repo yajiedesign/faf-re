@@ -7,9 +7,12 @@
 
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/Device.hpp"
+#include "gpg/gal/DeviceContext.hpp"
+#include "moho/console/CConCommand.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DVertexSheet.h"
 #include "moho/render/ScreenQuadVertexSheet.h"
+#include "moho/render/ShadowStableFit.h"
 #include "moho/render/d3d/CD3DDepthStencil.h"
 #include "moho/render/d3d/CD3DDevice.h"
 #include "moho/render/d3d/CD3DRenderTarget.h"
@@ -28,18 +31,6 @@ namespace gpg::gal
 }
 #include "gpg/gal/backends/d3d9/RenderTargetD3D9.hpp"
 
-// Declared the way gpg/gal/Matrix.cpp declares its D3DX entry points, rather
-// than pulling in the D3DX headers - moho::VMatrix4 is layout-identical to
-// D3DXMATRIX and Wm3::Vector3f to D3DXVECTOR3.
-extern "C"
-{
-  moho::VMatrix4* WINAPI D3DXMatrixLookAtRH(
-    moho::VMatrix4* outMatrix,
-    const Wm3::Vector3f* eye,
-    const Wm3::Vector3f* target,
-    const Wm3::Vector3f* up
-  );
-}
 #include <algorithm>
 #include <cmath>
 #include "moho/render/d3d/CD3DVertexSheet.h"
@@ -99,13 +90,52 @@ namespace moho
   // map and terrain null checks.
   [[nodiscard]] IWldTerrainRes* REN_GetTerrainRes();
 
+  namespace
+  {
+    /**
+     * Engine addition: `ren_ShadowStable`. 1 fits the shadow map so its texels stay on the same
+     * world positions while the camera pans, which stops shadow edges crawling (ShadowStableFit.h).
+     * 0 is the binary's fit. -1 (the default) is 1 on every renderer but Direct3D 9, which keeps the
+     * original look.
+     */
+    int ren_ShadowStable = -1;
+
+    TConVar<int> gTConVar_ren_ShadowStable(
+      "ren_ShadowStable",
+      "Keep shadow texels on the same world positions while the camera pans: 1 on, 0 the original "
+      "fit, -1 on except on Direct3D 9.",
+      &ren_ShadowStable
+    );
+
+    /** Direct3D 9 keeps the sizes FAF's options slider had before it reached 4096. */
+    constexpr int kShadowSizeLimitD3D9 = 2048;
+
+    // The box lengths the stable fit used last frame, per axis. Shadow's layout is the binary's,
+    // and the render thread alone reads these; two world views only cost each other the hold.
+    float sShadowStableWidth = 0.0f;
+    float sShadowStableHeight = 0.0f;
+
+    [[nodiscard]] bool RenderingOnD3D9()
+    {
+      gpg::gal::Device* const device = gpg::gal::Device::GetInstance();
+      const gpg::gal::DeviceContext* const context = device != nullptr ? device->GetDeviceContext() : nullptr;
+      return context == nullptr || context->mDeviceType == gpg::gal::DeviceApi::Direct3D9;
+    }
+
+    [[nodiscard]] bool ShadowStableFitEnabled()
+    {
+      return ren_ShadowStable > 0 || (ren_ShadowStable < 0 && !RenderingOnD3D9());
+    }
+  } // namespace
+
   /**
    * Address: 0x009407D0 (FUN_009407D0, sub_9407D0)
    *
    * What it does:
-   * Builds a right-handed look-at matrix. A thin forward to D3DX that the
-   * binary keeps as its own symbol, so it is recovered under its own name
-   * rather than inlined at the call site.
+   * Builds a right-handed look-at matrix. The binary forwards to D3DXMatrixLookAtRH.
+   * Engine change (issue #317): computed here with D3DX's formula, so the client needs
+   * D3DX9 only for the Direct3D 9 renderer. Against d3dx9_43 over 10^6 random inputs it
+   * differs by at most 8.7e-6 of each term's scale (tmp/claude/half/lookat.cpp, 2026-11-06).
    */
   gpg::gal::Matrix* MatrixLookAtRH(
     gpg::gal::Matrix* const outMatrix,
@@ -114,7 +144,25 @@ namespace moho
     const Wm3::Vector3f* const up
   )
   {
-    return ::D3DXMatrixLookAtRH(outMatrix, eye, target, up);
+    Wm3::Vector3f zAxis{eye->x - target->x, eye->y - target->y, eye->z - target->z};
+    const float zScale = 1.0f / std::sqrt(zAxis.x * zAxis.x + zAxis.y * zAxis.y + zAxis.z * zAxis.z);
+    zAxis = {zAxis.x * zScale, zAxis.y * zScale, zAxis.z * zScale};
+
+    Wm3::Vector3f xAxis{up->y * zAxis.z - up->z * zAxis.y, up->z * zAxis.x - up->x * zAxis.z,
+                        up->x * zAxis.y - up->y * zAxis.x};
+    const float xScale = 1.0f / std::sqrt(xAxis.x * xAxis.x + xAxis.y * xAxis.y + xAxis.z * xAxis.z);
+    xAxis = {xAxis.x * xScale, xAxis.y * xScale, xAxis.z * xScale};
+
+    const Wm3::Vector3f yAxis{zAxis.y * xAxis.z - zAxis.z * xAxis.y, zAxis.z * xAxis.x - zAxis.x * xAxis.z,
+                              zAxis.x * xAxis.y - zAxis.y * xAxis.x};
+
+    outMatrix->r[0] = {xAxis.x, yAxis.x, zAxis.x, 0.0f};
+    outMatrix->r[1] = {xAxis.y, yAxis.y, zAxis.y, 0.0f};
+    outMatrix->r[2] = {xAxis.z, yAxis.z, zAxis.z, 0.0f};
+    outMatrix->r[3] = {-(xAxis.x * eye->x + xAxis.y * eye->y + xAxis.z * eye->z),
+                       -(yAxis.x * eye->x + yAxis.y * eye->y + yAxis.z * eye->z),
+                       -(zAxis.x * eye->x + zAxis.y * eye->y + zAxis.z * eye->z), 1.0f};
+    return outMatrix;
   }
 
   /**
@@ -225,7 +273,7 @@ namespace moho
   {
     // Both tuning values are sampled before the reset below, which zeroes the
     // cached copies.
-    const int shadowSize = ren_ShadowSize;
+    const int shadowSize = RenderingOnD3D9() ? std::min(ren_ShadowSize, kShadowSizeLimitD3D9) : ren_ShadowSize;
     const bool shadowBlur = ren_ShadowBlur;
 
     (void)ReleaseRenderResources();
@@ -377,15 +425,23 @@ namespace moho
     // Lift the top so casters standing above the terrain still fit.
     volume.Max.Y() = volume.Max.Y() + 8.0f;
 
-    const Wm3::Vector3f center(
-      (volume.Min.X() + volume.Max.X()) * 0.5f,
-      (volume.Min.Y() + volume.Max.Y()) * 0.5f,
-      (volume.Min.Z() + volume.Max.Z()) * 0.5f
-    );
+    // Engine addition: the stable fit looks at the world origin rather than the view centre, from
+    // far enough back that the largest map stays in front of the eye. The camera's forward axis
+    // sets the light's up axis above, and panning doesn't change it, so a pan leaves this light
+    // space where it is. Zooming or turning the camera re-fits it, as the original always does.
+    const bool stableFit = ShadowStableFitEnabled();
+    const Wm3::Vector3f center = stableFit
+      ? Wm3::Vector3f(0.0f, 0.0f, 0.0f)
+      : Wm3::Vector3f(
+          (volume.Min.X() + volume.Max.X()) * 0.5f,
+          (volume.Min.Y() + volume.Max.Y()) * 0.5f,
+          (volume.Min.Z() + volume.Max.Z()) * 0.5f
+        );
+    const float eyeDistance = stableFit ? 20000.0f : 10000.0f;
     const Wm3::Vector3f eye(
-      center.X() - (lightDirection.X() * 10000.0f),
-      center.Y() - (lightDirection.Y() * 10000.0f),
-      center.Z() - (lightDirection.Z() * 10000.0f)
+      center.X() - (lightDirection.X() * eyeDistance),
+      center.Y() - (lightDirection.Y() * eyeDistance),
+      center.Z() - (lightDirection.Z() * eyeDistance)
     );
 
     gpg::gal::Matrix lightView{};
@@ -400,17 +456,25 @@ namespace moho
     const float nearDepth = std::min(nearMagnitude, farMagnitude) - 25.0f;
     const float farDepth = std::max(nearMagnitude, farMagnitude);
 
+    ShadowStableBox box{
+      lightSpaceVolume.Min.X(),
+      lightSpaceVolume.Max.X(),
+      lightSpaceVolume.Min.Y(),
+      lightSpaceVolume.Max.Y(),
+    };
+    if (stableFit) {
+      box = FitShadowStableBox(box.minX, box.maxX, box.minY, box.maxY, mShadowSize, sShadowStableWidth, sShadowStableHeight);
+    }
+
     // Orthographic projection fitted to the light-space volume, built by
     // hand rather than through a helper - the binary writes these seven
     // elements and zeroes the rest.
     gpg::gal::Matrix lightProjection{};
-    lightProjection.r[0].x = 2.0f / (lightSpaceVolume.Max.X() - lightSpaceVolume.Min.X());
-    lightProjection.r[1].y = 2.0f / (lightSpaceVolume.Max.Y() - lightSpaceVolume.Min.Y());
+    lightProjection.r[0].x = 2.0f / (box.maxX - box.minX);
+    lightProjection.r[1].y = 2.0f / (box.maxY - box.minY);
     lightProjection.r[2].z = 1.0f / (nearDepth - farDepth);
-    lightProjection.r[3].x = (lightSpaceVolume.Max.X() + lightSpaceVolume.Min.X())
-      / (lightSpaceVolume.Min.X() - lightSpaceVolume.Max.X());
-    lightProjection.r[3].y = (lightSpaceVolume.Min.Y() + lightSpaceVolume.Max.Y())
-      / (lightSpaceVolume.Min.Y() - lightSpaceVolume.Max.Y());
+    lightProjection.r[3].x = (box.maxX + box.minX) / (box.minX - box.maxX);
+    lightProjection.r[3].y = (box.minY + box.maxY) / (box.minY - box.maxY);
     lightProjection.r[3].z = lightProjection.r[2].z * nearDepth;
     lightProjection.r[3].w = 1.0f;
 
@@ -497,6 +561,7 @@ namespace moho
     device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
     bindTargetWithBorder(mShadowMap);
 
+    terrain->DrawTerrainDepth(mCamera);
 
     MeshRenderer* const meshRenderer = MeshRenderer::GetInstance();
     meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);

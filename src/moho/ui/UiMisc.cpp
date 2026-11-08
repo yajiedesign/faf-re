@@ -192,7 +192,7 @@ namespace
   // changes.
   POINT sMouseScrubLanded{};
 
-  msvc8::vector<moho::WeakPtr<moho::CMauiControl>> sInputCapture;
+  fa::vector<moho::WeakPtr<moho::CMauiControl>> sInputCapture;
 namespace
 {
 
@@ -203,7 +203,7 @@ namespace
    * Returns the process-global input-capture vector storage, ignoring one
    * stdcall argument lane.
    */
-  [[nodiscard]] msvc8::vector<moho::WeakPtr<moho::CMauiControl>>* ResolveInputCaptureStorageWithArg(
+  [[nodiscard]] fa::vector<moho::WeakPtr<moho::CMauiControl>>* ResolveInputCaptureStorageWithArg(
     const std::int32_t /*ignoredArg*/
   ) noexcept
   {
@@ -216,7 +216,7 @@ namespace
    * What it does:
    * Returns the process-global input-capture vector storage.
    */
-  [[maybe_unused]] [[nodiscard]] msvc8::vector<moho::WeakPtr<moho::CMauiControl>>* ResolveInputCaptureStorage() noexcept
+  [[maybe_unused]] [[nodiscard]] fa::vector<moho::WeakPtr<moho::CMauiControl>>* ResolveInputCaptureStorage() noexcept
   {
     return ResolveInputCaptureStorageWithArg(0);
   }
@@ -270,8 +270,8 @@ namespace
    * character from `characterSet`.
    */
   [[maybe_unused, nodiscard]] std::size_t FindFirstOfCharacterSet(
-    const msvc8::string& text,
-    const msvc8::string& characterSet,
+    const fa::string& text,
+    const fa::string& characterSet,
     const std::size_t startPos
   ) noexcept
   {
@@ -859,11 +859,11 @@ int moho::cfunc_CMauiBitMapGetNumFramesL(
 }
 
 /**
- * Address: 0x00855040 (FUN_00855040, msvc8::vector<boost::shared_ptr<MeshInstance>>::push_back)
+ * Address: 0x00855040 (FUN_00855040, fa::vector<boost::shared_ptr<MeshInstance>>::push_back)
  *
  * What it does:
  * Per-T canonical-template-helper binding for the engine-instantiated
- * `msvc8::vector<boost::shared_ptr<MeshInstance>>::push_back(const&)`
+ * `fa::vector<boost::shared_ptr<MeshInstance>>::push_back(const&)`
  * fast/slow-path body (8-byte element stride: shared_ptr `(px, pi)` pair).
  *
  * Wires `AppendBuildPreviewMesh` from the inline
@@ -872,7 +872,7 @@ int moho::cfunc_CMauiBitMapGetNumFramesL(
  * when the modern compiler would inline the natural push_back call.
  */
 void moho::PushBackMeshInstanceSharedPtrVector(
-  msvc8::vector<boost::shared_ptr<moho::MeshInstance>>& destination,
+  fa::vector<boost::shared_ptr<moho::MeshInstance>>& destination,
   const boost::shared_ptr<moho::MeshInstance>& value
 )
 {
@@ -1279,7 +1279,7 @@ namespace moho
    * window's two topmost pushed event handlers - the frame's
    * CMauiWxEventMapper and the CUIKeyHandler behind it.
    *
-   * The saved-handler storage is a real `msvc8::vector<msvc8::vector<
+   * The saved-handler storage is a real `fa::vector<fa::vector<
    * wxEvtHandler*>>` (one dynamically-grown inner vector per window),
    * not a fixed 2-slot pair -- the raw decompile shows a capacity-checked
    * append-or-grow sequence per `PopEventHandler()` result
@@ -1288,7 +1288,7 @@ namespace moho
    * `resize()`-d to `mInputWindows.size()` up front (`FUN_0084E8A0`),
    * growing/shrinking through `FUN_0084EE20`/`FUN_0084EDB0`; the "move
    * existing 16-byte inner-vector elements into the new buffer" step
-   * (`FUN_0084F820`/`FUN_0084F8A0`) calls `msvc8::vector<wxEvtHandler*>::
+   * (`FUN_0084F820`/`FUN_0084F8A0`) calls `fa::vector<wxEvtHandler*>::
    * operator=` per element, cited as `FUN_0084FF80` on that template
    * member in `Vector.h`. (`FUN_0084E8A0`/`FUN_0084EE20`/`FUN_0084EDB0`/
    * `FUN_0084F8A0` are not yet independently address-annotated -- their
@@ -1310,7 +1310,7 @@ namespace moho
    */
   void SuspendInputWindowEventHandlersAndFlushQueue()
   {
-    msvc8::vector<msvc8::vector<wxEvtHandler*>> suspended;
+    fa::vector<fa::vector<wxEvtHandler*>> suspended;
     suspended.resize(g_UIManager->mInputWindows.size());
 
     std::size_t index = 0;
@@ -1822,7 +1822,7 @@ namespace
    * Element count of one 0x30-stride queue lane, short-circuiting to zero when
    * `_Myfirst` is null instead of dividing a null-based difference.
    */
-  [[nodiscard]] std::uint32_t FactoryQueueItemCount(
+  [[maybe_unused]] [[nodiscard]] std::uint32_t FactoryQueueItemCount(
     const FactoryQueueItem* const begin,
     const FactoryQueueItem* const end
   ) noexcept
@@ -1851,7 +1851,7 @@ void moho::CurrentBuildQueueItemCommands(
     return;
   }
 
-  const msvc8::vector<moho::CmdId>& commands = currentLanes[static_cast<std::size_t>(itemIndex)].commands;
+  const fa::vector<moho::CmdId>& commands = currentLanes[static_cast<std::size_t>(itemIndex)].commands;
   *outBegin = commands.begin();
   *outEnd = commands.end();
 }
@@ -1939,7 +1939,7 @@ void moho::func_AddSelectionBracketUserUnit(
   (void)sSelectionBrackets.Add(unit);
 }
 
-  msvc8::list<SCommandFeedbackBlip> sCommandFeedbackBlips;
+  fa::list<SCommandFeedbackBlip> sCommandFeedbackBlips;
 namespace
 {
 
@@ -1972,7 +1972,7 @@ void moho::RemoveCommandFeedbackBlips(
 {
   (void)unused;
 
-  for (msvc8::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin();
+  for (fa::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin();
        it != sCommandFeedbackBlips.end();) {
     if (it->mCurTime < it->mDuration) {
       ++it;
@@ -1996,7 +1996,7 @@ void moho::UI_UpdateCommandFeedbackBlips(
 {
   (void)moho::MeshRenderer::GetInstance();
 
-  for (msvc8::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin();
+  for (fa::list<SCommandFeedbackBlip>::iterator it = sCommandFeedbackBlips.begin();
        it != sCommandFeedbackBlips.end();
        ++it) {
     SCommandFeedbackBlip& blip = *it;
@@ -2019,7 +2019,7 @@ END_EVENT_TABLE()
 
 namespace moho
 {
-  msvc8::string in_keyNames[256]{};
+  fa::string in_keyNames[256]{};
 } // namespace moho
 
 /**
@@ -2125,7 +2125,7 @@ namespace
    * What it does:
    * Returns the global command-feedback blip-list lane.
    */
-  [[maybe_unused]] [[nodiscard]] msvc8::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneA(
+  [[maybe_unused]] [[nodiscard]] fa::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneA(
     const int /*unused*/
   ) noexcept
   {
@@ -2138,7 +2138,7 @@ namespace
    * What it does:
    * Secondary entrypoint returning the command-feedback blip-list lane.
    */
-  [[maybe_unused]] [[nodiscard]] msvc8::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneB(
+  [[maybe_unused]] [[nodiscard]] fa::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneB(
     const int /*unused*/
   ) noexcept
   {
@@ -2151,7 +2151,7 @@ namespace
    * What it does:
    * Third entrypoint returning the command-feedback blip-list lane.
    */
-  [[maybe_unused]] [[nodiscard]] msvc8::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneC(
+  [[maybe_unused]] [[nodiscard]] fa::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneC(
     const int /*unused*/
   ) noexcept
   {
@@ -2164,7 +2164,7 @@ namespace
    * What it does:
    * Fourth entrypoint returning the command-feedback blip-list lane.
    */
-  [[maybe_unused]] [[nodiscard]] msvc8::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneD() noexcept
+  [[maybe_unused]] [[nodiscard]] fa::list<SCommandFeedbackBlip>* GetCommandFeedbackBlipsLaneD() noexcept
   {
     return &sCommandFeedbackBlips;
   }
@@ -2978,6 +2978,9 @@ namespace
       (void)::moho::func_CMauiTextSetCenteredVertically_LuaFuncDef();
       (void)::moho::func_CMauiTextGetStringAdvance_LuaFuncDef();
       (void)::moho::func_CMauiTextSetNewClipToWidth_LuaFuncDef();
+      (void)::moho::func_CMauiTextSetTextScale_LuaFuncDef();
+      (void)::moho::func_CMauiTextGetTextScale_LuaFuncDef();
+      (void)::moho::func_LoadFont_LuaFuncDef();
       (void)::moho::func_SetFrontEndData_LuaFuncDef();
       (void)::moho::func_GetFrontEndData_LuaFuncDef();
       (void)::moho::func_GetCursor_LuaFuncDef();
@@ -3282,7 +3285,7 @@ moho::CMauiHistogram::~CMauiHistogram() = default;
  *
  * What it does:
  * Tears down the provider in reverse construction order. The member
- * `mPrefetchData` (an `msvc8::vector<boost::shared_ptr<PrefetchData>>`) is
+ * `mPrefetchData` (an `fa::vector<boost::shared_ptr<PrefetchData>>`) is
  * destroyed first — its inlined destructor releases each cached shared handle
  * (refcount drop + weak-dispose through the boost detail vtable) and frees the
  * element buffer, matching `sub_4A89A0` + `operator delete` in the binary.

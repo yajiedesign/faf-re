@@ -76,6 +76,10 @@ namespace gpg::diag
 
   namespace
   {
+    // MY1-KEEP: upstream does not have this. If this hunk conflicts, check whether
+    // upstream has since adopted an equivalent fix; if yes drop ours, if no keep ours
+    // and tell the user.
+
     // One append handle for the process, opened lazily.
     //
     // DiagLine used to fopen/fclose per line, and that malloc inside a crash
@@ -266,7 +270,7 @@ namespace gpg::diag
   namespace
   {
 
-    int CrtReportToDiagLog(const int reportType, char* const message, int* const returnValue)
+    [[maybe_unused]] int CrtReportToDiagLog(const int reportType, char* const message, int* const returnValue)
     {
       static const char* const kKind[] = {"WARN", "ERROR", "ASSERT"};
       const char* const kind =
@@ -453,7 +457,7 @@ namespace gpg::diag
         }
       }
 
-      int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
+      [[maybe_unused]] int flags = _CrtSetDbgFlag(_CRTDBG_REPORT_FLAG);
       flags |= _CRTDBG_ALLOC_MEM_DF | checkFlag;
       (void)_CrtSetDbgFlag(flags);
       DiagLine("[CRTDIAG] /heapcheck on: validating the heap %s", checkName);

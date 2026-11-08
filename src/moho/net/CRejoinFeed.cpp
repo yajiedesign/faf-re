@@ -49,6 +49,7 @@
 #include "moho/sim/SimDriver.h"
 #include "moho/sim/SimKeyframe.h"
 #include "moho/sim/WldSessionInfo.h"
+#include "netlink/EngineLinks.h"
 
 using namespace moho;
 
@@ -147,6 +148,7 @@ CRejoinFeed::CRejoinFeed(
   mHeldIncoming.resize(clientCount);
   mPeerDispatched.resize(clientCount, -1);
   mPeerQueued.resize(clientCount);
+  mPeerStreamDispatched.resize(clientCount);
   mBacklog.resize(clientCount);
   if (mLive) {
     for (auto& fromPeer : mBacklog) {
@@ -374,8 +376,19 @@ void CRejoinFeed::NotePeerReport(const CNetClient& peer, CMessage& msg)
   for (std::int32_t& beat : queued) {
     reader.ReadExact(beat);
   }
+  // Issue #275: each client's stream position at that peer, after the queued beats.
+  // An older build ends the report before it.
+  std::vector<std::int32_t> streamDispatched;
+  const std::size_t withPositions = 1u + sizeof(std::int32_t) * (1u + 2u * queued.size());
+  if (static_cast<std::size_t>(msg.GetMessageSize()) >= withPositions) {
+    streamDispatched.resize(queued.size(), 0);
+    for (std::int32_t& beat : streamDispatched) {
+      reader.ReadExact(beat);
+    }
+  }
   mPeerDispatched[peerIndex] = dispatched;
   mPeerQueued[peerIndex] = queued;
+  mPeerStreamDispatched[peerIndex] = std::move(streamDispatched);
   ++mPeersReported;
 
   int peers = 0;
@@ -448,14 +461,39 @@ void CRejoinFeed::FinishCatchUp()
   const std::int32_t merged = mMergedBeat;
   std::vector<std::int32_t> ownCopyEnd(mManager.mClients.size(), -1);
 
+  // Issue #275: where a peer's copy of a client's stream starts. A multi-beat Advance
+  // can leave the stream past the peer's dispatched beat; an older build doesn't say.
+  const auto copyStart = [this](const std::size_t peer, const std::size_t index, const std::int32_t otherwise) {
+    const std::vector<std::int32_t>& positions = mPeerStreamDispatched[peer];
+    return index < positions.size() ? positions[index] : otherwise;
+  };
+
   for (CClientBase* const client : mManager.mClients) {
     const auto index = static_cast<std::size_t>(client->GetIndex());
     // The recording peer's copy holds whole beats, and this client's own only
     // as far as every peer does. A live peer's own copy then goes on from there,
     // with the orders it has not ended a beat for.
-    QueueBacklog(*client, *mBacklog[recordingPeer][index], merged, merged, client == mLocal ? mHandoverBeat : kNoStop);
+    const std::int32_t start = copyStart(recordingPeer, index, merged);
+    const std::int32_t stopAt = client == mLocal ? mHandoverBeat : kNoStop;
+    if (start > merged) {
+      // Beats the recording peer's copy no longer holds: consumed whole by a multi-beat
+      // Advance. Their orders came before it and are in the recording, so they are empty here.
+      const std::int32_t empty = std::min(start, stopAt) - static_cast<std::int32_t>(client->mQueuedBeat);
+      if (empty > 0) {
+        CMessage advance{ECmdStreamOp::CMDST_Advance};
+        CMessageStream stream(advance);
+        stream.Write(empty);
+        client->CClientBase::Process(advance);
+        NoteAcks(client->GetIndex(), static_cast<std::int32_t>(client->mQueuedBeat));
+        gpg::Logf(
+          "REJOIN: client %d's stream was at beat %d past the recording's %d: %d empty beats", client->GetIndex(), start, merged, empty
+        );
+      }
+    }
+    QueueBacklog(*client, *mBacklog[recordingPeer][index], start, merged, stopAt);
     if (client != mLocal && index != recordingPeer && dynamic_cast<CNetClient*>(client) != nullptr) {
-      ownCopyEnd[index] = QueueBacklog(*client, *mBacklog[index][index], mPeerDispatched[index], recordingQueued[index], kNoStop);
+      ownCopyEnd[index] =
+        QueueBacklog(*client, *mBacklog[index][index], copyStart(index, index, mPeerDispatched[index]), recordingQueued[index], kNoStop);
     }
   }
 
@@ -799,6 +837,7 @@ namespace
   public:
     void ReceiveMessage(CMessage* const message, CMessageDispatcher* const) override
     {
+      mHeard = true;
       if (IsPeerMessage(*message, EPeerMessageKind::RejoinBacklog) &&
           (BacklogIndex(*message) == kRecordingBacklog || BacklogIndex(*message) == kKeyframeBacklog)) {
         const auto* const payload = message->mBuff.start_ + 5;
@@ -856,6 +895,7 @@ namespace
     [[nodiscard]] bool Reported() const { return mReported; }
     [[nodiscard]] bool Refused() const { return mRefused; }
     [[nodiscard]] ERejoinRefusal Refusal() const { return mRefusal; }
+    [[nodiscard]] bool Heard() const { return mHeard; }
     [[nodiscard]] const std::vector<char>& Recording() const { return mRecording; }
     [[nodiscard]] std::vector<CMessage>& Held() { return mHeld; }
 
@@ -866,6 +906,7 @@ namespace
     std::int32_t mRecordingSize{0};
     bool mReported{false};
     bool mRefused{false};
+    bool mHeard{false};
     ERejoinRefusal mRefusal{ERejoinRefusal::Key};
     INetConnection* mLink{nullptr};
     int mLocalSource{-1};
@@ -1229,6 +1270,11 @@ namespace
     infoStream.Write(static_cast<std::int32_t>(manager.mDispatchedBeat));
     for (CClientBase* const client : manager.mClients) {
       infoStream.Write(static_cast<std::int32_t>(client->mQueuedBeat));
+    }
+    // Issue #275: where each client's backlog above starts. After a multi-beat Advance a
+    // client's stream is past the dispatched beat, and its copy holds none of those beats.
+    for (CClientBase* const client : manager.mClients) {
+      infoStream.Write(static_cast<std::int32_t>(client->mDispatchedBeat));
     }
     peer.Process(info);
 
@@ -1622,7 +1668,7 @@ bool moho::REJOIN_BeginSetup(
   const char* const peers,
   const int localSource,
   const unsigned short localPort,
-  msvc8::string* const failureReason
+  fa::string* const failureReason
 )
 {
   const auto refuse = [failureReason](const char* const reason) {
@@ -1650,7 +1696,12 @@ bool moho::REJOIN_BeginSetup(
     }
     auto peer = std::make_unique<SSetupPeer>();
     peer->source = std::atoi(entry.c_str() + equals + 1);
-    if (!NET_GetAddrInfo(entry.substr(0, equals).c_str(), 0, false, peer->address, peer->port) || peer->port == 0) {
+    // In native mode the launcher knows players, not the addresses the game gives their links.
+    std::string address = entry.substr(0, equals);
+    if (!address.empty() && address.find_first_not_of("0123456789") == std::string::npos) {
+      address = faf::netlink::EngineAddressText(std::atoll(address.c_str()));
+    }
+    if (!NET_GetAddrInfo(address.c_str(), 0, false, peer->address, peer->port) || peer->port == 0) {
       return refuse("A peer's address could not be read.");
     }
     setup->list.push_back(std::move(peer));
@@ -1706,7 +1757,7 @@ float moho::REJOIN_SetupProgress()
   return sSetup != nullptr ? sSetup->list.front()->receiver.RecordingProgress() : -1.0f;
 }
 
-msvc8::auto_ptr<SWldSessionInfo> moho::REJOIN_PollSetup(msvc8::string* const failureReason, bool* const failed)
+fa::auto_ptr<SWldSessionInfo> moho::REJOIN_PollSetup(fa::string* const failureReason, bool* const failed)
 {
   SSetup& setup = *sSetup;
   INetConnector* const connector = setup.connector;
@@ -1719,7 +1770,7 @@ msvc8::auto_ptr<SWldSessionInfo> moho::REJOIN_PollSetup(msvc8::string* const fai
     *failed = true;
     connector->Destroy();
     sSetup.reset();
-    return msvc8::auto_ptr<SWldSessionInfo>();
+    return fa::auto_ptr<SWldSessionInfo>();
   };
 
   const auto now = std::chrono::steady_clock::now();
@@ -1757,10 +1808,19 @@ msvc8::auto_ptr<SWldSessionInfo> moho::REJOIN_PollSetup(msvc8::string* const fai
       setup.receivedBytes = received;
       setup.deadline = now + kWait;
     }
-    if (now >= setup.deadline) {
-      return refuse("A peer did not answer in time.");
+    // Any peer that lets clients back answers within a round trip once its link is up. A link
+    // whose first attempt fails takes up to 15 s of checks and 5 s before the next offer, and
+    // a relay one longer (issue #275, two-machine runs fx1 and fx7): room for a second attempt.
+    constexpr std::chrono::seconds kSilentPeerWait{60};
+    const bool silentPeer = now - sRejoinStart >= kSilentPeerWait && std::any_of(list.begin(), list.end(), [](const auto& peer) {
+      return !peer->receiver.Heard();
+    });
+    if (silentPeer || now >= setup.deadline) {
+      return refuse(
+        "Not every player answered. The game may be over, a player may have left it, or the players may not allow coming back to a game."
+      );
     }
-    return msvc8::auto_ptr<SWldSessionInfo>();
+    return fa::auto_ptr<SWldSessionInfo>();
   }
 
   const std::vector<char>& bytes = list.front()->receiver.Recording();
@@ -1770,7 +1830,7 @@ msvc8::auto_ptr<SWldSessionInfo> moho::REJOIN_PollSetup(msvc8::string* const fai
     std::chrono::duration<double>(std::chrono::steady_clock::now() - sRejoinStart).count()
   );
   std::unique_ptr<gpg::Stream> recording;
-  msvc8::auto_ptr<SWldSessionInfo> sessionInfo = VCR_SetupReplaySessionFromStream(
+  fa::auto_ptr<SWldSessionInfo> sessionInfo = VCR_SetupReplaySessionFromStream(
     std::make_unique<gpg::MemBufferStream>(gpg::CopyMemBuffer(bytes.data(), bytes.size())), "the peer's recording",
     failureReason, &recording
   );

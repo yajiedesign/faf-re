@@ -69,7 +69,7 @@ namespace
   bool IsPlausiblePointer(const void* const p)
   {
     const auto address = reinterpret_cast<std::uintptr_t>(p);
-    return address > 0x10000 && address < 0x7FFFFFFFFFFFULL;
+    return address > 0x10000 && static_cast<std::uint64_t>(address) < 0x7FFFFFFFFFFFULL;
   }
 
   const char* LuaTypeName(const int tt)
@@ -140,6 +140,10 @@ namespace
     if (length > 96) {
       length = 96;
     }
+    // MY1-KEEP: upstream does not have this. If this hunk conflicts, check whether
+    // upstream has since adopted an equivalent fix; if yes drop ours, if no keep ours
+    // and tell the user.
+
     // IsPlausiblePointer is only a range test, so `source` being in range says
     // nothing about its payload. The %.*s below is the first read of `str` and
     // it faults on a garbage payload - and it runs before the frame's own
@@ -330,6 +334,7 @@ namespace
     return fallback;
   }
 
+  // MY1-KEEP (see the note at the first hunk in this file).
   void DescribeVmInternalImpl(
     std::FILE* const sink, lua_State* const state, const int index, const bool followLstate
   );

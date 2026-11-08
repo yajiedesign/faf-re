@@ -161,7 +161,7 @@
 	 */
 	int LoadMountedFile(lua_State* const state, const char* const path)
 	{
-		msvc8::string diskPath{};
+		fa::string diskPath{};
 		moho::FILE_EnsureWaitHandleSet();
 		moho::FWaitHandleSet* const files = moho::FILE_GetWaitHandleSet();
 		if (files != nullptr && files->mHandle != nullptr) {
@@ -177,7 +177,7 @@
 			lua_pushfstring(state, "cannot read %s", path);
 			return LUA_ERRFILE;
 		}
-		const msvc8::string chunkName = gpg::STR_Printf("@%s", path);
+		const fa::string chunkName = gpg::STR_Printf("@%s", path);
 		return ::luaL_loadbuffer(
 			state, contents.mBegin, static_cast<size_t>(contents.mEnd - contents.mBegin), chunkName.c_str()
 		);
@@ -309,7 +309,7 @@
 	 * Applies one coroutine resume step: restores pending frame state when
 	 * resuming after yield, executes VM, then finalizes any immediate return.
 	 */
-	void resume(int* const userData, lua_State* const state)
+	[[maybe_unused]] void resume(int* const userData, lua_State* const state)
 	{
 		const int argumentCount = *userData;
 		CallInfo* const currentFrame = state->ci;
@@ -811,7 +811,7 @@
 			lua_settop(state, -2);
 		}
 
-		msvc8::string message{};
+		fa::string message{};
 		message.assign_owned(messageBuilder.str());
 		gpg::LogMessage(gpg::LogSeverity::Info, message);
 		return 0;
@@ -1497,11 +1497,26 @@ namespace moho
 	 * to source; each compiled chunk loaded is named in the log (`f_parser`).
 	 */
 	bool lua_AllowPrecompiledChunks = true;
+	thread_local bool lua_LoadingCachedChunk = false;
 
 	TConVar<bool> gTConVar_lua_AllowPrecompiledChunks(
 		"lua_AllowPrecompiledChunks",
 		"Load compiled Lua chunks as well as source (off: a map or mod could run native code through one).",
 		&lua_AllowPrecompiledChunks
+	);
+
+	/**
+	 * Engine addition: `lua_ThreadedDispatch`. On, the interpreter reaches each instruction's handler
+	 * through a table of label addresses and takes its fast paths (LuaExecute); off, the binary's switch.
+	 */
+	bool lua_ThreadedDispatch = true;
+
+	TConVar<bool> gTConVar_lua_ThreadedDispatch(
+		"lua_ThreadedDispatch",
+		"Reach each Lua instruction's handler through a table of label addresses, with fast paths for table "
+		"slots, comparisons and next() loops (1, the default), or through the binary's switch (0). The same "
+		"results either way; Lua runs faster with 1.",
+		&lua_ThreadedDispatch
 	);
 
 	/**
@@ -1513,7 +1528,10 @@ namespace moho
 	 */
 	bool lua_ParallelMark = true;
 
-	bool lua_IncrementalGC = true;
+	// Off until the game's startup copies the convar in (CaptureIncrementalGcStartupSetting, from
+	// CScApp::Init). Headless, the server and the tools never do, so their session states keep the
+	// shipped collector and their sim paths skip the incremental checks.
+	bool lua_IncrementalGC = false;
 	bool lua_IncrementalGCSetting = true;
 
 	TConVar<bool> gTConVar_lua_IncrementalGC(

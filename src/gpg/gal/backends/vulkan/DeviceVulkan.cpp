@@ -13,6 +13,7 @@
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
+#include "VulkanAttachmentBarrier.h"
 #include "VulkanSurface.h"
 #include "gpg/core/utils/Logging.h"
 #include "gpg/gal/CubeRenderTargetContext.hpp"
@@ -301,6 +302,7 @@ namespace gpg::gal
         garbage.serial = 0U;
       }
       CollectCompleted();
+      mPipelineMemo.Clear();
       for (auto& [key, pipeline] : mPipelines) {
         if (pipeline != VK_NULL_HANDLE) {
           Vk().vkDestroyPipeline(mDevice, pipeline, nullptr);
@@ -725,15 +727,19 @@ namespace gpg::gal
     Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, nullptr);
     std::vector<VkPresentModeKHR> modes(count);
     Vk().vkGetPhysicalDeviceSurfacePresentModesKHR(mPhysical, swapChain.surface, &count, modes.data());
-    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+    // Without vsync, the modes that don't wait, in order; FIFO, which every driver has, comes last in any case.
+    std::vector<VkPresentModeKHR> tryModes;
     if (!mDeviceContext.mVSync) {
       for (const VkPresentModeKHR candidate : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
         if (std::find(modes.begin(), modes.end(), candidate) != modes.end()) {
-          mode = candidate;
-          break;
+          tryModes.push_back(candidate);
         }
       }
     }
+    tryModes.push_back(VK_PRESENT_MODE_FIFO_KHR);
+    const auto modeName = [](const VkPresentModeKHR presentMode) {
+      return (presentMode == VK_PRESENT_MODE_FIFO_KHR) ? "FIFO (vsync)" : (presentMode == VK_PRESENT_MODE_MAILBOX_KHR) ? "mailbox" : "immediate";
+    };
 
     VkExtent2D extent{width, height};
     if (capabilities.currentExtent.width != 0xFFFFFFFFU) {
@@ -758,11 +764,26 @@ namespace gpg::gal
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = capabilities.currentTransform;
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    info.presentMode = mode;
     info.clipped = VK_TRUE;
     info.oldSwapchain = swapChain.swapchain;
     VkSwapchainKHR created = VK_NULL_HANDLE;
-    CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created));
+    VkPresentModeKHR mode = tryModes.back();
+    VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+    // Engine addition: a driver can refuse a mode it lists. An NVIDIA TITAN RTX (driver 0x8F118000) refused the
+    // vsync-off one with VK_ERROR_OUT_OF_DEVICE_MEMORY for a 1600x1000 window while FIFO worked, and the whole
+    // renderer fell back to Direct3D 9. A refused mode now falls back to the next, ending with FIFO.
+    for (const VkPresentModeKHR candidate : tryModes) {
+      info.presentMode = candidate;
+      result = Vk().vkCreateSwapchainKHR(mDevice, &info, nullptr, &created);
+      if (result == VK_SUCCESS) {
+        mode = candidate;
+        break;
+      }
+      gpg::Warnf("Vulkan: the driver refused a %s swap chain (%d)", modeName(candidate), static_cast<int>(result));
+      // A failed create has already retired the old swap chain, and a retired one can't be passed again.
+      info.oldSwapchain = VK_NULL_HANDLE;
+    }
+    CheckVk("DeviceVulkan.cpp", __LINE__, result);
     if (swapChain.swapchain != VK_NULL_HANDLE) {
       Vk().vkDestroySwapchainKHR(mDevice, swapChain.swapchain, nullptr);
     }
@@ -783,10 +804,7 @@ namespace gpg::gal
       CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateSemaphore(mDevice, &semaphore, nullptr, &finished));
     }
     swapChain.hasImage = false;
-    gpg::Logf(
-      "Vulkan: swap chain %ux%u, %u images, %s", extent.width, extent.height, count,
-      (mode == VK_PRESENT_MODE_FIFO_KHR) ? "FIFO (vsync)" : (mode == VK_PRESENT_MODE_MAILBOX_KHR) ? "mailbox" : "immediate"
-    );
+    gpg::Logf("Vulkan: swap chain %ux%u, %u images, %s", extent.width, extent.height, count, modeName(mode));
   }
 
   void DeviceVulkan::DestroySwapChain(SwapChain& swapChain, const bool keepSurface) noexcept
@@ -859,7 +877,8 @@ namespace gpg::gal
       OutputContext& output = mHeadOutputContexts[headIndex];
       auto* const target = new RenderTargetVulkan(std::move(buffers), DXGI_FORMAT_B8G8R8A8_UNORM, static_cast<int>(headIndex));
       output.surface.reset(target);
-      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, false);
+      // Engine change: readable by shaders, for ren_Ao (GpuBindings::readBoundDepth).
+      const DepthStencilTargetContext depthContext(swapChain.extent.width, swapChain.extent.height, 3U, true);
       output.depthStencil = CreateDepthStencilTarget(&depthContext);
       gpg::Logf("Vulkan: head %u back buffer target %p (%ux%u)", static_cast<unsigned>(headIndex), target, swapChain.extent.width,
                 swapChain.extent.height);
@@ -1483,11 +1502,31 @@ namespace gpg::gal
       return;
     }
     EndRendering();
-    if (colorImage != nullptr) {
-      Transition(*colorImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    }
-    if (depthImage != nullptr) {
-      Transition(*depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    // A new dynamic-rendering instance has no implicit dependency on the
+    // previous instance. A layout change supplies one through Transition;
+    // an attachment kept in the same layout still needs its stores made
+    // visible to this instance's load, depth tests and blending.
+    VkImageMemoryBarrier2 attachmentBarriers[2]{};
+    std::uint32_t attachmentBarrierCount = 0U;
+    const auto prepareAttachment = [&](vulkan::TrackedImage* image, const VkImageLayout layout) {
+      if (image == nullptr || image->image == VK_NULL_HANDLE) {
+        return;
+      }
+      if (image->layout != layout) {
+        Transition(*image, layout);
+        return;
+      }
+      attachmentBarriers[attachmentBarrierCount++] =
+        vulkan::AttachmentWriteBarrier(image->image, layout, AspectOf(image->format));
+    };
+    prepareAttachment(colorImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    prepareAttachment(depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    if (attachmentBarrierCount != 0U) {
+      VkDependencyInfo dependency{};
+      dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+      dependency.imageMemoryBarrierCount = attachmentBarrierCount;
+      dependency.pImageMemoryBarriers = attachmentBarriers;
+      Vk().vkCmdPipelineBarrier2(mCommands, &dependency);
     }
     VkRenderingAttachmentInfo colorAttachment{};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -1544,7 +1583,7 @@ namespace gpg::gal
 
   void DeviceVulkan::Func1() const {}
 
-  void DeviceVulkan::GetModesForAdapter(msvc8::vector<HeadAdapterMode>& outModes, const int adapterIndex)
+  void DeviceVulkan::GetModesForAdapter(fa::vector<HeadAdapterMode>& outModes, const int adapterIndex)
   {
     static_cast<void>(adapterIndex);
     outModes.clear(); // windowed and borderless only: no exclusive modes on this backend
@@ -1799,7 +1838,14 @@ namespace gpg::gal
     info.arrayLayers = 1U;
     info.samples = VK_SAMPLE_COUNT_1_BIT;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (context->field0x10_ ? VK_IMAGE_USAGE_SAMPLED_BIT : 0U);
+    // A readable target that this format can't sample stays a plain attachment, with no sampled view.
+    bool sampled = context->field0x10_;
+    if (sampled) {
+      VkFormatProperties properties{};
+      Vk().vkGetPhysicalDeviceFormatProperties(mPhysical, format, &properties);
+      sampled = (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0U;
+    }
+    info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | (sampled ? VK_IMAGE_USAGE_SAMPLED_BIT : 0U);
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImage(mDevice, &info, nullptr, &image.image));
     VkMemoryRequirements requirements{};
     Vk().vkGetImageMemoryRequirements(mDevice, image.image, &requirements);
@@ -1817,7 +1863,13 @@ namespace gpg::gal
     view.subresourceRange = {AspectOf(format), 0U, 1U, 0U, 1U};
     VkImageView imageView = VK_NULL_HANDLE;
     CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &imageView));
-    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView));
+    // Shaders read depth alone (GpuBindings::readBoundDepth): a view of the depth aspect.
+    VkImageView sampledView = VK_NULL_HANDLE;
+    if (sampled) {
+      view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+      CheckVk("DeviceVulkan.cpp", __LINE__, Vk().vkCreateImageView(mDevice, &view, nullptr, &sampledView));
+    }
+    return boost::shared_ptr<DepthStencilTarget>(new DepthStencilTargetVulkan(*context, image, imageView, sampledView));
   }
 
   boost::shared_ptr<VertexFormat> DeviceVulkan::CreateVertexFormat(const std::uint32_t formatCode)
@@ -1975,13 +2027,13 @@ namespace gpg::gal
     to->DiscardCpuCopy();
   }
 
-  void DeviceVulkan::SaveCubeRenderTarget(const boost::shared_ptr<CubeRenderTarget>& cubeTarget, const msvc8::string& filePath)
+  void DeviceVulkan::SaveCubeRenderTarget(const boost::shared_ptr<CubeRenderTarget>& cubeTarget, const fa::string& filePath)
   {
     static_cast<void>(cubeTarget);
     static_cast<void>(filePath);
   }
 
-  void DeviceVulkan::SaveRenderTarget(const boost::shared_ptr<RenderTarget>& renderTarget, const msvc8::string& filePath, const int fileFormat)
+  void DeviceVulkan::SaveRenderTarget(const boost::shared_ptr<RenderTarget>& renderTarget, const fa::string& filePath, const int fileFormat)
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
     auto* const target = static_cast<RenderTargetVulkan*>(renderTarget.get());
@@ -1994,7 +2046,7 @@ namespace gpg::gal
   }
 
   void DeviceVulkan::SaveTexture(
-    const boost::shared_ptr<Texture>& texture, const msvc8::string& filePath, const int fileFormat, gpg::MemBuffer<char>* const outBuffer
+    const boost::shared_ptr<Texture>& texture, const fa::string& filePath, const int fileFormat, gpg::MemBuffer<char>* const outBuffer
   )
   {
     const std::lock_guard<std::recursive_mutex> lock(mMutex);
@@ -2769,6 +2821,29 @@ namespace gpg::gal
       depthFormat = static_cast<DepthStencilTargetVulkan*>(outputContext_.depthStencil.get())->Image().format;
     }
 
+    // Engine change (ren_PipelineMemo): recent pipelines are found without building the string key below.
+    PipelineInputs inputs;
+    std::memset(static_cast<void*>(&inputs), 0, sizeof(inputs));
+    inputs.vertexKey = pass.vertexShader->key;
+    inputs.pixelKey = (pass.pixelShader != nullptr) ? pass.pixelShader->key : 0ULL;
+    inputs.format = mBoundFormat;
+    inputs.sampleMask = pass.state.sampleMask;
+    for (std::uint32_t slot = 0U; slot < 16U; ++slot) {
+      inputs.strides[slot] = mStreams[slot].stride;
+    }
+    inputs.blend = pass.state.blend;
+    inputs.depth = pass.state.depthStencil;
+    inputs.rasterizer = pass.state.rasterizer;
+    inputs.colorFormat = colorFormat;
+    inputs.depthFormat = depthFormat;
+    inputs.topology = topology;
+    if (gPipelineMemo) {
+      const VkPipeline known = mPipelineMemo.Find(inputs);
+      if (known != VK_NULL_HANDLE) {
+        return known;
+      }
+    }
+
     KeyWriter key;
     key.Add(pass.vertexShader->key);
     key.Add((pass.pixelShader != nullptr) ? pass.pixelShader->key : 0ULL);
@@ -2808,6 +2883,7 @@ namespace gpg::gal
     key.Add(topology);
     auto found = mPipelines.find(key.Key());
     if (found != mPipelines.end()) {
+      mPipelineMemo.Store(inputs, found->second);
       return found->second;
     }
 

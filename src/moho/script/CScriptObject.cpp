@@ -2,6 +2,7 @@
 #include "moho/script/CScriptObject.h"
 #include "CScriptObject.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
 #include <string>
@@ -181,6 +182,23 @@ namespace
     return scriptObject->mLuaObj;
   }
 
+  // Restore the entry top after normal return or the VM's supported exception unwind.
+  // Use the raw state: a running coroutine need not own a LuaState wrapper.
+  struct CallbackLuaStackScope
+  {
+    explicit CallbackLuaStackScope(lua_State* const stateIn)
+      : state(stateIn), top(lua_gettop(stateIn))
+    {}
+
+    ~CallbackLuaStackScope() { lua_settop(state, top); }
+
+    CallbackLuaStackScope(const CallbackLuaStackScope&) = delete;
+    CallbackLuaStackScope& operator=(const CallbackLuaStackScope&) = delete;
+
+    lua_State* state;
+    int top;
+  };
+
   struct WeakEntityUnlinkScope
   {
     explicit WeakEntityUnlinkScope(WeakPtr<Entity>& linkRef)
@@ -220,7 +238,7 @@ namespace
     WeakEntityUnlinkScope unlinkScope(weakSource);
 
     lua_State* const activeState = function.GetActiveCState();
-    const int savedTop = lua_gettop(activeState);
+    const CallbackLuaStackScope stackScope(activeState);
 
     function.PushStack(activeState);
     selfObject.PushStack(activeState);
@@ -241,9 +259,7 @@ namespace
     lua_pushlstring(activeState, damageType.c_str(), static_cast<size_t>(damageType.size()));
     lua_call(activeState, 4, 1);
 
-    const float result = static_cast<float>(lua_tonumber(activeState, -1));
-    lua_settop(activeState, savedTop);
-    return result;
+    return static_cast<float>(lua_tonumber(activeState, -1));
   }
 
   /**
@@ -265,7 +281,7 @@ namespace
     WeakEntityUnlinkScope unlinkScope(weakSource);
 
     lua_State* const activeState = function.GetActiveCState();
-    const int savedTop = lua_gettop(activeState);
+    const CallbackLuaStackScope stackScope(activeState);
 
     function.PushStack(activeState);
     selfObject.PushStack(activeState);
@@ -286,7 +302,6 @@ namespace
     payloadObject.PushStack(activeState);
     lua_pushlstring(activeState, damageType.c_str(), static_cast<size_t>(damageType.size()));
     lua_call(activeState, 5, 1);
-    lua_settop(activeState, savedTop);
   }
 
   /**
@@ -481,12 +496,7 @@ namespace
     const LuaPlus::LuaObject* sourceEnd
   )
   {
-    while (sourceEnd != sourceBegin) {
-      --sourceEnd;
-      --destinationEnd;
-      *destinationEnd = *sourceEnd;
-    }
-    return destinationEnd;
+    return std::copy_backward(sourceBegin, sourceEnd, destinationEnd);
   }
 
 } // namespace
@@ -609,7 +619,7 @@ void CScriptObject::MemberSerialize(gpg::WriteArchive* const archive)
  * Default `where` text for script-error warnings: `CScriptObject at %08x`
  * (format at 0x00E091C4) of `this` -- lower-case, zero-padded hex, not `%p`.
  */
-msvc8::string CScriptObject::GetErrorDescription()
+fa::string CScriptObject::GetErrorDescription()
 {
   return gpg::STR_Printf("CScriptObject at %08x", reinterpret_cast<std::uintptr_t>(this));
 }
@@ -668,6 +678,10 @@ void CScriptObject::CreateLuaObject(
 
     const int nargs = lua_gettop(lstate) - funcTop;
     if (LuaCallProtected(lstate, nargs, 1) != 0) {
+      // MY1-KEEP: upstream does not have this. If this hunk conflicts, check whether
+      // upstream has since adopted an equivalent fix; if yes drop ours, if no keep ours
+      // and tell the user.
+
       // Non-throwing read; see RunScriptMultiRet's error branch.
       const char* const errorText = lua_tostring(lstate, -1);
       gpg::Warnf("Error in lua: %s", errorText != nullptr ? errorText : "<non-string>");
@@ -714,7 +728,7 @@ void CScriptObject::SetLuaObject(const LuaPlus::LuaObject& obj)
 void CScriptObject::LogScriptWarning(CScriptObject* obj, const char* which, const char* message)
 {
   const char* where = "<deleted object>";
-  msvc8::string description;
+  fa::string description;
   if (obj) {
     description = obj->GetErrorDescription();
     where = description.c_str();
@@ -842,6 +856,7 @@ bool CScriptObject::RunScriptMultiRet(
 
   const int nargs = lua_gettop(lstate) - funcTop;
   if (LuaCallProtected(lstate, nargs, LUA_MULTRET) != 0) {
+    // MY1-KEEP (see the note at the first hunk in this file).
     const char* const errorText = lua_tostring(lstate, -1);
     LogScriptWarning(this, funcName ? funcName : "<unknown>", errorText != nullptr ? errorText : "<non-string>");
     out.Clear();

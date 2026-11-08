@@ -25,6 +25,7 @@
 #include "moho/render/d3d/CD3DIndexSheet.h"
 #include "moho/render/d3d/ShaderVar.h"
 #include "moho/particles/ParticleRenderBuckets.h"
+#include "moho/particles/ParticlePoolReclaim.h"
 #include "moho/render/d3d/RD3DTextureResource.h"
 
 namespace moho
@@ -203,11 +204,6 @@ namespace
   constexpr int kSharedTrailIndexSheetSize = 0x18000;
   constexpr std::uint32_t kSharedTrailQuadCount = 0x4000U;
   constexpr std::uint32_t kIndicesPerTrailQuad = 6U;
-  constexpr std::size_t kLegacyVectorMaxCount = 0x3FFFFFFFU;
-  constexpr const char* kParticleRendererSourcePath = "c:\\work\\rts\\main\\code\\src\\core\\ParticleRenderer.cpp";
-  constexpr const char* kUnreachableAssertText = "Reached the supposably unreachable.";
-  constexpr int kParticleSelectTechniqueAssertLine = 1359;
-  constexpr int kParticleSelectTechniqueWithDragAssertLine = 1026;
 
   /**
    * Address: 0x00BC57F0 (FUN_00BC57F0, dynamic initializer for `sSharedTrailQuadIndexSheet`)
@@ -216,7 +212,7 @@ namespace
    * What it does:
    * Owns the shared trail-quad index sheet (binary global 0x010A828C).
    */
-  msvc8::auto_ptr<moho::ID3DIndexSheet> sSharedTrailQuadIndexSheet;
+  fa::auto_ptr<moho::ID3DIndexSheet> sSharedTrailQuadIndexSheet;
 
   /**
    * Address: 0x00BC5570 (FUN_00BC5570, dynamic initializer for `gTConVar_efx_ParticleWaterSurface`)
@@ -410,17 +406,6 @@ namespace
   // real binary emission. Removed; BeamRenderHelpers.cpp's copy is the
   // evidenced one.
 
-  void BindParticleTextureShaderVar(
-    moho::ShaderVar& shaderVar,
-    const moho::CParticleTexture::TextureResourceHandle& textureResource
-  )
-  {
-    // RD3DTextureResource is an ID3DTextureSheet, so the sheet binder does the
-    // GetTexture-then-SetTexture pair itself - there is no reason to resolve the
-    // handle here and re-wrap it.
-    shaderVar.GetTexture(textureResource);
-  }
-
   void BindParticleCameraShaderState(
     moho::GeomCamera3* const camera,
     const int tick,
@@ -471,15 +456,13 @@ namespace
     }
   }
 
-  constexpr std::uint32_t kLegacyDwordVectorMaxCount = 0x3FFFFFFFU;
-
   /**
    * Address: 0x0049C670 (FUN_0049C670, sub_49C670)
    *
    * What it does:
    * Returns one fixed legacy list-size cap constant.
    */
-  [[nodiscard]] std::uint32_t GetLegacyListMaxElementCount_0x3FFFFFFF_DuplicateB() noexcept
+  [[maybe_unused]] [[nodiscard]] std::uint32_t GetLegacyListMaxElementCount_0x3FFFFFFF_DuplicateB() noexcept
   {
     return 0x3FFFFFFFU;
   }
@@ -549,7 +532,7 @@ namespace
 
     key->texture0.reset();
     key->texture1.reset();
-    key->tag = msvc8::string{};
+    key->tag = fa::string{};
 
     key->sortScalar = particle.mReserved54;
     key->dragEnabled = particle.mDragEnabled;
@@ -566,19 +549,19 @@ namespace
     }
     boost::AssignSharedPairRetain(&key->texture1, &texture1);
 
-    key->tag.assign(particle.mTypeTag, 0U, msvc8::string::npos);
+    key->tag.assign(particle.mTypeTag, 0U, fa::string::npos);
     key->blendMode = static_cast<std::int32_t>(particle.mBlendMode);
     key->zMode = static_cast<std::int32_t>(particle.mZMode);
     return key;
   }
 
   // 0x0049EE50 / 0x0049E0B0 (particle) and 0x0049EE80 / 0x0049E1F0 (trail) are
-  // the copy constructors MSVC emits for `msvc8::map<Key, Bucket*>::value_type`
+  // the copy constructors MSVC emits for `fa::map<Key, Bucket*>::value_type`
   // on the insert path -- a `std::pair<const Key, Bucket*>` whose first member
   // is the 0x3C / 0x34 bucket key. They were transcribed here as
   // `ParticleBucketKeyValueRuntime` / `TrailBucketKeyValueRuntime` plus four
   // free `CopyConstruct*` helpers, two of which had no caller at all. Cited on
-  // `msvc8::map::insert(const value_type&)` (legacy/containers/Map.h) and
+  // `fa::map::insert(const value_type&)` (legacy/containers/Map.h) and
   // removed; the source line that produces them is the `buckets[key] = bucket`
   // in `CWorldParticles`.
 
@@ -588,7 +571,7 @@ namespace
    * What it does:
    * Writes one dword lane into caller output storage.
    */
-  std::uint32_t* WriteDwordSlotFromRegisterLike(
+  [[maybe_unused]] std::uint32_t* WriteDwordSlotFromRegisterLike(
     std::uint32_t* const outValueSlot,
     const std::uint32_t value
   ) noexcept
@@ -617,7 +600,7 @@ namespace
    * What it does:
    * Duplicate ptr-map null payload guard helper retained for binary parity.
    */
-  void EnsurePtrMapInsertPayloadNotNullDuplicate(void* const payload)
+  [[maybe_unused]] void EnsurePtrMapInsertPayloadNotNullDuplicate(void* const payload)
   {
     EnsurePtrMapInsertPayloadNotNull(payload);
   }
@@ -663,7 +646,7 @@ namespace
    * Comparator thunk forwarding to the recovered particle-bucket key ordering
    * predicate.
    */
-  [[nodiscard]] bool CompareParticleBucketKeysThunk(
+  [[maybe_unused]] [[nodiscard]] bool CompareParticleBucketKeysThunk(
     const moho::SParticleBucketKey& lhs,
     const moho::SParticleBucketKey& rhs
   ) noexcept
@@ -678,7 +661,7 @@ namespace
    * Comparator thunk forwarding to the recovered trail-bucket key ordering
    * predicate.
    */
-  [[nodiscard]] bool CompareTrailBucketKeysThunk(
+  [[maybe_unused]] [[nodiscard]] bool CompareTrailBucketKeysThunk(
     const moho::STrailBucketKey& lhs,
     const moho::STrailBucketKey& rhs
   ) noexcept
@@ -692,7 +675,7 @@ namespace
    * What it does:
    * Returns one fixed legacy map helper constant (`0x03FFFFFF`).
    */
-  std::uint32_t GetLegacyMapHelperConstant_0x03FFFFFF_DuplicateA() noexcept
+  [[maybe_unused]] std::uint32_t GetLegacyMapHelperConstant_0x03FFFFFF_DuplicateA() noexcept
   {
     return 0x03FFFFFFU;
   }
@@ -703,7 +686,7 @@ namespace
    * What it does:
    * Returns one fixed legacy map helper constant (`0x03FFFFFF`).
   */
-  std::uint32_t GetLegacyMapHelperConstant_0x03FFFFFF() noexcept
+  [[maybe_unused]] std::uint32_t GetLegacyMapHelperConstant_0x03FFFFFF() noexcept
   {
     return 0x03FFFFFFU;
   }
@@ -714,7 +697,7 @@ namespace
    * What it does:
    * Returns one fixed legacy map helper constant (`0x04924924`).
    */
-  std::uint32_t GetLegacyMapHelperConstant_0x04924924() noexcept
+  [[maybe_unused]] std::uint32_t GetLegacyMapHelperConstant_0x04924924() noexcept
   {
     return 0x04924924U;
   }
@@ -725,7 +708,7 @@ namespace
    * What it does:
    * Duplicate particle-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteParticleRenderBucketDuplicateA(
+  [[maybe_unused]] void DestroyAndDeleteParticleRenderBucketDuplicateA(
     moho::SParticleRenderBucket* const bucket
   ) noexcept
   {
@@ -738,7 +721,7 @@ namespace
    * What it does:
    * Duplicate trail-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteTrailRenderBucketDuplicateA(
+  [[maybe_unused]] void DestroyAndDeleteTrailRenderBucketDuplicateA(
     moho::STrailRenderBucket* const bucket
   ) noexcept
   {
@@ -751,7 +734,7 @@ namespace
    * What it does:
    * Duplicate particle-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteParticleRenderBucketDuplicateB(
+  [[maybe_unused]] void DestroyAndDeleteParticleRenderBucketDuplicateB(
     moho::SParticleRenderBucket* const bucket
   ) noexcept
   {
@@ -764,7 +747,7 @@ namespace
    * What it does:
    * Duplicate trail-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteTrailRenderBucketDuplicateB(
+  [[maybe_unused]] void DestroyAndDeleteTrailRenderBucketDuplicateB(
     moho::STrailRenderBucket* const bucket
   ) noexcept
   {
@@ -777,7 +760,7 @@ namespace
    * What it does:
    * Duplicate particle-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteParticleRenderBucketDuplicateC(
+  [[maybe_unused]] void DestroyAndDeleteParticleRenderBucketDuplicateC(
     moho::SParticleRenderBucket* const bucket
   ) noexcept
   {
@@ -790,7 +773,7 @@ namespace
    * What it does:
    * Duplicate trail-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteTrailRenderBucketDuplicateC(
+  [[maybe_unused]] void DestroyAndDeleteTrailRenderBucketDuplicateC(
     moho::STrailRenderBucket* const bucket
   ) noexcept
   {
@@ -803,7 +786,7 @@ namespace
    * What it does:
    * Duplicate particle-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteParticleRenderBucketDuplicateD(
+  [[maybe_unused]] void DestroyAndDeleteParticleRenderBucketDuplicateD(
     moho::SParticleRenderBucket* const bucket
   ) noexcept
   {
@@ -816,7 +799,7 @@ namespace
    * What it does:
    * Duplicate trail-bucket destroy+delete thunk.
    */
-  void DestroyAndDeleteTrailRenderBucketDuplicateD(
+  [[maybe_unused]] void DestroyAndDeleteTrailRenderBucketDuplicateD(
     moho::STrailRenderBucket* const bucket
   ) noexcept
   {
@@ -830,7 +813,7 @@ namespace
    * Destroys and deletes one particle-bucket payload and returns the input
    * pointer.
    */
-  moho::SParticleRenderBucket* DestroyAndDeleteParticleRenderBucketAndReturnInput(
+  [[maybe_unused]] moho::SParticleRenderBucket* DestroyAndDeleteParticleRenderBucketAndReturnInput(
     moho::SParticleRenderBucket* const bucket
   ) noexcept
   {
@@ -846,7 +829,7 @@ namespace
    * Destroys and deletes one trail-bucket payload and returns the input
    * pointer.
    */
-  moho::STrailRenderBucket* DestroyAndDeleteTrailRenderBucketAndReturnInput(
+  [[maybe_unused]] moho::STrailRenderBucket* DestroyAndDeleteTrailRenderBucketAndReturnInput(
     moho::STrailRenderBucket* const bucket
   ) noexcept
   {
@@ -861,8 +844,8 @@ namespace
    * What it does:
    * Returns whether one legacy string and one C-string differ by value.
    */
-  bool AreMsvc8StringAndCStringDifferent(
-    const msvc8::string& lhs,
+  [[maybe_unused]] bool AreMsvc8StringAndCStringDifferent(
+    const fa::string& lhs,
     const char* const rhs
   ) noexcept
   {
@@ -931,7 +914,7 @@ namespace moho
     ID3DDeviceResources* const resources = device->GetResources();
 
     sSharedTrailQuadIndexSheet =
-      msvc8::auto_ptr<ID3DIndexSheet>(resources->CreateIndexSheet(false, kSharedTrailIndexSheetSize));
+      fa::auto_ptr<ID3DIndexSheet>(resources->CreateIndexSheet(false, kSharedTrailIndexSheetSize));
 
     if (sSharedTrailQuadIndexSheet.get() == nullptr) {
       return 0;
@@ -1125,7 +1108,7 @@ namespace moho
       auto bucketEntry = mRefractingParticleBuckets.find(lookupKey);
       if (bucketEntry == mRefractingParticleBuckets.end()) {
         // Must be constructed, not just allocated: the bucket owns two
-        // shared_ptr texture handles, an msvc8::string and two vectors, and
+        // shared_ptr texture handles, an fa::string and two vectors, and
         // InitializeParticleRenderBucketFromWorldParticle's first act is to
         // `reset()` those handles.
         auto* const newBucket = new SParticleRenderBucket();
@@ -1288,40 +1271,52 @@ namespace moho
     const float waterSurface = efx_ParticleWaterSurface;
 
     std::optional<gpg::gal::RenderProfileScope> profileStep(std::in_place, "EffParticles"); // FAF instrumentation
-    for (const auto& [bucketKey, bucket] : mParticleBuckets) {
+    bool reclaimedParticleBuffers = false;
+    for (auto current = mParticleBuckets.begin(); current != mParticleBuckets.end(); ++current) {
+      const auto& [bucketKey, bucket] = *current;
       if (renderAboveSurface) {
-        if (bucketKey.sortScalar >= waterSurface && bucket != nullptr) {
-          (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
+        if (!(bucketKey.sortScalar >= waterSurface)) {
+          continue;
         }
-      } else {
-        if (bucketKey.sortScalar > waterSurface) {
-          break;
-        }
-        if (bucket != nullptr) {
-          (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
-        }
+      } else if (bucketKey.sortScalar > waterSurface) {
+        break;
       }
+      if (bucket == nullptr) {
+        continue;
+      }
+      if (!reclaimedParticleBuffers && !bucket->pendingParticles.empty()) {
+        reclaimedParticleBuffers = detail::ReclaimRemainingBucketsUnderPressure<kParticleBufferCapacity>(
+          current, mParticleBuckets.end(), mAvailableParticleBuffers.size(), bucket->pendingParticles.size(),
+          true, renderAboveSurface, waterSurface, static_cast<float>(tick),
+          moho::PruneExpiredParticleBucketWorkItems
+        );
+      }
+      (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), suppressTLight != 0);
     }
 
     profileStep.reset();
     profileStep.emplace("EffTrails");
-    for (const auto& [bucketKey, bucket] : mTrailBuckets) {
+    bool reclaimedTrailBuffers = false;
+    for (auto current = mTrailBuckets.begin(); current != mTrailBuckets.end(); ++current) {
+      const auto& [bucketKey, bucket] = *current;
       if (renderAboveSurface) {
-        if (bucketKey.sortScalar >= waterSurface && bucket != nullptr) {
-          renderResult = static_cast<char>(
-            moho::RenderTrailBucket(*bucket, static_cast<float>(tick), suppressTLight != 0)
-          );
+        if (!(bucketKey.sortScalar >= waterSurface)) {
+          continue;
         }
-      } else {
-        if (bucketKey.sortScalar > waterSurface) {
-          break;
-        }
-        if (bucket != nullptr) {
-          renderResult = static_cast<char>(
-            moho::RenderTrailBucket(*bucket, static_cast<float>(tick), suppressTLight != 0)
-          );
-        }
+      } else if (bucketKey.sortScalar > waterSurface) {
+        break;
       }
+      if (bucket == nullptr) {
+        continue;
+      }
+      if (!reclaimedTrailBuffers && !bucket->pendingTrails.empty()) {
+        reclaimedTrailBuffers = detail::ReclaimRemainingBucketsUnderPressure<kTrailSegmentCapacity>(
+          current, mTrailBuckets.end(), mTrailSegmentPool.size(), bucket->pendingTrails.size(),
+          true, renderAboveSurface, waterSurface, static_cast<float>(tick),
+          moho::PruneExpiredTrailBucketWorkItems
+        );
+      }
+      renderResult = static_cast<char>(moho::RenderTrailBucket(*bucket, static_cast<float>(tick), suppressTLight != 0));
     }
 
     return renderResult;
@@ -1351,11 +1346,19 @@ namespace moho
       shaderVarParticleBackgroundTexture.SetRenderTargetTexture(backgroundTexture);
     }
 
-    for (const auto& [bucketKey, bucket] : mRefractingParticleBuckets) {
-      (void)bucketKey;
-      if (bucket != nullptr) {
-        (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), false);
+    bool reclaimedParticleBuffers = false;
+    for (auto current = mRefractingParticleBuckets.begin(); current != mRefractingParticleBuckets.end(); ++current) {
+      auto* const bucket = current->second;
+      if (bucket == nullptr) {
+        continue;
       }
+      if (!reclaimedParticleBuffers && !bucket->pendingParticles.empty()) {
+        reclaimedParticleBuffers = detail::ReclaimRemainingBucketsUnderPressure<kParticleBufferCapacity>(
+          current, mRefractingParticleBuckets.end(), mAvailableParticleBuffers.size(), bucket->pendingParticles.size(),
+          false, false, 0.0f, static_cast<float>(tick), moho::PruneExpiredParticleBucketWorkItems
+        );
+      }
+      (void)moho::RenderParticleBucket(*bucket, static_cast<float>(tick), false);
     }
 
 
@@ -1436,7 +1439,6 @@ namespace moho
   void CWorldParticles::ClearRenderBuckets()
   {
     CWorldParticles& worldParticles = *this;
-    CWorldParticles& runtime = worldParticles;
 
     // Each entry owns its bucket, so the payload goes before the node.
     for (const auto& [bucketKey, bucket] : mParticleBuckets) {
