@@ -25,6 +25,7 @@
 #include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -37,6 +38,7 @@
 #include "moho/net/CMessageStream.h"
 #include "moho/net/ELobbyMsg.h"
 #include "moho/net/ECmdStreamOp.h"
+#include "remote/SpeedLimit.h"
 #include "remote/net/Datagram.h"
 #include "remote/FrameWindow.h"
 #include "remote/SeatRoster.h"
@@ -214,13 +216,22 @@ namespace
     // `CLobby::KickPeer` sends), each to `--lobby-say-to` at a time.
     std::string lobbyOptions;
     double lobbyOptionsAt = -1.0;
+    std::string lobbyPlayerOptions; // plan WP17.6: `{Type = 'PlayerOptions', Slot = 1, Options = {...}}` broadcast
+    double lobbyPlayerOptionsAt = -1.0;
+    std::string lobbyRequest;       // and a request to the host: `{Type = <it>, RequestedSlot = 1}`
+    double lobbyRequestAt = -1.0;
+    int lobbyAssignSlot = 0;        // plan WP17.2: as host, `{Type = 'SlotAssigned', Slot = <it>, Options = {OwnerID = ...}}`
+    double lobbyAssignAt = -1.0;
     double lobbyEjectAt = -1.0;
     // Plan WP2.6: the content report sent before `Loaded`: "rules" (the `--rebuild` match's rules, as the game
     // client reports them), "wrong" (made-up hashes), or none.
     std::string contentReport;
+    std::string uiMods; // plan WP17.8: `--ui-mods uid,uid` (or `none`) sends a mod report with those UI mods
     // Plan WP11.4: once the server's roster lists other players and this many seconds have gone (`--chat`: 0, `--chat-at`),
     // send each of them one chat line through the server, as FAF's chat sends one (a Lua table in byte form).
     double chatAt = -1.0;
+    int speedLimit = 0;           // plan WP10.7: reported as this player's game's sim-speed limit
+    double speedLimitAt = -1.0;
   };
 
   /** FAF chat.lua's message, `{Chat = true, to = 'all', text = ...}`, as `SessionSendChatMessage` writes it. */
@@ -315,12 +326,26 @@ namespace
         out.lobbyLaunchAt = Argument(value);
       } else if (name == "--lobby-options") {
         out.lobbyOptions = value;
+      } else if (name == "--lobby-player-options") {
+        out.lobbyPlayerOptions = value;
+      } else if (name == "--lobby-player-options-at") {
+        out.lobbyPlayerOptionsAt = Argument(value);
+      } else if (name == "--lobby-request") {
+        out.lobbyRequest = value;
+      } else if (name == "--lobby-assign-slot") {
+        out.lobbyAssignSlot = std::atoi(value);
+      } else if (name == "--lobby-assign-at") {
+        out.lobbyAssignAt = Argument(value);
+      } else if (name == "--lobby-request-at") {
+        out.lobbyRequestAt = Argument(value);
       } else if (name == "--lobby-options-at") {
         out.lobbyOptionsAt = Argument(value);
       } else if (name == "--lobby-eject-at") {
         out.lobbyEjectAt = Argument(value);
       } else if (name == "--content-report") {
         out.contentReport = value;
+      } else if (name == "--ui-mods") {
+        out.uiMods = value;
       } else if (name == "--save-views") {
         out.saveViews = value;
       } else if (name == "--break-alliance-at") {
@@ -367,6 +392,10 @@ namespace
         out.rebuild = value;
       } else if (name == "--chat-at") {
         out.chatAt = Argument(value);
+      } else if (name == "--speed-limit") {
+        out.speedLimit = std::atoi(value);
+      } else if (name == "--speed-limit-at") {
+        out.speedLimitAt = Argument(value);
       } else {
         return false;
       }
@@ -590,7 +619,9 @@ namespace
         out.poseBytes += size;
       }
     }
+    const bool lanesOk = ok;
     ok = ok && reader.AtEnd();
+    const char* why = !lanesOk ? "lanes" : (!ok ? "bytes after the lanes" : nullptr);
     if (ok && out.views > 1u && faf::remote::wire::PeekFrameBaseline(std::span<const std::uint8_t>(frame, frameSize)) == faf::remote::wire::kNoBaseline) {
       ++out.whole;
       std::printf("probe: %.1f s: a whole view at beat %llu, %llu + %llu entities\n", elapsed, static_cast<unsigned long long>(beat),
@@ -603,10 +634,38 @@ namespace
         );
       }
       faf::remote::wire::SViewFrame decoded;
-      ok = out.window.Decode(std::span<const std::uint8_t>(frame, frameSize), out.codec, decoded) && decoded.entities.size() == entities;
+      ok = out.window.Decode(std::span<const std::uint8_t>(frame, frameSize), out.codec, decoded);
+      why = ok ? nullptr : "own frame";
+      if (ok && decoded.entities.size() != entities) {
+        ok = false;
+        why = "own frame's count";
+      }
       faf::remote::wire::SViewFrame teamDecoded;
       if (ok && teamSize != 0u) {
-        ok = out.teamWindow.Decode(std::span<const std::uint8_t>(team, teamSize), out.codec, teamDecoded) && teamDecoded.entities.size() == teamEntities;
+        ok = out.teamWindow.Decode(std::span<const std::uint8_t>(team, teamSize), out.codec, teamDecoded);
+        why = ok ? nullptr : "team frame";
+        if (ok && teamDecoded.entities.size() != teamEntities) {
+          ok = false;
+          why = "team frame's count";
+        }
+      }
+      if (!ok && out.failed < 3u) {
+        const auto frameIdOf = [](const std::uint8_t* const bytes, const std::uint64_t size) -> std::uint32_t {
+          if (size == 0u) {
+            return 0u;
+          }
+          faf::remote::wire::BitReader header(std::span<const std::uint8_t>(bytes, size));
+          (void)header.ReadBits(16);
+          return header.ReadBits(32);
+        };
+        std::printf("probe: %.1f s: team frame %u on base %u, the last team frame decoded %u; own frame %u on base %u, the last own %u\n", elapsed,
+                    frameIdOf(team, teamSize), teamSize != 0u ? faf::remote::wire::PeekFrameBaseline(std::span<const std::uint8_t>(team, teamSize)) : 0u,
+                    out.teamFrame.frameId, frameIdOf(frame, frameSize), faf::remote::wire::PeekFrameBaseline(std::span<const std::uint8_t>(frame, frameSize)),
+                    out.frame.frameId);
+        std::printf("probe: %.1f s: the view of beat %llu didn't decode: %s (own %zu of %llu, team %zu of %llu, %llu + %llu bytes)\n", elapsed,
+                    static_cast<unsigned long long>(beat), why != nullptr ? why : "?", decoded.entities.size(), static_cast<unsigned long long>(entities),
+                    teamDecoded.entities.size(), static_cast<unsigned long long>(teamEntities), static_cast<unsigned long long>(frameSize),
+                    static_cast<unsigned long long>(teamSize));
       }
       out.frameBytes += frameSize + teamSize;
       out.lastEntities = entities + teamEntities;
@@ -614,6 +673,9 @@ namespace
       out.frame = std::move(decoded);
       out.teamFrame = std::move(teamDecoded);
       out.haveFrame = ok;
+    }
+    if (!ok && why != nullptr && out.failed < 3u && (std::string_view(why) == "lanes" || std::string_view(why) == "bytes after the lanes")) {
+      std::printf("probe: %.1f s: the view of beat %llu didn't decode: %s\n", elapsed, static_cast<unsigned long long>(beat), why);
     }
     out.failed += ok ? 0u : 1u;
 
@@ -807,11 +869,17 @@ namespace
       if (faf::server::ParseLuaBytes(std::span<const std::uint8_t>(frame).subspan(at), value)) {
         const faf::server::SLuaBytesValue* const type = value.Field("Type");
         const faf::server::SLuaBytesValue* const table = value.Field("Options");
-        if (type != nullptr && type->IsString("GameOptions") && table != nullptr && table->kind == faf::server::SLuaBytesValue::EKind::Table) {
-          options = ", GameOptions";
-          for (std::size_t i = 0; i < table->keys.size(); ++i) {
+        if (type != nullptr && type->kind == faf::server::SLuaBytesValue::EKind::String) {
+          options = ", " + type->text; // plan WP17.6: every type, so a test sees what a player's requests became
+          for (std::size_t i = 0; table != nullptr && table->kind == faf::server::SLuaBytesValue::EKind::Table && i < table->keys.size(); ++i) {
             const faf::server::SLuaBytesValue& option = table->values[i];
-            options += " " + table->keys[i].text + "=" + (option.kind == faf::server::SLuaBytesValue::EKind::String ? option.text : std::string("?"));
+            float number = 0.0f;
+            std::memcpy(&number, option.raw, sizeof(float));
+            const std::string text = option.kind == faf::server::SLuaBytesValue::EKind::String ? option.text
+                                     : option.kind == faf::server::SLuaBytesValue::EKind::Boolean ? (option.raw[0] != 0u ? "true" : "false")
+                                     : option.kind == faf::server::SLuaBytesValue::EKind::Number  ? std::to_string(static_cast<int>(number))
+                                                                                                  : std::string("?");
+            options += " " + table->keys[i].text + "=" + text;
           }
         }
       }
@@ -842,7 +910,7 @@ int main(const int argc, char** const argv)
     std::printf(
       "usage: faf_server_probe --server <ip:port> --uid <n> --token <t> [--seconds <s>] [--no-load] [--pause-at <s> [--pause-every <s>]] [--resume-at <s>] [--forge-at <s>] "
       "[--vanish-at <s> [--vanish-for <s>]] [--leave-at <s>] [--order-at <s>] [--attack-blip-at <s>] [--forge-id-at <s>] [--attack-hidden-at <s> --hidden-id <id>] [--fuzz-at <s> [--fuzz-count <n>]] "
-      "[--flood-at <s>] [--break-alliance-at <s> --break-with <army>] [--save-views <file>] [--damage-at <s>] [--lobby-name <name> [--lobby-say-to <uid> --lobby-say-at <s>] [--lobby-launch <match.lua> --lobby-launch-at <s>] [--lobby-options <key=value,...> --lobby-options-at <s>] [--lobby-eject-at <s>]] [--content-report rules|wrong] [--beat-ms <ms>] [--loss <percent>] [--latency-ms <ms>] [--jitter-ms <ms>] [--partition-at <s> --partition-for <s>] [--rebuild <match.lua> /init <init.lua>]\n"
+      "[--flood-at <s>] [--break-alliance-at <s> --break-with <army>] [--save-views <file>] [--damage-at <s>] [--lobby-name <name> [--lobby-say-to <uid> --lobby-say-at <s>] [--lobby-launch <match.lua> --lobby-launch-at <s>] [--lobby-options <key=value,...> --lobby-options-at <s>] [--lobby-player-options <key=value,...> --lobby-player-options-at <s>] [--lobby-request <Type> --lobby-request-at <s>] [--lobby-assign-slot <n> --lobby-assign-at <s>] [--lobby-eject-at <s>]] [--speed-limit <step> --speed-limit-at <s>] [--content-report rules|wrong] [--ui-mods <uid,...>|none] [--beat-ms <ms>] [--loss <percent>] [--latency-ms <ms>] [--jitter-ms <ms>] [--partition-at <s> --partition-for <s>] [--rebuild <match.lua> /init <init.lua>]\n"
     );
     return 3;
   }
@@ -964,6 +1032,17 @@ int main(const int argc, char** const argv)
                       static_cast<unsigned long long>(report.blueprints), static_cast<unsigned long long>(report.mods));
         }
       }
+      if (!options.uiMods.empty() && joins == 1u) {
+        std::vector<faf::remote::SModEntry> mods;
+        for (std::size_t start = 0; options.uiMods != "none" && start < options.uiMods.size();) {
+          const std::size_t comma = std::min(options.uiMods.find(',', start), options.uiMods.size());
+          mods.push_back(faf::remote::SModEntry{true, options.uiMods.substr(start, comma - start), "1"});
+          start = comma + 1;
+        }
+        const std::vector<std::uint8_t> report = faf::remote::EncodeModReport(mods);
+        (void)link.SendReliable(report.data(), report.size());
+        std::printf("probe %d: %.1f s: mods reported: %zu UI (%s)\n", options.uid, elapsed, mods.size(), options.uiMods.c_str());
+      }
       if (!options.noLoad && joins == 1u) {
         const auto kind = static_cast<std::uint8_t>(ESeatMessage::Loaded);
         (void)link.SendReliable(&kind, 1u);
@@ -1033,6 +1112,75 @@ int main(const int argc, char** const argv)
         std::printf("probe %d: %.1f s: lobby: game options to uid %d: %s\n", options.uid, elapsed, options.lobbySayTo, options.lobbyOptions.c_str());
       }
     }
+    // Plan WP17.6: a player's own options, and a request to the host, as FAF lobby.lua sends them.
+    const auto sendScript = [&](const moho::ELobbyMsg kind, LuaPlus::LuaObject& data, const char* const what) {
+      moho::CMessage script(kind);
+      bool encoded = false;
+      {
+        moho::CMessageStream stream(script, moho::CMessageStream::Access::kReadWrite);
+        encoded = data.ToByteStream(stream);
+      }
+      if (encoded) {
+        std::vector<std::uint8_t> frame;
+        faf::remote::net::ByteWriter writer(frame);
+        writer.Byte(static_cast<std::uint8_t>(ESeatMessage::Lobby));
+        writer.Varint(static_cast<std::uint64_t>(options.lobbySayTo));
+        writer.Bytes(reinterpret_cast<const std::uint8_t*>(script.mBuff.start_), script.mBuff.Size());
+        (void)link.SendReliable(frame.data(), frame.size());
+        std::printf("probe %d: %.1f s: lobby: %s to uid %d\n", options.uid, elapsed, what, options.lobbySayTo);
+      }
+    };
+    if (Due(options.lobbyPlayerOptionsAt, elapsed) && options.lobbySayTo != 0) {
+      static LuaPlus::LuaState sPlayerState(LuaPlus::LuaState::LIB_BASE);
+      LuaPlus::LuaObject data;
+      data.AssignNewTable(&sPlayerState, 0, 3u);
+      data.SetString("Type", "PlayerOptions");
+      data.SetInteger("Slot", 1);
+      LuaPlus::LuaObject table;
+      table.AssignNewTable(&sPlayerState, 0, 4u);
+      const std::string& list = options.lobbyPlayerOptions;
+      for (std::size_t start = 0; start < list.size();) {
+        const std::size_t comma = std::min(list.find(',', start), list.size());
+        const std::string pair = list.substr(start, comma - start);
+        if (const std::size_t equals = pair.find('='); equals != std::string::npos) {
+          const std::string key = pair.substr(0, equals);
+          const std::string value = pair.substr(equals + 1);
+          if (value == "true" || value == "false") {
+            table.SetBoolean(key.c_str(), value == "true");
+          } else {
+            table.SetString(key.c_str(), value.c_str());
+          }
+        }
+        start = comma + 1;
+      }
+      data.SetObject("Options", table);
+      const std::string what = "player options " + list;
+      sendScript(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, data, what.c_str());
+    }
+    if (Due(options.lobbyAssignAt, elapsed) && options.lobbySayTo != 0 && options.lobbyAssignSlot > 0) {
+      // Plan WP17.2: as the lobby's host, `HostUtils.TryAddPlayer`'s `SlotAssigned` for the participant told.
+      static LuaPlus::LuaState sAssignState(LuaPlus::LuaState::LIB_BASE);
+      LuaPlus::LuaObject data;
+      data.AssignNewTable(&sAssignState, 0, 3u);
+      data.SetString("Type", "SlotAssigned");
+      data.SetInteger("Slot", options.lobbyAssignSlot);
+      LuaPlus::LuaObject player;
+      player.AssignNewTable(&sAssignState, 0, 2u);
+      player.SetString("OwnerID", std::to_string(options.lobbySayTo).c_str());
+      player.SetString("PlayerName", "assigned");
+      data.SetObject("Options", player);
+      const std::string what = "slot " + std::to_string(options.lobbyAssignSlot) + " assigned";
+      sendScript(moho::ELobbyMsg::LOBMSG_BroadcastScriptData, data, what.c_str());
+    }
+    if (Due(options.lobbyRequestAt, elapsed) && options.lobbySayTo != 0 && !options.lobbyRequest.empty()) {
+      static LuaPlus::LuaState sRequestState(LuaPlus::LuaState::LIB_BASE);
+      LuaPlus::LuaObject data;
+      data.AssignNewTable(&sRequestState, 0, 2u);
+      data.SetString("Type", options.lobbyRequest.c_str());
+      data.SetInteger("RequestedSlot", 1);
+      const std::string what = "request " + options.lobbyRequest;
+      sendScript(moho::ELobbyMsg::LOBMSG_DirectScriptData, data, what.c_str());
+    }
     if (Due(options.lobbyEjectAt, elapsed) && options.lobbySayTo != 0) {
       // `CLobby::KickPeer`: `LOBMSG_Rejected` with the reason, to the participant ejected.
       const std::string reason = "KickedByHost";
@@ -1062,6 +1210,12 @@ int main(const int argc, char** const argv)
       writer.Bytes(reinterpret_cast<const std::uint8_t*>(text.data()), text.size());
       (void)link.SendReliable(frame.data(), frame.size());
       std::printf("probe %d: %.1f s: lobby: script data to uid %d\n", options.uid, elapsed, options.lobbySayTo);
+    }
+    if (Due(options.speedLimitAt, elapsed)) {
+      // Plan WP10.7: as a server-mode game reports what it keeps up with.
+      const std::vector<std::uint8_t> limit = faf::remote::EncodeSpeedLimit(options.speedLimit);
+      (void)link.SendReliable(limit.data(), limit.size());
+      std::printf("probe %d: %.1f s: speed limit %+d sent\n", options.uid, elapsed, options.speedLimit);
     }
     if (options.chatAt >= 0.0 && !rosterSeen.chatted && elapsed >= options.chatAt && rosterSeen.connected > 1u) {
       rosterSeen.chatted = true;

@@ -1,5 +1,6 @@
 #include "moho/lua/ScrLuaUserData.h"
 #include "moho/entity/EntityPrivate.h"
+#include "moho/entity/EntityPool.h"
 
 namespace moho
 {
@@ -901,6 +902,31 @@ namespace moho
     cloak = EncodeIntelRangeLane(blueprint->Intel.CloakFieldRadius);
   }
 
+
+  // Engine addition (sim_EntityPool): see EntityPool.
+  void* Entity::operator new(
+    std::size_t size
+  )
+  {
+    return EntityPool::sInstance->Allocate(size);
+  }
+
+  void* Entity::operator new(
+      std::size_t size,
+      std::nothrow_t
+  ) noexcept
+  {
+    return EntityPool::sInstance->TryAllocate(size);
+  }
+
+  void Entity::operator delete(
+    void* ptr,
+    std::size_t size
+  ) noexcept
+  {
+    EntityPool::sInstance->Dellocate(ptr, size);
+  }
+
   /**
    * Address: 0x00676C40 (FUN_00676C40)
    *
@@ -1629,7 +1655,7 @@ namespace
     }
 
     const STIMap* const mapData = SimulationRef->mMapData;
-    const float waterElevation = mapData->IsWaterEnabled() ? mapData->GetWaterElevation() : -10000.0f;
+    const float waterElevation = mapData->GetWaterElevationAt(worldPos.x, worldPos.z); // engine addition: per position
     // 0x0062AEE8: `CHeightField::GetElevation(x, z)` (0x0044FB90) on the map's
     // height field.
     const float terrainElevation = mapData->GetHeightField()->GetElevation(worldPos.x, worldPos.z);
@@ -4011,11 +4037,9 @@ namespace
       return terrainElevation;
     }
 
-    if (map->mWaterEnabled == 0u) {
-      return terrainElevation;
-    }
-
-    return (map->mWaterElevation > terrainElevation) ? map->mWaterElevation : terrainElevation;
+    // Engine addition (water bodies): the level at (x, z); -10000 without water.
+    const float waterElevation = map->GetWaterElevationAt(x, z);
+    return (waterElevation > terrainElevation) ? waterElevation : terrainElevation;
   }
 
   /**
@@ -4036,10 +4060,12 @@ namespace
 
     const CHeightField* const field = map->mHeightField.get();
     const float terrainElevation = field->GetElevation(worldX, worldZ);
-    if ((static_cast<std::int32_t>(layer) & static_cast<std::int32_t>(LAYER_Seabed)) != 0 || map->mWaterEnabled == 0u) {
+    // Engine addition (water bodies): the level at the cell's position; -10000 without water.
+    const float waterElevation = map->GetWaterElevationAt(worldX, worldZ);
+    if ((static_cast<std::int32_t>(layer) & static_cast<std::int32_t>(LAYER_Seabed)) != 0) {
       outPos.y = terrainElevation;
     } else {
-      outPos.y = (map->mWaterElevation > terrainElevation) ? map->mWaterElevation : terrainElevation;
+      outPos.y = (waterElevation > terrainElevation) ? waterElevation : terrainElevation;
     }
 
     return outPos;
@@ -4080,10 +4106,13 @@ namespace
     const float terrainElevation = field->GetElevation(worldPos.x, worldPos.z);
     const bool seabedOnly =
       (static_cast<std::uint8_t>(footprint.mOccupancyCaps) & static_cast<std::uint8_t>(LAYER_Seabed)) != 0u;
-    if (seabedOnly || map->mWaterEnabled == 0u || map->mWaterElevation <= terrainElevation) {
+    // Engine addition (water bodies): the level at the position; -10000 without water.
+    const float waterElevation = map->GetWaterElevationAt(worldPos.x, worldPos.z);
+    // No water at all keeps the terrain even when it is NaN, as the single-level test did.
+    if (seabedOnly || (map->mWaterEnabled == 0u && !map->HasWaterBodies()) || waterElevation <= terrainElevation) {
       outPos.y = terrainElevation;
     } else {
-      outPos.y = map->mWaterElevation;
+      outPos.y = waterElevation;
     }
 
     return outPos;

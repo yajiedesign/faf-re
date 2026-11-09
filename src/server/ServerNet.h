@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -49,6 +50,11 @@ namespace faf::server
     double lobbyAwaySeconds = 6.0;
     /** Plan WP17.1: the match file's `MatchLobbyControl`: organised (WPR.49's rules) or player-hosted. */
     ELobbyControl lobbyControl = ELobbyControl::Organiser;
+    /**
+     * Plan WP17.8: the match file's `MatchUiMods`, the UI mods a player may run (empty: none); unset: any. A player who
+     * runs another is judged under `MatchContentCheck` (warned, or out of the game), as reported by their game.
+     */
+    std::optional<std::vector<std::string>> uiModsAllowed;
   };
 
   class CServerNet final : private remote::net::CServerLinks::IEvents
@@ -93,6 +99,7 @@ namespace faf::server
     {
       std::int32_t uid;
       bool away;
+      bool gone = false; // out of the game: no longer away, and not back either
     };
     /** Who went away or stopped being away since the last call, in order. */
     [[nodiscard]] std::vector<SPresence> TakePresence();
@@ -109,6 +116,10 @@ namespace faf::server
     [[nodiscard]] std::vector<SLobbyMessage> TakeLobbyMessages();
     /** A lobby signal from the server to a participant, in order, once they've joined. From any thread. */
     void QueueLobbyFromServer(std::int32_t uid, const std::vector<std::uint8_t>& message);
+    /** Plan WP17.2: a lobby message to `uid` in `from`'s name (`CLobbyRelay::FrameFrom`), queued like the server's own. */
+    void QueueLobbyAs(std::int32_t uid, std::int32_t from, const std::vector<std::uint8_t>& message);
+    /** Plan WP17.2: a new set of pinned options while the lobby is open; applied on the network thread. */
+    void RequestPins(SPinnedOptions pinned);
     /** Participants whose channel came up for the first time since the last call, for the lobby's signals. */
     [[nodiscard]] std::vector<std::int32_t> TakeLobbyJoined();
     /** Participants out of the game since the last call, for the lobby's signals (the game's views read `TakeGone`). */
@@ -132,10 +143,44 @@ namespace faf::server
       bool gone = false;
       bool away = false; // quiet in the lobby
       std::uint32_t pingMs = 0;
+      // Plan WP17.2, WP17.8: the server's verdicts on what the player's game reported ("" until judged): content
+      // "same", "differs" or "missing"; UI mods "allowed", "outside" or "missing"; and the UI mods it reported.
+      std::string content;
+      std::string mods;
+      std::vector<std::string> uiMods;
+      // Plan WP12.1: how far its game has loaded: "" before the launch, "loading", "rules" (its content report came, so
+      // the rules are loaded), "loaded" (at the start barrier).
+      std::string load;
+      // Plan WP17.2: in the lobby, the ready state its own PlayerOptions last set: "yes", "no", or "" before it did.
+      std::string ready;
+      // Plan WP17.2: the lobby slot the host's lobby put it in (lobby.lua's slot, not the match's army); 0 before.
+      int lobbySlot = 0;
+      // Plan WP10.7: the sim-speed limit its game last reported (remote/SpeedLimit.h); nothing before it did.
+      std::optional<int> speedLimit;
     };
     [[nodiscard]] std::vector<SSeatState> Seats();
-    /** Plan WP17.2: the organiser takes a participant out of the match; done on the network thread. False: no such seat. */
+    /** Plan WP17.2: each verdict made since the last call, as the seat stood then (uid, name and the verdict fields). */
+    [[nodiscard]] std::vector<SSeatState> TakeJudged();
+    /**
+     * Plan WP10.7: the lowest sim-speed limit of the seats still in the game (not gone) that reported one, and whose;
+     * nothing when none did. As `CClientManagerImpl::GetSimRate` takes the lowest client's. Any thread.
+     */
+    [[nodiscard]] std::optional<std::pair<int, std::int32_t>> SlowestSpeedLimit();
+    /** Plan WP17.2: lobby ready states that changed since the last call (uid, ready), in order. */
+    [[nodiscard]] std::vector<std::pair<std::int32_t, bool>> TakeReadyChanges();
+    /**
+     * Plan WP17.2: a participant out of the match (the organiser's eject, or a defeat with `DefeatedPlayerView =
+     * "disconnect"`), as one who leaves is; done on the network thread. `reason` goes to the log whole. False: no such seat.
+     */
     bool RequestEject(std::int32_t uid, std::string reason);
+    /** Plan WP17.2: the organiser adds an address to the handshake allowlist or takes it off; done on the network thread. */
+    void RequestAddress(std::uint32_t ip, bool allow);
+    /**
+     * Plan WP15.4 (#200): another person takes a seat during the game. The seat keeps its uid; its admission token and
+     * name become `token` and `name`, the old player's channel goes, and the substitute joins as a player coming back
+     * (launch info and a whole view again, the reconnect window running). False: no such seat, or it's out of the game.
+     */
+    bool RequestSubstitute(std::int32_t uid, const std::string& token, std::string name);
     /** Plan WP17.1: the current logical host (0: none), from the lobby's succession; its ejects go through in a player-hosted lobby. */
     void SetLobbyHost(const std::int32_t uid) noexcept { mLobbyHost.store(uid, std::memory_order_relaxed); }
     /** Before `Start` (plan WPR.49): the game options the match pins (`CLobbyRelay::PinOptions`). */
@@ -178,11 +223,18 @@ namespace faf::server
       bool reported = false;       // plan WP2.6: its content report came
       remote::SContentReport report;
       bool contentJudged = false;
+      bool modsReported = false;   // plan WP17.8: its mod report came
+      std::vector<remote::SModEntry> mods;
+      bool modsJudged = false;
+      std::string contentVerdict; // plan WP17.2: as SSeatState's
+      std::string modsVerdict;
+      std::optional<int> speedLimit; // plan WP10.7: the last its game reported
       // Plan WP11.4: its client in the session, as every player's roster lists it.
       int clientIndex = -1;
       std::vector<std::uint8_t> sources;
       bool startSent = false;   // its launch has gone: its game takes rosters and chat from now on
       bool rosterOwed = false;  // the next roster pass sends it the roster, changed or not
+      bool substituted = false; // plan WP15.4: another person was given the seat; their first join counts as a return
       remote::CChatBudget chatBudget;
     };
 
@@ -192,6 +244,10 @@ namespace faf::server
     void NoteLobbyPresence(std::int32_t uid, SSeat& seat, bool away);
     /** Plan WP2.6: once the server's content is known, a seat with a report, or loaded without one. */
     void JudgeContent(std::int32_t uid, SSeat& seat);
+    /** Plan WP17.8: once the server's content is known and a policy is set, a seat with a mod report, or loaded without one. */
+    void JudgeMods(std::int32_t uid, SSeat& seat);
+    /** The seat's verdicts so far, queued for `TakeJudged`. */
+    void NoteJudged(std::int32_t uid, const SSeat& seat);
     void Tick(std::uint64_t nowUs);
     void Remove(std::int32_t uid, SSeat& seat, const std::string& why);
     void Say(std::string line);
@@ -221,6 +277,8 @@ namespace faf::server
     std::vector<std::int32_t> mGone;          // under mNewsLock
     std::vector<std::int32_t> mReturned;      // likewise
     std::vector<SPresence> mPresence;         // likewise
+    std::vector<SSeatState> mJudged;
+    std::vector<std::pair<std::int32_t, bool>> mReadyNews; // plan WP17.2 (`TakeReadyChanges`)          // plan WP17.2: each seat's verdicts as they were made (`TakeJudged`)
     std::uint64_t mBadMessages = 0;
     std::uint64_t mViewMismatches = 0;
     remote::wire::SRoster mRosterSent; // the last sent to everyone, without a local index
@@ -253,6 +311,15 @@ namespace faf::server
     std::vector<std::string> mNews;
     std::vector<SSeatState> mSeatStates;                         // under mNewsLock
     std::vector<std::pair<std::int32_t, std::string>> mEjects;   // likewise: uid, reason
+    std::vector<std::pair<std::uint32_t, bool>> mAddressChanges; // likewise: ip, allow
+    std::optional<SPinnedOptions> mPinsIn;                      // likewise
+    struct SSubstitute
+    {
+      std::int32_t uid;
+      std::string token;
+      std::string name;
+    };
+    std::vector<SSubstitute> mSubstitutes;                      // likewise
 
     CLobbyRelay mLobby;                        // on the network thread
     std::vector<std::uint8_t> mLobbyFrame;     // the frame being relayed

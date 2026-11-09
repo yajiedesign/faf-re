@@ -108,6 +108,18 @@ namespace faf::remote::net
      * index, written by the server, then the payload. The server drops one for no player, too large or too many.
      */
     Chat = 16,
+    /**
+     * Player to server, reliable, after `ContentReport` (plan WP17.8): varint count, then per mod a kind byte (0 sim,
+     * 1 UI), its uid and its version, each a varint length and its bytes. UI mods load only in the player's own game,
+     * so the server takes them as reported.
+     */
+    ModReport = 17,
+    /**
+     * Player to server, reliable (plan WP10.7): varint (speed limit + 10). The player's sim-speed limit: the speed step
+     * its game keeps up with, from what applying the server's views costs it (remote/SpeedLimit.h), as a lockstep
+     * client's `CLIMSG_IntParam` reports its sim's. Sent when it changes. The server runs at the slowest playing seat's.
+     */
+    SpeedLimit = 18,
   };
 
   /** What became of a player's command. */
@@ -174,6 +186,8 @@ namespace faf::remote::net
      * every address is treated as listed.
      */
     void AllowAddress(std::uint32_t ip);
+    /** Plan WP17.2: off the allowlist again (it shares the unlisted budget from now on); the list stays on. */
+    void DisallowAddress(std::uint32_t ip);
 
     void AddPlayer(std::int32_t uid, const Token& token);
     /** No more handshakes for this uid, and its channel is gone. */

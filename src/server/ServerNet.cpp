@@ -1,4 +1,5 @@
 #include "server/ServerNet.h"
+#include "remote/SpeedLimit.h"
 
 #include <algorithm>
 #include <chrono>
@@ -94,6 +95,13 @@ namespace faf::server
       mNowUs = NowUs();
       // Time since the start, as a cookie's period counts from 0.
       mLobby.SetHost(mLobbyHost.load(std::memory_order_relaxed));
+      {
+        const std::scoped_lock lock(mNewsLock);
+        if (mPinsIn) {
+          mLobby.PinOptions(std::move(*mPinsIn)); // plan WP17.2: the organiser's options from now on
+          mPinsIn.reset();
+        }
+      }
       if (mLobby.Open() && mCloseLobby.load(std::memory_order_relaxed)) {
         mLobby.Close();
       }
@@ -108,6 +116,7 @@ namespace faf::server
         if (mContentKnown) {
           for (auto& [uid, seat] : mSeats) {
             JudgeContent(uid, seat);
+            JudgeMods(uid, seat);
           }
         }
       }
@@ -280,6 +289,8 @@ namespace faf::server
     }
     seat.contentJudged = true;
     const remote::EContentVerdict verdict = remote::JudgeContent(mContentExpected, seat.reported ? &seat.report : nullptr);
+    seat.contentVerdict = verdict == remote::EContentVerdict::Same ? "same" : (verdict == remote::EContentVerdict::Differs ? "differs" : "missing");
+    NoteJudged(uid, seat);
     if (verdict == remote::EContentVerdict::Same) {
       Say(seat.name + "'s game content is the server's");
       return;
@@ -295,10 +306,64 @@ namespace faf::server
     }
   }
 
+  void CServerNet::JudgeMods(const std::int32_t uid, SSeat& seat)
+  {
+    if (!mConfig.uiModsAllowed || !mContentKnown || mContentMode == remote::EContentCheck::Off || seat.gone || seat.modsJudged) {
+      return;
+    }
+    if (!seat.modsReported && !seat.loaded) {
+      return; // nothing to judge yet
+    }
+    seat.modsJudged = true;
+    std::string what;
+    const std::vector<std::string> outside = seat.modsReported ? remote::UiModsOutside(seat.mods, *mConfig.uiModsAllowed) : std::vector<std::string>{};
+    seat.modsVerdict = !seat.modsReported ? "missing" : (outside.empty() ? "allowed" : "outside");
+    NoteJudged(uid, seat);
+    if (!seat.modsReported) {
+      what = "loaded without reporting its mods";
+    } else if (!outside.empty()) {
+      what = "runs UI mods the match doesn't allow:";
+      for (const std::string& mod : outside) {
+        what += " " + mod;
+      }
+    } else {
+      const auto ui = std::count_if(seat.mods.begin(), seat.mods.end(), [](const remote::SModEntry& mod) { return mod.ui; });
+      Say(seat.name + "'s UI mods are the match's to allow (" + std::to_string(ui) + ")");
+      return;
+    }
+    if (mContentMode == remote::EContentCheck::Refuse) {
+      Remove(uid, seat, what);
+    } else {
+      Say(seat.name + ": " + what + "; the match only warns");
+    }
+  }
+
   void CServerNet::QueueLobbyFromServer(const std::int32_t uid, const std::vector<std::uint8_t>& message)
   {
     const std::scoped_lock lock(mViewLock);
     mLobbyOut.push_back(SLobbyMessage{uid, CLobbyRelay::FrameFromServer(message)});
+  }
+
+  void CServerNet::QueueLobbyAs(const std::int32_t uid, const std::int32_t from, const std::vector<std::uint8_t>& message)
+  {
+    const std::scoped_lock lock(mViewLock);
+    mLobbyOut.push_back(SLobbyMessage{uid, CLobbyRelay::FrameFrom(from, message)});
+  }
+
+  bool CServerNet::RequestSubstitute(const std::int32_t uid, const std::string& token, std::string name)
+  {
+    const std::scoped_lock lock(mNewsLock);
+    const bool known = std::any_of(mSeatStates.begin(), mSeatStates.end(), [uid](const SSeatState& seat) { return seat.uid == uid && !seat.gone; });
+    if (known) {
+      mSubstitutes.push_back(SSubstitute{uid, token, std::move(name)});
+    }
+    return known;
+  }
+
+  void CServerNet::RequestPins(SPinnedOptions pinned)
+  {
+    const std::scoped_lock lock(mNewsLock);
+    mPinsIn = std::move(pinned);
   }
 
   void CServerNet::SendLobby()
@@ -343,19 +408,58 @@ namespace faf::server
     return known;
   }
 
+  void CServerNet::RequestAddress(const std::uint32_t ip, const bool allow)
+  {
+    const std::scoped_lock lock(mNewsLock);
+    mAddressChanges.emplace_back(ip, allow);
+  }
+
   void CServerNet::Tick(const std::uint64_t nowUs)
   {
     WatchLobbyPresence(nowUs);
 
-    // Plan WP17.2: the organiser's ejects, and the seats as the control API reports them.
+    // Plan WP17.2: the organiser's ejects and allowlist changes, and the seats as the control API reports them.
     std::vector<std::pair<std::int32_t, std::string>> ejects;
+    std::vector<std::pair<std::uint32_t, bool>> addresses;
+    std::vector<SSubstitute> substitutes;
     {
       const std::scoped_lock lock(mNewsLock);
       ejects.swap(mEjects);
+      addresses.swap(mAddressChanges);
+      substitutes.swap(mSubstitutes);
+    }
+    for (SSubstitute& substitute : substitutes) {
+      const auto found = mSeats.find(substitute.uid);
+      if (found == mSeats.end() || found->second.gone) {
+        continue;
+      }
+      SSeat& seat = found->second;
+      // The old channel goes with the old token; the seat waits for its new player as for one who lost the connection.
+      mLinks.RemovePlayer(substitute.uid);
+      mLinks.AddPlayer(substitute.uid, remote::net::MakeToken(substitute.token));
+      const std::string before = seat.name;
+      seat.name = std::move(substitute.name);
+      seat.lost = true;
+      seat.lostAtUs = nowUs;
+      seat.substituted = true; // its next join is a return: launch info, game info and a whole view then (OnJoined)
+      seat.rosterOwed = true;
+      {
+        const std::scoped_lock lock(mNewsLock);
+        mPresence.push_back(SPresence{substitute.uid, true});
+      }
+      Say(seat.name + " takes " + before + "'s seat (uid " + std::to_string(substitute.uid) + "): " +
+          std::to_string(static_cast<int>(mConfig.reconnectSeconds)) + " s to join");
+    }
+    for (const auto& [ip, allow] : addresses) {
+      if (allow) {
+        mLinks.AllowAddress(ip);
+      } else {
+        mLinks.DisallowAddress(ip);
+      }
     }
     for (const auto& [uid, reason] : ejects) {
       if (const auto found = mSeats.find(uid); found != mSeats.end() && !found->second.gone) {
-        Remove(uid, found->second, "ejected by the organiser" + (reason.empty() ? std::string() : ": " + reason));
+        Remove(uid, found->second, reason);
       }
     }
     std::vector<SSeatState> states;
@@ -369,14 +473,29 @@ namespace faf::server
       state.lost = seat.lost;
       state.gone = seat.gone;
       state.away = seat.lobbyAway;
+      state.content = seat.contentVerdict;
+      if (const std::optional<bool> ready = mLobby.ReadyOf(uid); ready) {
+        state.ready = *ready ? "yes" : "no";
+      }
+      state.lobbySlot = mLobby.LobbySlotOf(uid);
+      state.speedLimit = seat.gone ? std::nullopt : seat.speedLimit;
+      state.load = seat.loaded ? "loaded" : (seat.reported ? "rules" : (mContentKnown && seat.joinedEver ? "loading" : ""));
+      state.mods = seat.modsVerdict;
+      for (const remote::SModEntry& mod : seat.mods) {
+        if (mod.ui) {
+          state.uiMods.push_back(mod.uid);
+        }
+      }
       if (const remote::net::ChannelStats* const stats = mLinks.StatsOf(uid); stats != nullptr && !seat.gone) {
         state.pingMs = static_cast<std::uint32_t>(stats->rttSmoothedUs / 1000u);
       }
       states.push_back(std::move(state));
     }
     {
+      const std::vector<std::pair<std::int32_t, bool>> readyChanges = mLobby.TakeReadyChanges();
       const std::scoped_lock lock(mNewsLock);
       mSeatStates.swap(states);
+      mReadyNews.insert(mReadyNews.end(), readyChanges.begin(), readyChanges.end());
     }
 
     if (const std::int32_t beat = mBeat.load(std::memory_order_relaxed); beat != mBeatSent) {
@@ -526,7 +645,7 @@ namespace faf::server
       const std::scoped_lock lock(mNewsLock);
       mGone.push_back(uid);
       mLobbyLeft.push_back(uid);
-      mPresence.push_back(SPresence{uid, false});
+      mPresence.push_back(SPresence{uid, false, true});
     }
     Say(seat.name + " is out of the game: " + why);
   }
@@ -556,6 +675,8 @@ namespace faf::server
            std::to_string(mLobby.Count(ELobbyRelayVerdict::TooLarge)) + " too large, " +
            std::to_string(mLobby.Count(ELobbyRelayVerdict::Closed)) + " after launch, " +
            std::to_string(mLobby.Count(ELobbyRelayVerdict::EjectIgnored)) + " ejects of participants, " +
+           std::to_string(mLobby.Count(ELobbyRelayVerdict::Locked)) + " players' changes refused and " +
+           std::to_string(mLobby.PlayerOptionsLimited()) + " cut to Ready in an organised lobby, " +
            std::to_string(mLobby.Count(ELobbyRelayVerdict::EjectForwarded)) + " ejects by a player host relayed, " +
            std::to_string(mLobby.Count(ELobbyRelayVerdict::UnknownSender) + mLobby.Count(ELobbyRelayVerdict::UnknownTarget) +
                           mLobby.Count(ELobbyRelayVerdict::Malformed)) +
@@ -570,6 +691,46 @@ namespace faf::server
     return std::exchange(mReturned, {});
   }
 
+  void CServerNet::NoteJudged(const std::int32_t uid, const SSeat& seat)
+  {
+    SSeatState state;
+    state.uid = uid;
+    state.name = seat.name;
+    state.content = seat.contentVerdict;
+    state.mods = seat.modsVerdict;
+    for (const remote::SModEntry& mod : seat.mods) {
+      if (mod.ui) {
+        state.uiMods.push_back(mod.uid);
+      }
+    }
+    const std::scoped_lock lock(mNewsLock);
+    mJudged.push_back(std::move(state));
+  }
+
+  std::vector<std::pair<std::int32_t, bool>> CServerNet::TakeReadyChanges()
+  {
+    const std::scoped_lock lock(mNewsLock);
+    return std::exchange(mReadyNews, {});
+  }
+
+  std::optional<std::pair<int, std::int32_t>> CServerNet::SlowestSpeedLimit()
+  {
+    const std::scoped_lock lock(mNewsLock);
+    std::optional<std::pair<int, std::int32_t>> slowest;
+    for (const SSeatState& seat : mSeatStates) {
+      if (seat.speedLimit && (!slowest || *seat.speedLimit < slowest->first)) {
+        slowest.emplace(*seat.speedLimit, seat.uid);
+      }
+    }
+    return slowest;
+  }
+
+  std::vector<CServerNet::SSeatState> CServerNet::TakeJudged()
+  {
+    const std::scoped_lock lock(mNewsLock);
+    return std::exchange(mJudged, {});
+  }
+
   std::vector<CServerNet::SPresence> CServerNet::TakePresence()
   {
     const std::scoped_lock lock(mNewsLock);
@@ -582,13 +743,15 @@ namespace faf::server
     return std::exchange(mNews, {});
   }
 
-  void CServerNet::OnJoined(const std::int32_t uid, const remote::net::SEndpoint& from, const bool returning)
+  void CServerNet::OnJoined(const std::int32_t uid, const remote::net::SEndpoint& from, const bool linkReturning)
   {
     const auto found = mSeats.find(uid);
     if (found == mSeats.end()) {
       return;
     }
     SSeat& seat = found->second;
+    // Plan WP15.4: a substitute's first join is the seat's return (the links see a new player: its record is new).
+    const bool returning = linkReturning || std::exchange(seat.substituted, false);
     if (!std::exchange(seat.joinedEver, true) && mLobby.Open()) {
       const std::scoped_lock lock(mNewsLock);
       mLobbyJoined.push_back(uid);
@@ -658,6 +821,7 @@ namespace faf::server
       if (!seat.loaded) {
         seat.loaded = true;
         JudgeContent(uid, seat); // plan WP2.6: one with no report counts once the server's content is known
+        JudgeMods(uid, seat);
         if (seat.gone) {
           return;
         }
@@ -721,6 +885,32 @@ namespace faf::server
     case remote::net::ESeatMessage::Chat:
       RelayChat(seat, message); // plan WP11.4
       return;
+    case remote::net::ESeatMessage::ModReport: {
+      std::vector<remote::SModEntry> mods;
+      if (!remote::DecodeModReport(message, mods)) {
+        ++mBadMessages;
+        return;
+      }
+      if (!seat.modsReported) { // the first counts
+        seat.modsReported = true;
+        seat.mods = std::move(mods);
+        JudgeMods(uid, seat);
+      }
+      return;
+    }
+    case remote::net::ESeatMessage::SpeedLimit: {
+      // Plan WP10.7: the player's game says how fast it keeps up; the server runs at the slowest playing seat's.
+      const std::optional<int> limit = remote::DecodeSpeedLimit(message);
+      if (!limit) {
+        ++mBadMessages;
+        return;
+      }
+      if (seat.speedLimit != limit) {
+        seat.speedLimit = limit;
+        Say(seat.name + "'s game keeps up with speed " + (*limit >= 0 ? "+" : "") + std::to_string(*limit));
+      }
+      return;
+    }
     case remote::net::ESeatMessage::Roster:
     case remote::net::ESeatMessage::Beat:
     case remote::net::ESeatMessage::View:
