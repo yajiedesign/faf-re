@@ -1,0 +1,41 @@
+name: 1p-uistress-ai-1200
+description: >
+  sim-cost load with real combat: 800 UEF T1 tanks (400 per army) over 2 armies, each
+  block on its own start marker, so the armies advance, acquire targets, fight
+  and die. Unlike the idle 1p-uistress run this exercises the sim paths a large
+  match spends its time in (TaskStages, Recon, ArmiesTick): pathing, targeting,
+  deaths and command queues. Same UI hook (camera zoom loop) as 1p-uistress.
+  Setup: tools/perf/uistress/map copied into the vault as maps/faf_re_uistress
+  (with a real map's scmap and save as faf_re_uistress.scmap /
+  faf_re_uistress_save.lua); init_uistress.lua in the FAF bin folder.
+timeout: 6m
+
+mode: direct
+lobby: auto
+map: faf_re_uistress
+gameOptions:
+  Victory: sandbox
+  Tanks: 400
+  Armies: 2
+  Attack: 1
+
+game:
+  exe: '%ProgramData%\FAForever\bin_x64\main_x64.exe'
+  init: init_uistress.lua
+  nosound: true
+
+players:
+  - { uid: 1, name: UiStress, faction: uef, args: ['/title', 'uistress-ai-1200'] }
+
+steps:
+  - start: all
+  - host: 1
+  - waitState: { uids: all, state: Launching, timeout: 3m }
+  - wait: 125s
+
+expect:
+  allLaunched: true
+  noCrash: true
+  logsContain:
+    - { uids: all, pattern: 'UISTRESS spawned tanks=' }
+    - { uids: all, pattern: 'UISTRESS flips=' }

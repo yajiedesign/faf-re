@@ -1,0 +1,43 @@
+name: 1p-uistress-2000
+description: >
+  A real skirmish on faf_re_uistress (Dual Gap terrain) for sim and UI cost
+  measurements. Each of 4 armies gets a dense block of UEF T1 tanks on its
+  own start marker, and the script sends every block at another army, so the
+  units path, acquire targets, fire and die -- the work a large match spends
+  its time in. A UI hook also flips the camera between the minimum and
+  maximum zoom eight times a second so the strategic-icon, selection and
+  overlay passes re-project continuously.
+  Setup: tools/perf/uistress/map copied into the vault as maps/faf_re_uistress,
+  with any real map's scmap and save copied in as faf_re_uistress.scmap /
+  faf_re_uistress_save.lua (this run used dualgap_adaptive.v0014); copy
+  init_uistress.lua into the FAF bin folder.
+timeout: 6m
+
+mode: direct
+lobby: auto
+map: faf_re_uistress
+gameOptions:
+  Victory: sandbox
+  Tanks: 450
+  Armies: 4
+
+game:
+  exe: '%ProgramData%\FAForever\bin_x64\main_x64.exe'
+  init: init_uistress.lua
+  nosound: true
+
+players:
+  - { uid: 1, name: UiStress, faction: uef, args: ['/title', 'uistress'] }
+
+steps:
+  - start: all
+  - host: 1
+  - waitState: { uids: all, state: Launching, timeout: 3m }
+  - wait: 125s
+
+expect:
+  allLaunched: true
+  noCrash: true
+  logsContain:
+    - { uids: all, pattern: 'UISTRESS spawned tanks=' }
+    - { uids: all, pattern: 'UISTRESS flips=' }
