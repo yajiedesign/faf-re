@@ -113,3 +113,13 @@ dependencies/ffmpeg/
 # The x87 hardware reference (x87ref32.exe) is built on demand by
 # tools/x87sim/hwprobe/build.py; only the sources belong in the repo.
 tools/x87sim/hwprobe/build/
+
+# Crash dumps and callstacks left in the working directory by a run that hit
+# one. `faf_crash_*.dmp/.txt` come from the engine's own handler; the bare
+# `crash_callstack.txt` is what an inspector run drops beside the exe.
+/faf_crash_*.dmp
+/faf_crash_*.txt
+/crash_callstack.txt
+
+# Precompiled header the x64 layout-assert check leaves at the root.
+/X64LayoutAsserts.pch
