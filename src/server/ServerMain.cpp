@@ -83,6 +83,7 @@
 #include "server/ServerNet.h"
 #include "server/ServerViews.h"
 #include "remote/SpeedLimit.h"
+#include "server/LinkSpeed.h"
 #include "server/SpeedWatch.h"
 
 namespace
@@ -100,7 +101,7 @@ namespace
 
   constexpr const char* kUsage =
     "usage: server --match <file.lua> --out <dir> /init <init.lua> [--speed <n>] [--stop-beat <n>] [--timeout <minutes>] [--status-minutes <n>] "
-    "[--warn-beat-ms <n>] [--listen <ip:port>] [--join-seconds <n>] [--reconnect-seconds <n>] [--lead-ms <n>] [--view-threads <n>] [--per-player-views] [--team-views] [--away-pause-seconds <n>] [--defeated-view observe|disconnect] [--lobby-seconds <n>] [--lobby-away-seconds <n>] [--stats-every <beats>]\n";
+    "[--warn-beat-ms <n>] [--listen <ip:port>] [--join-seconds <n>] [--reconnect-seconds <n>] [--lead-ms <n>] [--view-threads <n>] [--per-player-views] [--team-views] [--away-pause-seconds <n>] [--defeated-view observe|disconnect] [--lobby-seconds <n>] [--lobby-away-seconds <n>] [--stats-every <beats>] [--congestion-control]\n";
 
   constexpr double kDefaultStatusMinutes = 10.0;
   // Plan WP13.7: how long a defeated player keeps their view with `DefeatedPlayerView = "disconnect"`: the defeat banner
@@ -927,6 +928,7 @@ namespace
     if (reconnectGiven) {
       netConfig.reconnectSeconds = std::atof(text.c_str());
     }
+    netConfig.congestionControl = moho::CFG_GetArgOption("--congestion-control", 0, nullptr); // plan WP10.7, off by default
     const bool awayPauseGiven = ReadOption("--away-pause-seconds", text);
     double awayPauseSeconds = awayPauseGiven ? std::atof(text.c_str()) : 0.0;
     std::string defeatedView; // plan WP13.4
@@ -1136,6 +1138,8 @@ namespace
                    ",\"gone\":" + flag(seat.gone) + ",\"away\":" + flag(seat.away) + ",\"ping_ms\":" + std::to_string(seat.pingMs) +
                    ",\"ready\":" + faf::server::JsonString(seat.ready) + ",\"slot\":" + std::to_string(seat.lobbySlot) +
                    ",\"speed_limit\":" + (seat.speedLimit ? std::to_string(*seat.speedLimit) : std::string("null")) +
+                   ",\"camera_updates\":" + std::to_string(seat.cameraUpdates) +
+                   ",\"backlog_kb\":" + std::to_string(seat.backlogBytes / 1024u) + ",\"behind_beats\":" + std::to_string(seat.behindBeats) +
                    ",\"load\":" + faf::server::JsonString(seat.load) +
                    ",\"content\":" + faf::server::JsonString(seat.content) +
                    ",\"mods\":" + faf::server::JsonString(seat.mods) + ",\"ui_mods\":[";
@@ -1344,7 +1348,12 @@ namespace
             }
             if (!refusal.empty()) {
               Say("Lobby: launch refused: %s", refusal.c_str());
-              signal(message.from, faf::remote::net::ELobbySignal::LaunchRefused, refusal);
+              // Everyone in the lobby: FAF's joiners leave the lobby window on the host's own `Launch` message, which
+              // reaches them before the server has checked anything (lobby.lua's `Launch` handler), and all of them
+              // should see why the game didn't start.
+              for (const std::int32_t uid : signaller.InLobbyUids()) {
+                signal(uid, faf::remote::net::ELobbySignal::LaunchRefused, refusal);
+              }
               continue;
             }
             Say("Lobby: the host launched; starting the match");
@@ -1633,6 +1642,7 @@ namespace
     std::unique_ptr<faf::server::CServerViews> views;
     std::map<std::size_t, std::int32_t> armyUids;                  // each player's army
     std::set<std::size_t> defeatedArmies;                          // plan WP13.7: defeats seen
+    std::set<std::size_t> focusFreed;                              // plan WP11.1: defeated players free to focus
     std::vector<std::pair<double, std::int32_t>> defeatedLeaving;  // and when each such player goes
     if (net) {
       // Plan WP2.6, WP1.4: what each player's report is compared with: the server's own rules, before any player has
@@ -1668,6 +1678,7 @@ namespace
         }
         net->QueueView(client.uid, launchInfo);
         net->QueueView(client.uid, faf::server::MakeGameInfo(mapSizeX, mapSizeZ, playerArmy, client.commandSource));
+        net->SetFocusRule(client.uid, playerArmy); // plan WP11.1: their SetFocusArmy keeps them on it
       }
       armyUids = viewPlayers;
       views = std::make_unique<faf::server::CServerViews>(contentTables, *rules, mapSizeX, mapSizeZ, *net, std::move(viewPlayers), static_cast<unsigned int>(std::max(viewThreads, 1)), teamViews);
@@ -1808,13 +1819,19 @@ namespace
     // Plan WP10.7: the speed the game runs at: the one requested, held to the slowest playing seat's sim-speed limit, as
     // lockstep's `CClientManagerImpl::GetSimRate` holds it to the slowest client's.
     std::int32_t speedHolder = 0;
-    const auto pacedSpeed = [&net](const int requested) {
+    faf::server::CLinkSpeedGovernor linkSpeeds; // plan WP10.7 step 2: links that fall behind hold the game too
+    int pacedNow = 0;
+    const auto pacedSpeed = [&net, &linkSpeeds](const int requested) {
+      int paced = requested;
       if (net) {
-        if (const auto slowest = net->SlowestSpeedLimit(); slowest && slowest->first < requested) {
-          return std::clamp(slowest->first, faf::remote::kMinSpeedLimit, faf::remote::kMaxSpeedLimit);
+        if (const auto slowest = net->SlowestSpeedLimit(); slowest && slowest->first < paced) {
+          paced = slowest->first;
+        }
+        if (const auto link = linkSpeeds.Slowest(); link && link->first < paced) {
+          paced = link->first;
         }
       }
-      return requested;
+      return std::clamp(paced, faf::remote::kMinSpeedLimit, std::max(requested, faf::remote::kMinSpeedLimit));
     };
     const auto watchSpeed = [&](const double elapsed) {
       moho::CClientManagerImpl* const manager = driver->GetClientManager();
@@ -1824,22 +1841,44 @@ namespace
       const float gameRate = moho::SIM_GetMeasuredGameRate();
       const float beatMs = gameRate > 0.0f ? faf::server::kSpeedZeroBeatMs / gameRate : 0.0f;
       const int asked = manager->GetSimRateRequested();
+      // Plan WP10.7 step 2: each seat's link, how far behind it is at the speed the game runs at now.
+      std::vector<faf::server::CServerNet::SSeatState> seatStates;
+      const auto nameOf = [&seatStates](const std::int32_t uid) {
+        for (const faf::server::CServerNet::SSeatState& seat : seatStates) {
+          if (seat.uid == uid) {
+            return seat.name;
+          }
+        }
+        return "uid " + std::to_string(uid);
+      };
+      if (net) {
+        seatStates = net->Seats();
+        std::vector<faf::server::SLinkSample> samples;
+        samples.reserve(seatStates.size());
+        for (const faf::server::CServerNet::SSeatState& seat : seatStates) {
+          samples.push_back(faf::server::SLinkSample{seat.uid, seat.behindSeconds, seat.gone});
+        }
+        for (const faf::server::SLinkNews& change : linkSpeeds.Update(elapsed, pacedNow, asked, samples)) {
+          if (change.limit) {
+            Say("%s's link is %.1f s behind: it holds the game at %+d at most", nameOf(change.uid).c_str(), change.behindSeconds, *change.limit);
+          } else {
+            Say("%s's link keeps up again: it no longer holds the game", nameOf(change.uid).c_str());
+          }
+        }
+      }
       const int requested = pacedSpeed(asked);
-      // Plan WP10.7: who holds the game back, when it changes.
+      pacedNow = requested;
+      // Plan WP10.7: who holds the game back (a player's game, step 0, or their link, step 2), when it changes.
       const auto slowest = net ? net->SlowestSpeedLimit() : std::nullopt;
-      const std::int32_t holder = slowest && slowest->first < asked ? slowest->second : 0;
+      const auto link = net ? linkSpeeds.Slowest() : std::nullopt;
+      const bool byLink = link && link->first < asked && (!slowest || link->first < slowest->first);
+      const std::int32_t holder = byLink ? link->second : (slowest && slowest->first < asked ? slowest->second : 0);
       if (holder != speedHolder) {
         speedHolder = holder;
         if (holder != 0) {
-          std::string who = "uid " + std::to_string(holder);
-          for (const faf::server::CServerNet::SSeatState& seat : net->Seats()) {
-            if (seat.uid == holder) {
-              who = seat.name;
-            }
-          }
-          Say("Game speed held at %+d by %s's game (requested %+d)", requested, who.c_str(), asked);
+          Say("Game speed held at %+d by %s's %s (requested %+d)", requested, nameOf(holder).c_str(), byLink ? "link" : "game", asked);
         } else {
-          Say("Game speed no longer held by a player's game (requested %+d)", asked);
+          Say("Game speed no longer held by a player (requested %+d)", asked);
         }
       }
       if (views) {
@@ -1871,11 +1910,25 @@ namespace
       if (statusSeconds > 0.0 && elapsed - lastStatus >= statusSeconds) {
         const double beatsPerSecond = (end.beats - statusBeats) / (elapsed - lastStatus);
         const std::uint64_t netBytes = net ? net->BytesSent() : 0u;
-        Say("Status: game time %s, real time %s, speed %+d (requested %+d%s), %.1f beats/s, a beat takes %.0f ms, memory %ld MB, %.0f KB/s to players, %lu warnings in the log",
+        // Plan WP10.7: the player whose link is furthest behind, when anyone is more than a second behind.
+        std::string behind;
+        if (net) {
+          const faf::server::CServerNet::SSeatState* worst = nullptr;
+          const std::vector<faf::server::CServerNet::SSeatState> seats = net->Seats();
+          for (const faf::server::CServerNet::SSeatState& seat : seats) {
+            if (!seat.gone && (worst == nullptr || seat.behindBeats > worst->behindBeats)) {
+              worst = &seat;
+            }
+          }
+          if (worst != nullptr && worst->behindBeats > 10u) {
+            behind = ", " + worst->name + " " + std::to_string(worst->behindBeats) + " beats behind (" + std::to_string(worst->backlogBytes / 1024u) + " KB)";
+          }
+        }
+        Say("Status: game time %s, real time %s, speed %+d (requested %+d%s), %.1f beats/s, a beat takes %.0f ms, memory %ld MB, %.0f KB/s to players%s, %lu warnings in the log",
             GameClockText(end.lastBeat - pausedBeats).c_str(), ClockText(elapsed).c_str(), speed, asked,
-            requested < asked ? (", held at " + std::string(requested >= 0 ? "+" : "") + std::to_string(requested) + " by a player's game").c_str() : "",
+            requested < asked ? (", held at " + std::string(requested >= 0 ? "+" : "") + std::to_string(requested) + " by a player (see the hold line)").c_str() : "",
             beatsPerSecond, beatMs, ResidentMegabytes(),
-            static_cast<double>(netBytes - statusNetBytes) / 1024.0 / (elapsed - lastStatus), warnings.Count());
+            static_cast<double>(netBytes - statusNetBytes) / 1024.0 / (elapsed - lastStatus), behind.c_str(), warnings.Count());
         statusNetBytes = netBytes;
         lastStatus = elapsed;
         statusBeats = end.beats;
@@ -2198,6 +2251,15 @@ namespace
           LuaPlus::LuaObject results = sync["GameResult"];
           if (results.IsTable()) {
             ReadGameResults(results, end.players);
+            // Plan WP11.1: with `DefeatedPlayerView = "observe"`, a defeated player may focus on any army (the original
+            // client's `SetFocusArmy(-1)` on defeat); they see only what their view (WP13.6) was sent.
+            for (std::size_t army = 0; net && !disconnectDefeated && army < end.players.size(); ++army) {
+              if (end.players[army].result.starts_with("defeat") && focusFreed.insert(army).second) {
+                if (const auto found = armyUids.find(army); found != armyUids.end()) {
+                  net->FreeFocus(found->second);
+                }
+              }
+            }
             // Plan WP13.7: with `DefeatedPlayerView = "disconnect"`, a defeated player goes once they've seen it.
             for (std::size_t army = 0; disconnectDefeated && army < end.players.size(); ++army) {
               if (end.players[army].result.starts_with("defeat") && defeatedArmies.insert(army).second) {

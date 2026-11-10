@@ -1,14 +1,25 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <map>
 #include <vector>
 
 #include <Windows.h>
 
+#include "editor/doc/EdLayerPreset.h"
+#include "editor/doc/EdUnitPreset.h"
+#include "editor/doc/EdMarkerPreset.h"
 #include "editor/EdTools.h"
+#include "editor/doc/EdDocument.h"
+#include "editor/doc/EdUnits.h"
+#include "moho/render/d3d/CD3DPrimBatcher.h"
 #include "editor/tools/EdHeightBrush.h"
+#include "editor/tools/EdMarkers.h"
 
 namespace moho
 {
@@ -77,6 +88,92 @@ namespace faf::editor
 
     /** Changes one slot as the Tools panel asked, as one undo step. */
     void ChangeLayerSlot(int slot, const EdTools::LayerSlot& value);
+    /**
+     * Layers from a settings file, with the terrain shader when `shader` isn't empty: what differs is changed as one
+     * undo step. Returns how many slots (and the shader) changed.
+     */
+    int ApplyLayerSettings(const std::string& shader, const std::vector<std::pair<int, LayerSettings>>& layers);
+    /** The ten layers as the files hold them. */
+    [[nodiscard]] std::vector<LayerSettings> LayerSettingsNow() const;
+
+    /** The selected markers' entries, for the panel. */
+    [[nodiscard]] std::vector<SaveEntry> SelectedMarkers() const;
+    /** The selected markers' names (empty when none). */
+    [[nodiscard]] const std::vector<std::string>& SelectedMarkerNames() const noexcept { return mMarkerSelection; }
+    /** Adds a `.fafmapmarkers` file's markers as one undo step and selects them; false with `error`. */
+    bool ImportMarkerFile(const std::string& text, MarkerImport& result, std::string& error);
+    /** The units an export writes: the selected ones, or every unit of `army` when none is selected. */
+    [[nodiscard]] std::vector<SaveUnit> UnitsToExport(const std::string& army) const;
+    /**
+     * Adds a `.scunits` file's units to `army` (its INITIAL group) under new UNIT_n names, on the ground, as one undo
+     * step, and selects them; `moved` when they came from off this map. False with `error`.
+     */
+    bool ImportUnitFile(const std::string& text, const std::string& army, std::vector<std::string>& names, bool& moved, std::string& error);
+    /** Changes a property of a marker ("name" renames it), as one undo step. */
+    void EditMarker(const std::string& marker, const std::string& key, const std::string& value);
+    /** The move gizmo's parts: an arrow per axis and the free square in its middle. */
+    enum class GizmoPart
+    {
+      None,
+      X,
+      Y,
+      Z,
+      Free,
+    };
+    /** The Decals tool's path: its points, and how many decals it would place (the cursor as its next point). */
+    [[nodiscard]] int DecalPathPointCount() const noexcept { return static_cast<int>(mDecalPath.size()); }
+    [[nodiscard]] int DecalPathDecalCount() const noexcept { return mDecalPathPreview; }
+    /** Lays the path's decals with their symmetric copies as one undo step, and starts a new path. */
+    void PlaceDecalPath();
+    void RemoveLastDecalPathPoint()
+    {
+      if (!mDecalPath.empty()) {
+        mDecalPath.pop_back();
+      }
+    }
+    void ClearDecalPath() { mDecalPath.clear(); }
+    /** A prop blueprint's reclaim, scale and mesh, for the Props panel ("" when the rules don't have it). */
+    [[nodiscard]] std::string PropDetails(const std::string& blueprint) const;
+    /** How many units the Units tool has selected, for its panel. */
+    [[nodiscard]] int UnitSelectionCount() const noexcept { return static_cast<int>(mUnitSelection.size()); }
+    /** How many decals the Decals tool has selected, for its panel. */
+    [[nodiscard]] int DecalSelectionCount() const noexcept { return static_cast<int>(mDecalSelection.size()); }
+    /** Selects markers by name (`add` toggles them in the selection instead), for the Markers panel. */
+    void SelectMarkers(const std::vector<std::string>& names, bool add);
+    /** Moves the camera over a marker, at most `distance` away. */
+    void FrameMarker(const std::string& name, float distance = 140.0f);
+    /** Sets the scenario's teams (the panel's slot order, the FFA repair), as one undo step. */
+    void ChangeTeams(const std::vector<ScenarioTeam>& teams);
+    /** Sets the scenario's extra armies (names split on spaces), as one undo step. */
+    void ChangeExtraArmies(const std::string& armies);
+    /**
+     * Places markers of the Markers tool's type at (x, z) and its symmetric copies, as one undo step. With `connect`,
+     * a path node placed while a node of its type is selected is linked to it (each copy to its copy), so clicks lay a path.
+     */
+    void PlaceMarkers(float x, float z, bool connect = false);
+    /**
+     * Links each selected path node to `target`, or unlinks it when they are linked, with the symmetric copies of the
+     * pair, as one undo step; `target` becomes the selection, so the next click continues from it.
+     */
+    void LinkSelectionTo(const std::string& target);
+
+    /** Sets or removes the playable area as one undo step. */
+    void ChangePlayableArea(const std::optional<EdDocument::PlayableRect>& area);
+
+    /** Removes the selected props (Edit > Delete selection, the Delete key), as one undo step. */
+    /** Edit > Delete: the active tool's selection (decals, markers, or props). */
+    void DeleteSelected()
+    {
+      if (mTools != nullptr && mTools->UnitsToolActive()) {
+        DeleteSelectedUnits();
+      } else if (mTools != nullptr && mTools->DecalsToolActive()) {
+        DeleteSelectedDecals();
+      } else if (mTools != nullptr && mTools->MarkersToolActive()) {
+        DeleteSelectedMarkers();
+      } else {
+        DeleteSelection();
+      }
+    }
 
     /** Undoes or redoes the newest height stroke (Ctrl+Z, Ctrl+Y); false when there is none. */
     bool Undo();
@@ -98,8 +195,80 @@ namespace faf::editor
     void CreateProps();
     void DeleteProps();
 
+    /** One mesh per prop entry, at the entry's index (null when its blueprint or mesh is missing). */
     std::vector<moho::MeshInstance*> mProps;
     bool mPropsDone = false;
+    /** The armies' units from `_save.lua` (every group's), drawn as the game places them, and which unit each is. */
+    struct UnitRef
+    {
+      std::string army;
+      std::string name;
+      Wm3::Vec3f position;
+      float orientation[3];
+    };
+    std::vector<moho::MeshInstance*> mUnits;
+    std::vector<UnitRef> mUnitRefs;
+    void CreateUnits();
+    void DeleteUnits();
+    /** After an edit or undo of the armies' units: drawn again from the save. */
+    void ReloadUnits();
+    /** The Units tool's selection (army and unit name), a drag of it and its starts. */
+    std::vector<std::pair<std::string, std::string>> mUnitSelection;
+    bool mDragUnits = false;
+    bool mUnitsMoved = false;
+    float mUnitDragFromX = 0.0f;
+    float mUnitDragFromZ = 0.0f;
+    std::vector<Wm3::Vec3f> mUnitDragStart;
+    EdDocument::SaveSnapshot mUnitBefore;
+    std::uint32_t mUnitSeed = 0x2545F491u;
+    /** The nearest unit to (x, z) within reach of the cursor (an index of mUnitRefs), or -1. */
+    [[nodiscard]] int PickUnit(float x, float z) const;
+    [[nodiscard]] int UnitRefIndex(const std::string& army, const std::string& name) const;
+    /** Changes an army's unit groups in `_save.lua` (read, `change`, written back); false when it can't read them. */
+    bool EditArmyUnits(const std::string& army, const std::function<void(UnitGroup&)>& change);
+    void PlaceUnits(float x, float z);
+    void DeleteSelectedUnits();
+    [[nodiscard]] moho::MeshInstance* MakePropInstance(const moho::CWldPropEntry& entry) const;
+    /** Deletes and makes again every prop's mesh (after undo). */
+    void RebuildProps();
+    bool UndoProps(bool redo);
+    /** The prop nearest the ground point (x, z) within reach of the cursor, or -1. */
+    [[nodiscard]] int PickProp(float x, float z) const;
+    /** Props placed at (x, z) and its symmetric copies, with the Props tool's blueprint and turn. */
+    /** Places the Props tool's prop at (x, z) with its copies; `yaw` below -100 takes a random turn (or none). */
+    void PlaceProps(float x, float z, float yaw = -1000.0f);
+    /**
+     * The Props tool's Single mode shows the prop to come under the cursor, with its symmetric copies, at the turn
+     * the next click places it with (a random turn is drawn before the click, so they match).
+     */
+    void UpdatePropPreview();
+    void DeletePropPreview();
+    void RollPropYaw();
+    std::vector<moho::MeshInstance*> mPreview;
+    std::string mPreviewBlueprint;
+    float mNextPropYaw = 0.0f;
+    mutable std::string mDetailsFor;
+    mutable std::string mDetails;
+    /** Props inside the brush at (x, z) and its copies removed. */
+    void EraseProps(float x, float z);
+    void MovePropTo(int index, const Wm3::Vec3f& position);
+    void TurnSelection(float radians);
+    void DeleteSelection();
+    std::vector<int> mSelection;
+    /** A Select-tool drag or a Props-tool stroke in progress: the props before it, for its undo step. */
+    bool mObjectStroke = false;
+    bool mObjectsChanged = false;
+    EdDocument::PropSnapshot mObjectBefore;
+    bool mDragSelection = false;
+    float mDragFromX = 0.0f;
+    float mDragFromZ = 0.0f;
+    std::vector<Wm3::Vec3f> mDragStart;
+    float mScatterDue = 0.0f;
+    std::uint32_t mScatterSeed = 12345U;
+    /** A stroke's props painted from the paint list, by blueprint (for the log). */
+    std::map<std::string, int> mPaintCounts;
+    void BeginObjectStroke();
+    void EndObjectStroke();
 
     /** A terrain stroke in progress: the brush under the cursor each frame while the left button is held. */
     void PaintStroke(float frameSeconds);
@@ -132,14 +301,105 @@ namespace faf::editor
     float mCoverage[8]{};
     bool mCoverageValid = false;
     void UpdateCoverage();
+    /** The paint layer's weight as coloured quads over the ground, in blocks of mask texels; rebuilt when stale. */
+    std::vector<moho::CD3DPrimBatcher::Vertex> mWeightQuads;
+    int mWeightLayer = -1;
+    bool mWeightStale = true;
+    void BuildWeightQuads(int layer);
     /** The map's terrain shader by name; the engine checks it again when it next draws (byte0, its latch). */
     void SetTerrainShaderName(const std::string& shader);
     std::uint32_t mMaskSteps = 0;
     std::vector<std::uint8_t> mMaskPlane;
     bool UndoHeights(bool redo);
     bool UndoLayers(bool redo);
+    bool UndoSaveData(bool redo);
+    /** The playable area's border and the darkened ground outside it, rebuilt when the area or the heights change. */
+    std::vector<moho::CD3DPrimBatcher::Vertex> mOutsideQuads;
+    std::optional<EdDocument::PlayableRect> mOutsideFor;
+    bool mOutsideStale = true;
+    void BuildOutsideQuads(const EdDocument::PlayableRect& area);
+    /** A Markers-tool drag of the border's edges: which edges (bits: left, top, right, bottom), and the area before. */
+    int mBorderEdges = 0;
+    /** The Markers tool: selected markers by name, a drag of them, and its start positions. */
+    std::vector<std::string> mMarkerSelection;
+    bool mDragMarkers = false;
+    bool mMarkersMoved = false;
+    float mMarkerDragFromX = 0.0f;
+    float mMarkerDragFromZ = 0.0f;
+    std::vector<std::array<float, 3>> mMarkerDragStart;
+    EdDocument::SaveSnapshot mMarkerBefore;
+    /** The marker nearest (x, z) within reach of the cursor, or -1. */
+    [[nodiscard]] int PickMarker(float x, float z) const;
+    /**
+     * The move gizmo over the selection (markers with the Markers tool, props with the Select tool): arrows along X,
+     * Y (up) and Z, and a square in the middle for a free move over the ground. Dragging an arrow moves along it by
+     * the cursor's move projected on the arrow on screen.
+     */
+    /** The selection's middle, where the gizmo stands; false when nothing it moves is selected. */
+    [[nodiscard]] bool GizmoOrigin(Wm3::Vec3f& origin) const;
+    /** The arms' length in world units: about the same on screen at any zoom. */
+    [[nodiscard]] float GizmoLength() const noexcept { return mDistance * 0.07f; }
+    [[nodiscard]] GizmoPart PickGizmo(POINT at) const;
+    void DrawGizmo(moho::CD3DPrimBatcher& batcher);
+    /** Starts a gizmo drag of `part` from the cursor at `at`. */
+    void BeginGizmoDrag(GizmoPart part, POINT at);
+    /** The drag's move so far, as a displacement in the world. */
+    [[nodiscard]] Wm3::Vec3f GizmoDisplacement(POINT at) const;
+    /** Where an object that started at `start` goes for `move`: snapped, on or above the ground. */
+    [[nodiscard]] Wm3::Vec3f GizmoPlace(const Wm3::Vec3f& start, const Wm3::Vec3f& move, bool resource, bool unit = false) const;
+    /** Where a unit rests at (x, z): the ground, or the sea's surface over it (the game's saves keep ships there). */
+    [[nodiscard]] float UnitRestHeight(float x, float z) const;
+    GizmoPart mGizmoDrag = GizmoPart::None;
+    POINT mGizmoFrom{};
+    Wm3::Vec3f mGizmoStart{};
+    float mGizmoDragLength = 1.0f;
+    float mGizmoGroundX = 0.0f;
+    float mGizmoGroundZ = 0.0f;
+    /** The middle of the grid cell holding `value` when the toolbar's Snap is on, else `value`. */
+    [[nodiscard]] float SnapToGrid(float value) const;
+    /** The Decals tool: selected decals by their map index, a drag of them, its starts. */
+    std::vector<int> mDecalSelection;
+    bool mDragDecals = false;
+    bool mDecalsMoved = false;
+    float mDecalDragFromX = 0.0f;
+    float mDecalDragFromZ = 0.0f;
+    std::vector<std::array<float, 3>> mDecalDragStart;
+    EdDocument::DecalSnapshot mDecalBefore;
+    std::uint32_t mDecalSeed = 0x9E3779B9u;
+    std::vector<std::pair<float, float>> mDecalPath;
+    int mDecalPathPreview = 0;
+    /** The path's copy `c` under the symmetry, or empty when a point of it is off the map. */
+    [[nodiscard]] std::vector<std::pair<float, float>> DecalPathCopy(const std::vector<std::pair<float, float>>& path, int c,
+                                                                    int& copies) const;
+    /** The topmost decal at (x, z) (the last drawn), by its map index, or -1. */
+    [[nodiscard]] int PickDecal(float x, float z) const;
+    /** Places the Decals tool's texture centred at (x, z), with its symmetric copies, as one undo step. */
+    void PlaceDecals(float x, float z);
+    void DeleteSelectedDecals();
+    /** The selected decals' outlines, the one under the cursor, and in Place mode the decal to come. */
+    void DrawDecalOutlines(moho::CD3DPrimBatcher& batcher, const moho::CHeightField& field);
+    bool UndoDecals(bool redo);
+    bool UndoWater(bool redo);
+    bool UndoLighting(bool redo);
+    bool UndoSkybox(bool redo);
+    bool UndoWaves(bool redo);
+    /** Whether the Markers panel hides this marker's type. */
+    [[nodiscard]] bool MarkerHidden(const SaveEntry& marker) const;
+    void DeleteSelectedMarkers();
+    void DrawMarkers(moho::CD3DPrimBatcher& batcher, bool all);
+    /**
+     * Mass and hydrocarbon points as the game marks them: its splat textures draped on the ground, drawn from the
+     * markers each frame (so they follow a drag). ScenarioUtilities.lua's CreateResources: `mass_marker.dds`
+     * 2 x 2, `hydrocarbon_marker.dds` 6 x 6, heading 0.
+     */
+    void DrawResourceSplats(moho::CD3DPrimBatcher& batcher, const moho::CHeightField& field);
+    boost::shared_ptr<moho::CD3DBatchTexture> mMassSplat;
+    boost::shared_ptr<moho::CD3DBatchTexture> mHydroSplat;
+    bool mSplatsLoaded = false;
+    EdDocument::SaveSnapshot mBorderBefore;
     /** A size drag on one slot keeps adding to its undo step until something else happens. */
     bool mLayerDragJoin = false;
+    int mLayerBatch = 0;
     /** Sets a texture slot's paths and sizes on the terrain (its textures load), the Info panel's facts too. */
     void SetLayerSlot(int slot, const std::string& albedo, const std::string& normals, float albedoSize, float normalsSize);
     bool UndoMasks(bool redo);

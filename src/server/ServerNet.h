@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "remote/ContentCheck.h"
+#include "remote/FocusAndCameras.h"
 #include "remote/SeatRoster.h"
 #include "remote/net/GameLinks.h"
 #include "server/LobbyRelay.h"
@@ -42,10 +44,19 @@ namespace faf::server
     /** Views wait for a player who hasn't joined yet; off when nobody's expected, as they'd pile up. */
     bool holdViewsForJoin = true;
     /**
+     * Plan WP10.7: each player's channel keeps a congestion window (`ChannelConfig::congestionControl`). Off by default.
+     * On a 30 KB/s line with a 200 ms buffer the player got about the same either way (22.2 KB/s with it, 23.2 without),
+     * and it cut what the server sent by about nine tenths (about 60 KB/s instead of about 500; the line dropped 10 % of
+     * datagrams instead of 80 %), but the link held the game two steps lower (+1 instead of +3, two runs each), and the
+     * game's speed is what players feel.
+     */
+    bool congestionControl = false;
+    /**
      * Plan WPR.50: in the lobby, a participant heard from for this long counts as away (`TakeLobbyPresence`), well
      * before its channel's own 10 s timeout, so a logical host that is gone is succeeded within 10 s. A client sends
-     * a keepalive every quarter second while its game runs; a frozen lobby screen stops them too, so not much shorter.
-     * 0: only the channel's timeout.
+     * a keepalive every quarter second, also while its game thread is busy (loading the lobby screen takes seconds),
+     * for up to 30 s of such a stall (`CoverStall`, remote/client/ServerConnect.cpp); a hung client goes quiet after
+     * that. 0: only the channel's timeout.
      */
     double lobbyAwaySeconds = 6.0;
     /** Plan WP17.1: the match file's `MatchLobbyControl`: organised (WPR.49's rules) or player-hosted. */
@@ -157,6 +168,13 @@ namespace faf::server
       int lobbySlot = 0;
       // Plan WP10.7: the sim-speed limit its game last reported (remote/SpeedLimit.h); nothing before it did.
       std::optional<int> speedLimit;
+      // Plan WP11.1: camera updates its game sent (`SetGeomCams`, at most four a second).
+      std::uint64_t cameraUpdates = 0;
+      // Plan WP10.7: how far behind its link is: the reliable bytes it hasn't acked, and the beats between the newest
+      // view queued and the newest it has acked whole (an estimate: other messages share the stream).
+      std::uint64_t backlogBytes = 0;
+      std::uint32_t behindBeats = 0;
+      double behindSeconds = 0.0; // how long the oldest view it hasn't acked whole has waited
     };
     [[nodiscard]] std::vector<SSeatState> Seats();
     /** Plan WP17.2: each verdict made since the last call, as the seat stood then (uid, name and the verdict fields). */
@@ -166,6 +184,12 @@ namespace faf::server
      * nothing when none did. As `CClientManagerImpl::GetSimRate` takes the lowest client's. Any thread.
      */
     [[nodiscard]] std::optional<std::pair<int, std::int32_t>> SlowestSpeedLimit();
+    /**
+     * Plan WP11.1: a player's own army, the focus the server grants their `SetFocusArmy` requests; `FreeFocus` lets
+     * them pick any (defeated, with `DefeatedPlayerView = "observe"`). Any thread.
+     */
+    void SetFocusRule(std::int32_t uid, int ownArmy);
+    void FreeFocus(std::int32_t uid);
     /** Plan WP17.2: lobby ready states that changed since the last call (uid, ready), in order. */
     [[nodiscard]] std::vector<std::pair<std::int32_t, bool>> TakeReadyChanges();
     /**
@@ -209,6 +233,17 @@ namespace faf::server
     struct SSeat
     {
       std::string name;
+      // Plan WP10.7: the reliable bytes queued to it from the views' path, and where each view's message ended in
+      // them (with its beat), oldest first; the views behind the peer's acked prefix are dropped as it moves on.
+      std::uint64_t viewBytesQueued = 0;
+      struct SViewEnd
+      {
+        std::uint64_t offset = 0; // where the view's message ends in the views' bytes
+        std::uint32_t beat = 0;
+        std::uint64_t queuedUs = 0;
+      };
+      std::deque<SViewEnd> viewEnds;
+      std::uint32_t lastViewBeat = 0;
       remote::CServerClient* seat = nullptr;
       bool joinedEver = false;
       bool loaded = false;
@@ -229,6 +264,10 @@ namespace faf::server
       std::string contentVerdict; // plan WP17.2: as SSeatState's
       std::string modsVerdict;
       std::optional<int> speedLimit; // plan WP10.7: the last its game reported
+      std::vector<remote::SCameraReport> cameras; // plan WP11.1: its cameras, as last reported
+      std::uint64_t cameraUpdates = 0;
+      std::uint64_t camerasAtUs = 0;
+      double cameraTokens = 0.0; // plan WP11.1: the camera updates it may still send now (refilled at eight a second)
       // Plan WP11.4: its client in the session, as every player's roster lists it.
       int clientIndex = -1;
       std::vector<std::uint8_t> sources;
@@ -280,6 +319,8 @@ namespace faf::server
     std::vector<SSeatState> mJudged;
     std::vector<std::pair<std::int32_t, bool>> mReadyNews; // plan WP17.2 (`TakeReadyChanges`)          // plan WP17.2: each seat's verdicts as they were made (`TakeJudged`)
     std::uint64_t mBadMessages = 0;
+    std::uint64_t mFocusRefused = 0;   // plan WP11.1
+    std::uint64_t mCamerasDropped = 0; // plan WP11.1: camera updates past the bucket (eight a second, four at once)
     std::uint64_t mViewMismatches = 0;
     remote::wire::SRoster mRosterSent; // the last sent to everyone, without a local index
     bool mRosterSentEver = false;
@@ -308,6 +349,12 @@ namespace faf::server
     std::vector<SQueuedMessage> mViewSending;
 
     std::mutex mNewsLock;
+    struct SFocusRule
+    {
+      int ownArmy = -1;
+      bool free = false;
+    };
+    std::map<std::int32_t, SFocusRule> mFocusRules; // plan WP11.1, under mNewsLock
     std::vector<std::string> mNews;
     std::vector<SSeatState> mSeatStates;                         // under mNewsLock
     std::vector<std::pair<std::int32_t, std::string>> mEjects;   // likewise: uid, reason

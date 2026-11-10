@@ -38,6 +38,7 @@
 #include "moho/net/CMessageStream.h"
 #include "moho/net/ELobbyMsg.h"
 #include "moho/net/ECmdStreamOp.h"
+#include "remote/FocusAndCameras.h"
 #include "remote/SpeedLimit.h"
 #include "remote/net/Datagram.h"
 #include "remote/FrameWindow.h"
@@ -45,6 +46,7 @@
 #include "remote/ViewLanes.h"
 #include "remote/net/GameLinks.h"
 #include "remote/wire/EntityFrame.h"
+#include "remote/wire/LuaSyncLane.h"
 #include "remote/net/LobbySignals.h"
 #include "server/LobbyScriptData.h"
 
@@ -79,8 +81,13 @@ namespace
       double jitterMs = 0.0;
       double partitionAt = -1.0;
       double partitionFor = 0.0;
+      double bandwidthKbps = 0.0; // plan WP10.7: the server-to-player direction carries at most this (kbit/s); 0: no cap
+      double bufferMs = 200.0;    // and holds at most this much waiting; past it a datagram is dropped, as a router does
 
-      [[nodiscard]] bool Any() const noexcept { return lossPercent > 0.0 || latencyMs > 0.0 || jitterMs > 0.0 || partitionAt >= 0.0; }
+      [[nodiscard]] bool Any() const noexcept
+      {
+        return lossPercent > 0.0 || latencyMs > 0.0 || jitterMs > 0.0 || partitionAt >= 0.0 || bandwidthKbps > 0.0;
+      }
     };
 
     ~CImpairedPath()
@@ -127,7 +134,17 @@ namespace
         return;
       }
       const double delayMs = mConfig.latencyMs + (mConfig.jitterMs > 0.0 ? std::uniform_real_distribution<double>(0.0, mConfig.jitterMs)(mRandom) : 0.0);
-      mHeld.emplace(nowUs + static_cast<std::uint64_t>(delayMs * 1000.0), SHeld{toServer, std::vector<std::uint8_t>(data, data + size)});
+      std::uint64_t sendAtUs = nowUs;
+      if (!toServer && mConfig.bandwidthKbps > 0.0) {
+        // A narrow line: each datagram leaves once the ones before it have; with more than bufferMs waiting it is dropped.
+        if (mLineFreeUs > nowUs + static_cast<std::uint64_t>(mConfig.bufferMs * 1000.0)) {
+          mLost.fetch_add(1u, std::memory_order_relaxed);
+          return;
+        }
+        mLineFreeUs = std::max(mLineFreeUs, nowUs) + static_cast<std::uint64_t>(static_cast<double>(size) * 8000.0 / mConfig.bandwidthKbps);
+        sendAtUs = mLineFreeUs;
+      }
+      mHeld.emplace(sendAtUs + static_cast<std::uint64_t>(delayMs * 1000.0), SHeld{toServer, std::vector<std::uint8_t>(data, data + size)});
     }
 
     void Run()
@@ -163,6 +180,7 @@ namespace
     CUdpSocket mServerSide;
     std::mt19937 mRandom;
     std::multimap<std::uint64_t, SHeld> mHeld;
+    std::uint64_t mLineFreeUs = 0; // when the capped direction's line is free again
     std::uint64_t mStartUs = 0;
     std::thread mThread;
     std::atomic<bool> mStop{false};
@@ -196,6 +214,7 @@ namespace
 
     double beatMs = 0.0; // the game's beat, to tell how late views come; 0: no telling
     bool noDecode = false; // the channel's limit alone, as decoding takes a while
+    bool luaKeys = false;  // plan WP14.1: each `Sync` key of the Lua lane the first time it comes (again after a partition)
     // Plan WP11 step 1: rebuild each beat's game data from the views alone, with this match file's rules.
     std::string rebuild;
     std::string saveViews; // every message from the server's views, each as a 32-bit size and its bytes, to measure compression
@@ -230,6 +249,9 @@ namespace
     // Plan WP11.4: once the server's roster lists other players and this many seconds have gone (`--chat`: 0, `--chat-at`),
     // send each of them one chat line through the server, as FAF's chat sends one (a Lua table in byte form).
     double chatAt = -1.0;
+    int focusArmy = 0;            // plan WP11.1: the army asked for with SetFocusArmy
+    double focusArmyAt = -1.0;
+    double camerasEvery = 0.0;    // plan WP11.1: a camera update this often (s); 0: none
     int speedLimit = 0;           // plan WP10.7: reported as this player's game's sim-speed limit
     double speedLimitAt = -1.0;
   };
@@ -279,6 +301,10 @@ namespace
       }
       if (name == "--no-decode") {
         out.noDecode = true;
+        continue;
+      }
+      if (name == "--lua-keys") {
+        out.luaKeys = true;
         continue;
       }
       if (name == "--chat") {
@@ -386,12 +412,22 @@ namespace
         out.path.jitterMs = Argument(value);
       } else if (name == "--partition-at") {
         out.path.partitionAt = Argument(value);
+      } else if (name == "--bandwidth-kbps") {
+        out.path.bandwidthKbps = Argument(value);
+      } else if (name == "--buffer-ms") {
+        out.path.bufferMs = Argument(value);
       } else if (name == "--partition-for") {
         out.path.partitionFor = Argument(value);
       } else if (name == "--rebuild") {
         out.rebuild = value;
       } else if (name == "--chat-at") {
         out.chatAt = Argument(value);
+      } else if (name == "--focus-army") {
+        out.focusArmy = std::atoi(value);
+      } else if (name == "--focus-army-at") {
+        out.focusArmyAt = Argument(value);
+      } else if (name == "--cameras-every") {
+        out.camerasEvery = Argument(value);
       } else if (name == "--speed-limit") {
         out.speedLimit = std::atoi(value);
       } else if (name == "--speed-limit-at") {
@@ -910,7 +946,7 @@ int main(const int argc, char** const argv)
     std::printf(
       "usage: faf_server_probe --server <ip:port> --uid <n> --token <t> [--seconds <s>] [--no-load] [--pause-at <s> [--pause-every <s>]] [--resume-at <s>] [--forge-at <s>] "
       "[--vanish-at <s> [--vanish-for <s>]] [--leave-at <s>] [--order-at <s>] [--attack-blip-at <s>] [--forge-id-at <s>] [--attack-hidden-at <s> --hidden-id <id>] [--fuzz-at <s> [--fuzz-count <n>]] "
-      "[--flood-at <s>] [--break-alliance-at <s> --break-with <army>] [--save-views <file>] [--damage-at <s>] [--lobby-name <name> [--lobby-say-to <uid> --lobby-say-at <s>] [--lobby-launch <match.lua> --lobby-launch-at <s>] [--lobby-options <key=value,...> --lobby-options-at <s>] [--lobby-player-options <key=value,...> --lobby-player-options-at <s>] [--lobby-request <Type> --lobby-request-at <s>] [--lobby-assign-slot <n> --lobby-assign-at <s>] [--lobby-eject-at <s>]] [--speed-limit <step> --speed-limit-at <s>] [--content-report rules|wrong] [--ui-mods <uid,...>|none] [--beat-ms <ms>] [--loss <percent>] [--latency-ms <ms>] [--jitter-ms <ms>] [--partition-at <s> --partition-for <s>] [--rebuild <match.lua> /init <init.lua>]\n"
+      "[--flood-at <s>] [--break-alliance-at <s> --break-with <army>] [--save-views <file>] [--damage-at <s>] [--lobby-name <name> [--lobby-say-to <uid> --lobby-say-at <s>] [--lobby-launch <match.lua> --lobby-launch-at <s>] [--lobby-options <key=value,...> --lobby-options-at <s>] [--lobby-player-options <key=value,...> --lobby-player-options-at <s>] [--lobby-request <Type> --lobby-request-at <s>] [--lobby-assign-slot <n> --lobby-assign-at <s>] [--lobby-eject-at <s>]] [--speed-limit <step> --speed-limit-at <s>] [--focus-army <army> --focus-army-at <s>] [--cameras-every <s>] [--content-report rules|wrong] [--ui-mods <uid,...>|none] [--beat-ms <ms>] [--loss <percent>] [--latency-ms <ms>] [--jitter-ms <ms>] [--partition-at <s> --partition-for <s>] [--lua-keys] [--bandwidth-kbps <kbit/s> [--buffer-ms <ms>]] [--rebuild <match.lua> /init <init.lua>]\n"
     );
     return 3;
   }
@@ -951,6 +987,8 @@ int main(const int argc, char** const argv)
   bool vanished = false;
   double returnAt = -1.0;
   std::uint64_t beatMessages = 0;
+  std::vector<std::string> luaKeysSeen; // `--lua-keys`
+  bool luaKeysAfterPartition = false;
   std::uint64_t lastBeat = 0;
   std::uint64_t joins = 0;
   SLobbySeen lobby;
@@ -965,6 +1003,8 @@ int main(const int argc, char** const argv)
   std::deque<const char*> asked; // what each answer will be about, in order
   std::uint64_t answers[3] = {};
   SRosterSeen rosterSeen;
+  double nextCameraAt = 0.0;      // plan WP11.1
+  std::uint64_t camerasSent = 0;
   faf::remote::wire::SRoster lastRoster{};
   std::uint32_t nextCommand = 1u;
   SOrderWatch watch;
@@ -1211,6 +1251,18 @@ int main(const int argc, char** const argv)
       (void)link.SendReliable(frame.data(), frame.size());
       std::printf("probe %d: %.1f s: lobby: script data to uid %d\n", options.uid, elapsed, options.lobbySayTo);
     }
+    if (Due(options.focusArmyAt, elapsed)) {
+      const std::vector<std::uint8_t> focus = faf::remote::EncodeFocusArmy(options.focusArmy);
+      (void)link.SendReliable(focus.data(), focus.size());
+      std::printf("probe %d: %.1f s: focus on army %d asked\n", options.uid, elapsed, options.focusArmy);
+    }
+    if (options.camerasEvery > 0.0 && elapsed >= nextCameraAt) {
+      nextCameraAt = elapsed + options.camerasEvery;
+      faf::remote::SCameraReport camera;
+      camera.viewProjection[0] = static_cast<float>(elapsed);
+      const std::vector<std::uint8_t> cameras = faf::remote::EncodeCameras(std::span<const faf::remote::SCameraReport>(&camera, 1u));
+      camerasSent += link.SendReliable(cameras.data(), cameras.size()) ? 1u : 0u;
+    }
     if (Due(options.speedLimitAt, elapsed)) {
       // Plan WP10.7: as a server-mode game reports what it keeps up with.
       const std::vector<std::uint8_t> limit = faf::remote::EncodeSpeedLimit(options.speedLimit);
@@ -1229,9 +1281,64 @@ int main(const int argc, char** const argv)
       }
       std::printf("probe %d: %.1f s: chat sent to %llu clients\n", options.uid, elapsed, static_cast<unsigned long long>(rosterSeen.chatSent));
     }
+    if (options.luaKeys && !luaKeysAfterPartition && options.path.partitionAt >= 0.0 && elapsed >= options.path.partitionAt + options.path.partitionFor) {
+      luaKeysAfterPartition = true; // what comes after the return is listed afresh
+      luaKeysSeen.clear();
+    }
     while (link.TakeReliable(message)) {
       if (!message.empty() && message[0] == static_cast<std::uint8_t>(ESeatMessage::Lobby)) {
         TakeLobby(options.uid, elapsed, message, lobby);
+        continue;
+      }
+      if (!message.empty() && message[0] == static_cast<std::uint8_t>(ESeatMessage::LuaSync) && options.luaKeys) {
+        ByteReader reader(message.data() + 1, message.size() - 1u);
+        const std::uint64_t beat = reader.Varint();
+        const std::uint64_t size = reader.Varint();
+        const std::uint8_t* const bytes = reader.Bytes(static_cast<std::size_t>(size));
+        std::vector<std::uint8_t> table;
+        std::vector<std::string> prints;
+        faf::server::SLuaBytesValue sync;
+        if (reader.Ok()) {
+          faf::remote::wire::BitReader lane(std::span<const std::uint8_t>(bytes, static_cast<std::size_t>(size)));
+          const bool decoded = faf::remote::wire::DecodeLuaSyncLane(lane, table, prints) && !table.empty();
+          if (!decoded && !table.empty()) {
+            std::printf("probe %d: %.1f s: lua lane at beat %llu not decoded\n", options.uid, elapsed, static_cast<unsigned long long>(beat));
+          }
+          if (decoded && !faf::server::ParseLuaBytes(table, sync)) {
+            // A value the lobby's reader doesn't take (it reads lobby messages): name the keys a saved game's load sends.
+            std::string named;
+            for (const std::string_view key : {"FocusArmyChanged", "UserUnitEnhancements", "CampaignMode", "EnhanceRestrict", "MaxPingMarkers", "AddTransmissions", "Ping"}) {
+              if (std::search(table.begin(), table.end(), key.begin(), key.end()) != table.end()) {
+                named += (named.empty() ? "" : ", ") + std::string(key);
+              }
+            }
+            std::printf(
+              "probe %d: %.1f s: lua table at beat %llu (%zu bytes) not read; it names: %s\n", options.uid, elapsed, static_cast<unsigned long long>(beat),
+              table.size(), named.empty() ? "none of the resync keys" : named.c_str()
+            );
+          } else if (decoded) {
+            std::string fresh;
+            for (const faf::server::SLuaBytesValue& key : sync.keys) {
+              if (key.kind == faf::server::SLuaBytesValue::EKind::String
+                  && std::find(luaKeysSeen.begin(), luaKeysSeen.end(), key.text) == luaKeysSeen.end()) {
+                luaKeysSeen.push_back(key.text);
+                fresh += (fresh.empty() ? "" : ", ") + key.text;
+              }
+            }
+            if (!fresh.empty()) {
+              std::printf(
+                "probe %d: %.1f s: lua keys first%s at beat %llu: %s\n", options.uid, elapsed, luaKeysAfterPartition ? " after the partition" : "",
+                static_cast<unsigned long long>(beat), fresh.c_str()
+              );
+            }
+          }
+        }
+        continue;
+      }
+      if (!message.empty() && message[0] == static_cast<std::uint8_t>(ESeatMessage::FocusArmy)) {
+        if (const std::optional<int> granted = faf::remote::DecodeFocusArmy(message); granted) {
+          std::printf("probe %d: %.1f s: focus granted on army %d\n", options.uid, elapsed, *granted);
+        }
         continue;
       }
       if (!message.empty() && message[0] == static_cast<std::uint8_t>(ESeatMessage::CommandAnswer)) {
@@ -1521,6 +1628,9 @@ int main(const int argc, char** const argv)
     std::printf("probe %d: lobby: %llu messages, role %s, host %d, peers %s, script data from %s, left %s\n", options.uid,
                 static_cast<unsigned long long>(lobby.messages), lobby.role.c_str(), lobby.hostUid, list(lobby.peers).c_str(), list(lobby.scriptFrom).c_str(),
                 list(lobby.deleted).c_str());
+  }
+  if (options.camerasEvery > 0.0) {
+    std::printf("probe %d: %llu camera updates sent\n", options.uid, static_cast<unsigned long long>(camerasSent));
   }
   if (!views.lateMs.empty()) {
     std::sort(views.lateMs.begin(), views.lateMs.end());

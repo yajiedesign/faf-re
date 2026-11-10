@@ -12,13 +12,31 @@ set(FAF_EDITOR_SOURCES
   doc/EdDocument.cpp
   doc/EdMapFile.cpp
   doc/EdNewMap.cpp
+  doc/EdSaveFile.cpp
+  doc/EdUnits.cpp
+  doc/EdPackage.cpp
+  doc/EdWaterPreset.cpp
+  doc/EdJson.cpp
+  doc/EdLighting.cpp
+  doc/EdMarkerPreset.cpp
+  doc/EdUnitPreset.cpp
+  doc/EdLayerPreset.cpp
+  doc/EdPropPaint.cpp
+  doc/EdSkybox.cpp
+  tools/EdWaves.cpp
   doc/EdRoundTrip.cpp
   tools/EdHeightBrush.cpp
   tools/EdHeightFile.cpp
   tools/EdMaskBrush.cpp
+  tools/EdMarkers.cpp
+  tools/EdDecalShape.cpp
+  tools/EdDecals.cpp
+  tools/EdChecks.cpp
+  tools/EdPathing.cpp
   tools/EdTextureLibrary.cpp
   tools/EdSymmetryCheck.cpp
   undo/EdHeightHistory.cpp
   view/EdMapScene.cpp
   ui/EdImGuiRenderer.cpp
+  ui/EdInfoPanels.cpp
 )

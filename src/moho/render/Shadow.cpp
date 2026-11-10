@@ -12,6 +12,7 @@
 #include "moho/console/CConCommand.h"
 #include "moho/misc/ID3DDeviceResources.h"
 #include "moho/render/ID3DVertexSheet.h"
+#include "moho/render/RayScene.h"
 #include "moho/render/ScreenQuadVertexSheet.h"
 #include "moho/render/ShadowCascadeFit.h"
 #include "moho/render/ShadowStableFit.h"
@@ -157,6 +158,46 @@ namespace moho
       "How far each finer shadow tile reaches: tile k of n covers this to the power n - k of the shadowed depth.",
       &ren_ShadowCascadeSplit
     );
+
+    /**
+     * Engine addition: `ren_ShadowCasterCull`. The light camera's box is fitted around the shadowed part
+     * of the view, so it also holds meshes whose shadows fall only outside it; at near zoom it held twice
+     * the meshes the view draws. With this on, a mesh is drawn into the shadow map only when its bounding
+     * sphere, moved along the light down to the lowest terrain in view, can reach the shadowed part of
+     * the view (ShadowCasterRegion in Mesh.h). Shadows outside the view, which only a water reflection
+     * might show, can lose casters.
+     */
+    bool ren_ShadowCasterCull = true;
+
+    TConVar<bool> gTConVar_ren_ShadowCasterCull(
+      "ren_ShadowCasterCull",
+      "Draw into the shadow map only the meshes whose shadow can fall in the view (1, the default), or every mesh in "
+      "the light's box (0, the original).",
+      &ren_ShadowCasterCull
+    );
+
+    /** Shadow-map texels around the shadowed region whose casters are kept: the blur's reach and the filter's. */
+    constexpr float kCasterMarginTexels = 6.0f;
+
+    /** This frame's shadowed region, from PrepareLightCamera, for RenderShadowMap's mesh batches. */
+    ShadowCasterRegion sCasterRegion{};
+
+    /**
+     * Engine addition: `ren_ShadowTileReuse`. The finer cascade tiles take their meshes from the
+     * whole-view tile's batch, filtered by their own box (MeshRenderer::BatchFromSaved), instead of a
+     * full Batch each: a second spatial query, LOD walk and bucket build per tile.
+     */
+    bool ren_ShadowTileReuse = true;
+
+    TConVar<bool> gTConVar_ren_ShadowTileReuse(
+      "ren_ShadowTileReuse",
+      "Finer shadow tiles reuse the whole-view tile's mesh batch, filtered by their box (1, the default), or batch the "
+      "meshes again (0).",
+      &ren_ShadowTileReuse
+    );
+
+    /** The whole-view tile's buckets this frame, while finer tiles follow. */
+    std::vector<MeshRenderer::SavedBucket> sWholeTileBatch;
 
     constexpr int kCascadeTiles = static_cast<int>(gpg::gal::effects::kShadowCascadeCount);
     constexpr int kCascadeFiner = kCascadeTiles - 1;
@@ -751,6 +792,32 @@ namespace moho
     // elements and zeroes the rest (BuildShadowLightCamera).
     BuildShadowLightCamera(lightView, nearDepth, farDepth, box, mCamera);
 
+    // Engine addition (ren_ShadowCasterCull): the region the mesh batches keep casters for.
+    sCasterRegion = ShadowCasterRegion{};
+    {
+      const float lightLength = std::sqrt(
+        lightDirection.X() * lightDirection.X() + lightDirection.Y() * lightDirection.Y() +
+        lightDirection.Z() * lightDirection.Z()
+      );
+      if (planeCount <= ShadowCasterRegion::kMaxPlanes && lightLength > 0.0f) {
+        for (std::uint32_t index = 0U; index < planeCount; ++index) {
+          const Wm3::Plane3f& plane = shadowFrustum.planes_[index];
+          sCasterRegion.planes[index][0] = plane.Normal.x;
+          sCasterRegion.planes[index][1] = plane.Normal.y;
+          sCasterRegion.planes[index][2] = plane.Normal.z;
+          sCasterRegion.planes[index][3] = plane.Constant;
+        }
+        sCasterRegion.planeCount = planeCount;
+        sCasterRegion.light[0] = lightDirection.X() / lightLength;
+        sCasterRegion.light[1] = lightDirection.Y() / lightLength;
+        sCasterRegion.light[2] = lightDirection.Z() / lightLength;
+        sCasterRegion.floorY = volume.Min.Y();
+        const float texel = std::max(box.maxX - box.minX, box.maxY - box.minY) / static_cast<float>(content);
+        sCasterRegion.margin = kCasterMarginTexels * texel;
+        sCasterRegion.active = true;
+      }
+    }
+
     mShadowCameraValid = true;
     if (atlas) {
       PrepareCascades(mShadowSize, cameraForward, shadowFrustum, volume, lightView, nearDepth, farDepth, box, content, stableFit);
@@ -915,6 +982,7 @@ namespace moho
   void Shadow::RenderShadowMap(TerrainCommon* const terrain, const GeomCamera3& viewCamera)
   {
     if (mShadowFidelity == 0) {
+      RayScene::PublishOff();
       return;
     }
 
@@ -922,6 +990,7 @@ namespace moho
     (void)device->GetResources();
 
     if (!mShadowCameraValid) {
+      RayScene::PublishOff();
       // Nothing to draw - just leave the targets bound and cleared.
       device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
       if (mShadowBlurEnabled) {
@@ -967,6 +1036,33 @@ namespace moho
     // Depth pass into the shadow map.
     device->SetRenderTarget1(mShadowMap.get(), mDepthStencil.get(), true, -1, 1.0f, 0);
     MeshRenderer* const meshRenderer = MeshRenderer::GetInstance();
+    gShadowCasterRegion = ren_ShadowCasterCull ? sCasterRegion : ShadowCasterRegion{};
+
+    // Engine addition (ren_RayTracedShadows): with rays, the ground and opaque meshes shadow by ray from the
+    // scene built off the whole-view batch (RayScene.h); the map draws only alpha-tested meshes.
+    bool rays = RayScene::Instance().Active();
+    IWldTerrainRes* const rayTerrainRes = rays ? REN_GetTerrainRes() : nullptr;
+    const CHeightField* const rayHeightField =
+      (rayTerrainRes != nullptr && rayTerrainRes->mMap != nullptr) ? rayTerrainRes->mMap->mHeightField.get() : nullptr;
+    if (!rays) {
+      RayScene::PublishOff();
+    }
+    // Rays can drop out here (the device couldn't build the scene), or leave the ground uncovered (a tile still
+    // being built, or one whose geometry failed): then this tile draws its terrain depth after all, and so do the
+    // rest.
+    bool terrainInMap = !rays;
+    const auto submitRays = [&](const GeomCamera3& tileCamera) {
+      if (rays) {
+        // The map's sun direction points towards the sun (PrepareLightCamera's light travels along its negative).
+        const Wm3::Vector3f sun = rayTerrainRes->GetSunDirection();
+        const float sunDirection[3] = {sun.X(), sun.Y(), sun.Z()};
+        rays = RayScene::Instance().Submit(*meshRenderer, meshRenderer->meshes, rayHeightField, mCamera, viewCamera, sunDirection);
+        if (!terrainInMap && (!rays || !RayScene::Instance().TerrainTraced())) {
+          terrain->DrawTerrainDepth(tileCamera);
+          terrainInMap = true;
+        }
+      }
+    };
     if (IsCascadeAtlas(*this)) {
       // Engine addition (ren_ShadowCascades): each tile draws into its own viewport of the atlas, with the
       // meshes batched for its own light camera. Drawing the whole-view batch into every tile and leaving
@@ -982,20 +1078,40 @@ namespace moho
         Wm3::Vector2i tileSize{content, content};
         device->SetViewport(&tilePos, &tileSize, savedMinDepth, savedMaxDepth);
         const GeomCamera3& camera = (tile == 0) ? mCamera : sCascadeFrame.cameras[tile - 1];
-        terrain->DrawTerrainDepth(camera);
-        meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), camera, viewCamera.viewport.r[1]);
+        if (terrainInMap) {
+          terrain->DrawTerrainDepth(camera);
+        }
+        // Engine change (ren_ShadowTileReuse): a finer tile's box lies inside the whole-view tile's, in the same
+        // light space and depth range, so its meshes are the whole-view tile's that fall in its box.
+        if (tile > 0 && ren_ShadowTileReuse) {
+          meshRenderer->BatchFromSaved(REN_GetGameTick(), REN_GetSimDeltaSeconds(), camera, sWholeTileBatch);
+        } else {
+          meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), camera, viewCamera.viewport.r[1]);
+          if (tile == 0 && ren_ShadowTileReuse && sCascadeFrame.finer > 0) {
+            meshRenderer->SaveBatch(sWholeTileBatch);
+          }
+        }
+        if (tile == 0) {
+          submitRays(camera);
+        }
         meshRenderer->RenderDepth(camera, meshRenderer->meshes);
       }
     } else {
       bindTargetWithBorder(mShadowMap);
 
-      terrain->DrawTerrainDepth(mCamera);
+      if (terrainInMap) {
+        terrain->DrawTerrainDepth(mCamera);
+      }
 
       meshRenderer->Batch(REN_GetGameTick(), REN_GetSimDeltaSeconds(), mCamera, viewCamera.viewport.r[1]);
+      submitRays(mCamera);
       meshRenderer->RenderDepth(mCamera, meshRenderer->meshes);
     }
+    gShadowCasterRegion.active = false;
 
     restoreViewport();
+    // Engine addition (ren_RayTracedShadows): only the shadow pass leaves the traced meshes out.
+    gMeshDepthSkipsTraced = false;
 
     const auto dumpShadowTargets = [&](const bool includeBlur) {
       static bool sDumped = false;
@@ -1110,6 +1226,7 @@ namespace moho
   void Shadow::RenderFrameShadows(TerrainCommon* const terrain, const GeomCamera3& viewCamera, const float zoom)
   {
     if (!ren_Shadows) {
+      RayScene::PublishOff();
       return;
     }
 

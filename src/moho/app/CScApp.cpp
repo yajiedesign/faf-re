@@ -454,9 +454,9 @@ namespace
 
           // ren_VulkanScaledPresent is read when the device makes its head targets (CreateDevice, after this):
           // the prologue's pass would be too late for it too. ren_TerrainTessellation is read when the terrain
-          // effect loads.
+          // effect loads, ren_RayTracedShadows -1 when the device is made.
           if (IsCommandName(token, "lua_IncrementalGC") || IsCommandName(token, "ren_VulkanScaledPresent") ||
-              IsCommandName(token, "ren_TerrainTessellation")) {
+              IsCommandName(token, "ren_TerrainTessellation") || IsCommandName(token, "ren_RayTracedShadows")) {
             moho::CON_Execute(segment.c_str());
           }
         }
@@ -1190,6 +1190,14 @@ namespace
     "1 drops the long first frame of play from the mean frame clock once the first tick is shown; 0 keeps it, and the "
     "clock rushes the next ticks to repay it.",
     &wld_FrameClockOpening
+  );
+
+  // Engine addition, debugging aid: tags the frame sampler's stack dump (FrameSampler.h).
+  moho::TConVar<int> gTConVar_dbg_FrameSamplerPhase(
+    "dbg_FrameSamplerPhase",
+    "With FAF_FRAME_SAMPLER and FAF_FRAME_SAMPLER_DUMP set: samples taken while this is not 0 are counted by whole call "
+    "stack and written to <dump>.<phase>.folded when it changes.",
+    &gpg::diag::dbg_FrameSamplerPhase
   );
 } // namespace
 

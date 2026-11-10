@@ -45,6 +45,11 @@ namespace faf::server
 
   CServerNet::CServerNet(const SServerNetConfig& config)
     : mConfig(config)
+    , mLinks([&config] {
+      remote::net::ChannelConfig channel;
+      channel.congestionControl = config.congestionControl; // plan WP10.7
+      return channel;
+    }())
   {
     mLobby.SetControl(config.lobbyControl);
   }
@@ -127,6 +132,20 @@ namespace faf::server
     }
   }
 
+  namespace
+  {
+    /** A `View` or `LuaSync` message's beat (the varint after its type); 0 for anything shorter. */
+    [[nodiscard]] std::uint64_t MessageBeat(const std::vector<std::uint8_t>& message)
+    {
+      if (message.size() < 2u) {
+        return 0u;
+      }
+      remote::net::ByteReader reader(message.data() + 1, message.size() - 1u);
+      const std::uint64_t beat = reader.Varint();
+      return reader.Ok() ? beat : 0u;
+    }
+  } // namespace
+
   void CServerNet::QueueView(const std::int32_t uid, std::vector<std::uint8_t> message, const bool fresh)
   {
     const std::scoped_lock lock(mViewLock);
@@ -181,11 +200,32 @@ namespace faf::server
           ++first;
         }
         if (first == mViewSending.size()) {
+          // Plan WP14.1: no fresh view yet. A `LuaSync` may come ahead of its beat's view when the views' pipeline is
+          // late; those wait for the next pass, where the ones older than the fresh view are dropped.
+          const std::scoped_lock lock(mViewLock);
+          std::vector<SQueuedMessage>& queue = mViewQueue[uid];
+          std::vector<SQueuedMessage> kept;
+          for (SQueuedMessage& message : mViewSending) {
+            if (!message.bytes.empty() && message.bytes[0] == static_cast<std::uint8_t>(remote::net::ESeatMessage::LuaSync)) {
+              kept.push_back(std::move(message));
+            }
+          }
+          queue.insert(queue.begin(), std::make_move_iterator(kept.begin()), std::make_move_iterator(kept.end()));
           continue;
         }
         seat.viewBroken = false;
         for (const std::vector<std::uint8_t>& message : startMessages) {
           (void)mLinks.SendReliable(uid, message.data(), message.size());
+        }
+        // Plan WP14.1: the fresh view's beat's `LuaSync` (with the UI's state sent again) and later ones may be queued
+        // ahead of it when the views' pipeline is late; they aren't deltas, and the client holds a beat's Lua lane
+        // until its view comes (`CNetworkSimDriver`'s early lanes), so they go, ahead of the view, as queued.
+        const std::uint64_t freshBeat = MessageBeat(mViewSending[first].bytes);
+        for (std::size_t i = 0; i < first; ++i) {
+          const std::vector<std::uint8_t>& bytes = mViewSending[i].bytes;
+          if (!bytes.empty() && bytes[0] == static_cast<std::uint8_t>(remote::net::ESeatMessage::LuaSync) && MessageBeat(bytes) >= freshBeat) {
+            (void)mLinks.SendReliable(uid, bytes.data(), bytes.size());
+          }
         }
         if (!startMessages.empty()) {
           seat.startSent = true;
@@ -197,6 +237,8 @@ namespace faf::server
           const std::vector<std::uint8_t>& bytes = mViewSending[i].bytes;
           queuedTables += !bytes.empty() && bytes[0] == static_cast<std::uint8_t>(remote::net::ESeatMessage::SessionTables) ? 1u : 0u;
         }
+        seat.viewBytesQueued = 0; // plan WP10.7: a new channel; its acked prefix starts again
+        seat.viewEnds.clear();
         const std::uint8_t reset[] = {static_cast<std::uint8_t>(remote::net::ESeatMessage::SessionTables), 0u, 1u};
         (void)mLinks.SendReliable(uid, reset, sizeof(reset));
         for (std::size_t i = 0; i + queuedTables < tableLog.size(); ++i) {
@@ -207,6 +249,16 @@ namespace faf::server
       for (std::size_t i = first; i < mViewSending.size(); ++i) {
         const std::vector<std::uint8_t>& bytes = mViewSending[i].bytes;
         (void)mLinks.SendReliable(uid, bytes.data(), bytes.size());
+        // Plan WP10.7: where this view ends in the stream, to tell how many beats the player's link is behind.
+        seat.viewBytesQueued += bytes.size();
+        if (!bytes.empty() && bytes[0] == static_cast<std::uint8_t>(remote::net::ESeatMessage::View)) {
+          remote::net::ByteReader reader(bytes.data() + 1, bytes.size() - 1u);
+          const auto beat = static_cast<std::uint32_t>(reader.Varint());
+          if (reader.Ok()) {
+            seat.viewEnds.push_back(SSeat::SViewEnd{seat.viewBytesQueued, beat, mNowUs});
+            seat.lastViewBeat = beat;
+          }
+        }
         if (!bytes.empty() && bytes[0] == static_cast<std::uint8_t>(remote::net::ESeatMessage::LaunchInfo)) {
           seat.startSent = true;
           seat.rosterOwed = true;
@@ -464,7 +516,7 @@ namespace faf::server
     }
     std::vector<SSeatState> states;
     states.reserve(mSeats.size());
-    for (const auto& [uid, seat] : mSeats) {
+    for (auto& [uid, seat] : mSeats) {
       SSeatState state;
       state.uid = uid;
       state.name = seat.name;
@@ -479,6 +531,17 @@ namespace faf::server
       }
       state.lobbySlot = mLobby.LobbySlotOf(uid);
       state.speedLimit = seat.gone ? std::nullopt : seat.speedLimit;
+      state.cameraUpdates = seat.cameraUpdates;
+      // Plan WP10.7: the views the peer has acked whole leave the list; the oldest left is the first it lacks.
+      state.backlogBytes = seat.gone ? 0u : mLinks.ReliableUnacked(uid);
+      const std::uint64_t acked = seat.viewBytesQueued > state.backlogBytes ? seat.viewBytesQueued - state.backlogBytes : 0u;
+      while (!seat.viewEnds.empty() && seat.viewEnds.front().offset <= acked) {
+        seat.viewEnds.pop_front();
+      }
+      state.behindBeats = seat.gone || seat.viewEnds.empty() ? 0u : seat.lastViewBeat - seat.viewEnds.front().beat + 1u;
+      state.behindSeconds = seat.gone || seat.viewEnds.empty() || mNowUs < seat.viewEnds.front().queuedUs
+                              ? 0.0
+                              : static_cast<double>(mNowUs - seat.viewEnds.front().queuedUs) * 1e-6;
       state.load = seat.loaded ? "loaded" : (seat.reported ? "rules" : (mContentKnown && seat.joinedEver ? "loading" : ""));
       state.mods = seat.modsVerdict;
       for (const remote::SModEntry& mod : seat.mods) {
@@ -682,7 +745,7 @@ namespace faf::server
                           mLobby.Count(ELobbyRelayVerdict::Malformed)) +
            " malformed or misaddressed; " + std::to_string(mLobby.OptionsPinned()) + " relayed with the match's pinned options written back; " +
            std::to_string(mRostersSent) + " rosters sent; chat: " + std::to_string(mChatRelayed) + " relayed, " + std::to_string(mChatDropped) +
-           " dropped";
+           " dropped; focus requests refused " + std::to_string(mFocusRefused) + ", camera updates dropped " + std::to_string(mCamerasDropped);
   }
 
   std::vector<std::int32_t> CServerNet::TakeReturned()
@@ -711,6 +774,18 @@ namespace faf::server
   {
     const std::scoped_lock lock(mNewsLock);
     return std::exchange(mReadyNews, {});
+  }
+
+  void CServerNet::SetFocusRule(const std::int32_t uid, const int ownArmy)
+  {
+    const std::scoped_lock lock(mNewsLock);
+    mFocusRules[uid].ownArmy = ownArmy;
+  }
+
+  void CServerNet::FreeFocus(const std::int32_t uid)
+  {
+    const std::scoped_lock lock(mNewsLock);
+    mFocusRules[uid].free = true;
   }
 
   std::optional<std::pair<int, std::int32_t>> CServerNet::SlowestSpeedLimit()
@@ -908,6 +983,52 @@ namespace faf::server
       if (seat.speedLimit != limit) {
         seat.speedLimit = limit;
         Say(seat.name + "'s game keeps up with speed " + (*limit >= 0 ? "+" : "") + std::to_string(*limit));
+      }
+      return;
+    }
+    case remote::net::ESeatMessage::FocusArmy: {
+      // Plan WP11.1: the UI's `SetFocusArmy`; the server answers with the army it grants.
+      const std::optional<int> asked = remote::DecodeFocusArmy(message);
+      if (!asked) {
+        ++mBadMessages;
+        return;
+      }
+      int granted = -1;
+      {
+        const std::scoped_lock lock(mNewsLock);
+        const auto rule = mFocusRules.find(uid);
+        granted = rule == mFocusRules.end() ? -1 : (rule->second.free ? *asked : rule->second.ownArmy);
+      }
+      if (granted != *asked) {
+        ++mFocusRefused;
+        Say(seat.name + " asked to focus on army " + std::to_string(*asked) + "; refused, they keep army " + std::to_string(granted));
+      }
+      QueueView(uid, remote::EncodeFocusArmy(granted));
+      return;
+    }
+    case remote::net::ESeatMessage::Cameras: {
+      // Plan WP11.1: what the player's cameras see, kept for camera-ordered work (WP8.2). A game sends four a second
+      // (kCameraPeriodMs), but they arrive bunched (frame hitches, datagrams carrying two), so a bucket of tokens
+      // refilled at eight a second and holding four takes them all and drops only a sustained flood.
+      std::vector<remote::SCameraReport> cameras;
+      if (!remote::DecodeCameras(message, cameras)) {
+        ++mBadMessages;
+        return;
+      }
+      constexpr double kCameraTokensPerSecond = 8.0;
+      constexpr double kCameraBurst = 4.0;
+      seat.cameraTokens = seat.camerasAtUs == 0u
+                            ? kCameraBurst
+                            : std::min(kCameraBurst, seat.cameraTokens + static_cast<double>(mNowUs - seat.camerasAtUs) * 1e-6 * kCameraTokensPerSecond);
+      seat.camerasAtUs = mNowUs;
+      if (seat.cameraTokens < 1.0) {
+        ++mCamerasDropped;
+        return;
+      }
+      seat.cameraTokens -= 1.0;
+      seat.cameras = std::move(cameras);
+      if (++seat.cameraUpdates == 1u) {
+        Say(seat.name + "'s game sends its cameras");
       }
       return;
     }

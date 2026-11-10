@@ -330,20 +330,43 @@ set_target_properties(faf_occupation_manager_tests PROPERTIES FOLDER "Tests/Sim"
 add_test(NAME occupation_manager COMMAND faf_occupation_manager_tests)
 set_tests_properties(occupation_manager PROPERTIES LABELS "Sim")
 
-# Every GoogleTest executable above and in the subdirectories.
-include(FafTests)
-faf_add_tests_target("${CMAKE_CURRENT_SOURCE_DIR}")
-
 # The map editor height brush, symmetry check, height files and undo (src/editor/tools, src/editor/undo): exact symmetry,
 # byte-exact undo, height images read back as written.
 add_executable(faf_editor_brush_tests EXCLUDE_FROM_ALL editor/HeightBrushTests.cpp editor/HeightHistoryTests.cpp editor/SymmetryCheckTests.cpp editor/HeightFileTests.cpp
   editor/NewMapTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdNewMap.cpp
   editor/MaskBrushTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdMaskBrush.cpp
+  editor/SaveFileTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdSaveFile.cpp
+  editor/MarkerTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdMarkers.cpp
+  editor/DecalShapeTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdDecalShape.cpp
+  editor/UnitTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdUnits.cpp
+  editor/CheckTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdChecks.cpp
+  editor/PathingTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdPathing.cpp
+  editor/PackageTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdPackage.cpp
+  editor/WaterPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdWaterPreset.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdJson.cpp
+  editor/LightingTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLighting.cpp
+  editor/MarkerPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdMarkerPreset.cpp
+  editor/UnitPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdUnitPreset.cpp
+  editor/LayerPresetTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdLayerPreset.cpp
+  editor/PropPaintTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdPropPaint.cpp
+  editor/SkyboxTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/doc/EdSkybox.cpp
+  editor/WaveTests.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdWaves.cpp
   ${CMAKE_SOURCE_DIR}/src/editor/tools/EdHeightBrush.cpp ${CMAKE_SOURCE_DIR}/src/editor/tools/EdSymmetryCheck.cpp
   ${CMAKE_SOURCE_DIR}/src/editor/tools/EdHeightFile.cpp
   ${CMAKE_SOURCE_DIR}/src/editor/undo/EdHeightHistory.cpp)
 target_include_directories(faf_editor_brush_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(faf_editor_brush_tests PRIVATE gtest_main ole32 windowscodecs)
+target_link_libraries(faf_editor_brush_tests PRIVATE gtest_main ole32 windowscodecs zlib123)
 set_target_properties(faf_editor_brush_tests PROPERTIES FOLDER "Tests/Editor")
 add_test(NAME editor_height_brush COMMAND faf_editor_brush_tests)
 set_tests_properties(editor_height_brush PROPERTIES LABELS "Editor")
+
+add_executable(faf_slab_tests EXCLUDE_FROM_ALL entity/FixedSlabPoolTests.cpp)
+target_link_libraries(faf_slab_tests PRIVATE faf_engine gtest_main)
+set_target_properties(faf_slab_tests PROPERTIES FOLDER "Tests/Sim")
+add_test(NAME slab_tests COMMAND faf_slab_tests)
+set_tests_properties(slab_tests PROPERTIES LABELS "Sim")
+
+# Every GoogleTest executable above and in the subdirectories. Keep this last: it sees only the
+# targets defined before it, so a test added below it is never built by faf_tests and ctest
+# reports it as Not Run.
+include(FafTests)
+faf_add_tests_target("${CMAKE_CURRENT_SOURCE_DIR}")

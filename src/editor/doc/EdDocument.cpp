@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <atomic>
+#include <map>
 #include <chrono>
 #include <ctime>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <cstdlib>
 #include <cstdio>
 #include <cctype>
@@ -16,7 +18,13 @@
 
 #include "gpg/core/utils/Logging.h"
 #include "lua/LuaObject.h"
+#include "lua/luaplus/include/lauxlib.h"
 #include "lua/LuaTableIterator.h"
+#include "gpg/core/streams/PipeStream.h"
+#include "gpg/core/streams/BinaryReader.h"
+#include "gpg/core/streams/BinaryWriter.h"
+#include "moho/terrain/water/WaveSystem.h"
+#include "moho/render/SkyDome.h"
 #include "moho/lua/CScrLuaInitForm.h"
 #include "moho/misc/CVirtualFileSystem.h"
 #include "moho/misc/FileWaitHandleSet.h"
@@ -27,6 +35,8 @@
 #include "moho/sim/CWldSession.h"
 #include "moho/sim/STIMap.h"
 #include "moho/terrain/StratumMaterial.h"
+#include "moho/terrain/water/CWaterShaderProperties.h"
+#include "moho/render/CWldTerrainDecal.h"
 #include "moho/terrain/splat/CWldSplat.h"
 
 namespace faf::editor
@@ -40,6 +50,9 @@ namespace faf::editor
     MapFacts facts;
     std::string error;
     MapFileRecords records;
+    SaveFile save;
+    std::string script;
+    std::string scenario;
     /** CreateNew: what to make and where; the scenario's game path once made. */
     bool create = false;
     NewMapSettings settings;
@@ -134,9 +147,14 @@ namespace faf::editor
       if (const moho::CHeightField* const field = terrain->GetHeightField(); field != nullptr) {
         facts.fieldWidth = field->width;
         facts.fieldHeight = field->height;
+        facts.symmetry = DetectSymmetry(field->data, field->width, field->height);
       }
       facts.water = terrain->IsWaterEnabled();
       facts.waterElevation = terrain->GetWaterElevation();
+      if (terrain->mMap != nullptr) {
+        facts.waterDeep = terrain->mMap->mWaterElevationDeep;
+        facts.waterAbyss = terrain->mMap->mWaterElevationAbyss;
+      }
       moho::StratumMaterial& strata = terrain->GetStratumMaterial();
       facts.terrainShader = strata.mShaderName.c_str();
       const moho::CStratumMaterial* const albedo[] = {
@@ -150,6 +168,23 @@ namespace faf::editor
       }
       if (moho::IDecalManager* const decals = terrain->GetDecalManager(); decals != nullptr) {
         facts.decals = decals->GetDecalCount();
+        // By type, and one of them as the file holds it, in the log: what new decals are measured against.
+        std::map<int, int> types;
+        for (std::int32_t i = 0; i < facts.decals; ++i) {
+          if (const moho::CWldTerrainDecal* const decal = decals->GetDecal(i); decal != nullptr) {
+            ++types[static_cast<int>(decal->mType)];
+          }
+        }
+        std::string counts;
+        for (const auto& [type, count] : types) {
+          counts += (counts.empty() ? "" : ", ") + std::to_string(count) + " " + DecalTypeName(type);
+        }
+        if (facts.decals > 0) {
+          const DecalState first = CaptureDecal(*decals->GetDecal(0));
+          gpg::Logf("editor: decals: %s; the first: %s, scale %.1f %.1f %.1f, turn %.2f, cutoff %.0f, near %.0f", counts.c_str(),
+                    first.names[0].c_str(), first.scale[0], first.scale[1], first.scale[2], first.orientation[1], first.cutoff,
+                    first.nearCutoff);
+        }
       }
       if (map.mProps != nullptr) {
         facts.props = static_cast<int>(map.mProps->mEntries.size());
@@ -289,6 +324,17 @@ namespace faf::editor
       load.records.preview = ReadPreviewRecord(facts.mapPath);
       load.records.props = ReadPropRecords(facts.mapPath, *load.map);
 
+      // The save's and script's text, for the markers, areas and playable area the editor changes.
+      if (std::string text; !facts.savePath.empty() && ReadGameFile(facts.savePath, text)) {
+        std::string error;
+        if (!load.save.Parse(std::move(text), error)) {
+          gpg::Warnf("editor: %s: %s", facts.savePath.c_str(), error.c_str());
+        }
+      }
+      if (!facts.scriptPath.empty()) {
+        (void)ReadGameFile(facts.scriptPath, load.script);
+      }
+      (void)ReadGameFile(load.scenarioPath, load.scenario);
       if (!facts.savePath.empty()) {
         const LuaPlus::LuaObject save = RunInTable(state, facts.savePath);
         if (save.IsTable() && save["Scenario"].IsTable()) {
@@ -355,6 +401,638 @@ namespace faf::editor
     return true;
   }
 
+  std::optional<EdDocument::PlayableRect> EdDocument::PlayableArea() const
+  {
+    const std::optional<std::string> name = ScriptPlayableArea(mScript);
+    if (!name) {
+      return std::nullopt;
+    }
+    for (const SaveEntry& area : mSave.Areas()) {
+      if (area.name != *name) {
+        continue;
+      }
+      const std::vector<double> numbers = ValueNumbers(area.Get("rectangle"));
+      if (numbers.size() < 4) {
+        return std::nullopt;
+      }
+      // FAF's SetPlayableArea: each edge less its remainder of 4.
+      const auto round = [](const double value) {
+        const int whole = static_cast<int>(value);
+        return whole - whole % 4;
+      };
+      return PlayableRect{round(numbers[0]), round(numbers[1]), round(numbers[2]), round(numbers[3])};
+    }
+    return std::nullopt;
+  }
+
+  void EdDocument::SetPlayableArea(const std::optional<PlayableRect>& area)
+  {
+    if (!area) {
+      mScript = WithScriptPlayableArea(mScript, "");
+      mModified = true;
+      return;
+    }
+    const std::string name = ScriptPlayableArea(mScript).value_or("AREA_1");
+    SaveEntry* entry = nullptr;
+    for (SaveEntry& existing : mSave.Areas()) {
+      entry = existing.name == name ? &existing : entry;
+    }
+    if (entry == nullptr) {
+      mSave.Areas().push_back({name, {}});
+      entry = &mSave.Areas().back();
+    }
+    entry->Set("rectangle", RectangleValue(area->x0, area->z0, area->x1, area->z1));
+    mScript = WithScriptPlayableArea(mScript, name);
+    mModified = true;
+  }
+
+  void EdDocument::SetExtraArmies(const std::vector<std::string>& armies)
+  {
+    mScenario = WithScenarioExtraArmies(mScenario, armies);
+    for (const std::string& army : armies) {
+      bool known = false;
+      for (const SaveEntry& entry : mSave.Armies()) {
+        known = known || entry.name == army;
+      }
+      if (!known) {
+        mSave.Armies().push_back(NewArmyEntry(army));
+      }
+    }
+    mModified = true;
+  }
+
+  void EdDocument::SetTeams(const std::vector<ScenarioTeam>& teams)
+  {
+    mScenario = WithScenarioTeams(mScenario, teams);
+    mFacts.armies = Armies();
+    mModified = true;
+  }
+
+  void EdDocument::AddArmy(const std::string& name)
+  {
+    // A new army joins the first team (a map's one FFA team).
+    std::vector<ScenarioTeam> teams = Teams();
+    const std::vector<std::string> armies = Armies();
+    if (std::find(armies.begin(), armies.end(), name) == armies.end()) {
+      if (teams.empty()) {
+        mScenario = WithScenarioArmies(mScenario, {name});
+      } else {
+        teams.front().armies.push_back(name);
+        mScenario = WithScenarioTeams(mScenario, teams);
+      }
+    }
+    bool known = false;
+    for (const SaveEntry& entry : mSave.Armies()) {
+      known = known || entry.name == name;
+    }
+    if (!known) {
+      mSave.Armies().push_back(NewArmyEntry(name));
+    }
+    mFacts.armies = Armies();
+    mModified = true;
+  }
+
+  void EdDocument::RemoveArmy(const std::string& name)
+  {
+    // From whichever team has it.
+    std::vector<ScenarioTeam> teams = Teams();
+    for (ScenarioTeam& team : teams) {
+      team.armies.erase(std::remove(team.armies.begin(), team.armies.end(), name), team.armies.end());
+    }
+    mScenario = WithScenarioTeams(mScenario, teams);
+    const std::vector<std::string> extra = ExtraArmies();
+    if (std::find(extra.begin(), extra.end(), name) == extra.end()) {
+      auto& entries = mSave.Armies();
+      entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const SaveEntry& entry) { return entry.name == name; }), entries.end());
+    }
+    mFacts.armies = Armies();
+    mModified = true;
+  }
+
+  void EdDocument::RenameArmy(const std::string& from, const std::string& to)
+  {
+    std::vector<ScenarioTeam> teams = Teams();
+    for (ScenarioTeam& team : teams) {
+      std::replace(team.armies.begin(), team.armies.end(), from, to);
+    }
+    mScenario = WithScenarioTeams(mScenario, teams);
+    for (SaveEntry& entry : mSave.Armies()) {
+      if (entry.name == from) {
+        entry.name = to;
+      }
+    }
+    mFacts.armies = Armies();
+    mModified = true;
+  }
+
+  EdDocument::SaveSnapshot EdDocument::SaveDataNow() const
+  {
+    return {mSave.Markers(), mSave.Areas(), mScript, mSave.Armies(), mScenario};
+  }
+
+  void EdDocument::RestoreSaveData(const SaveSnapshot& snapshot)
+  {
+    mSave.Markers() = snapshot.markers;
+    mSave.Areas() = snapshot.areas;
+    mScript = snapshot.script;
+    mSave.Armies() = snapshot.armies;
+    mScenario = snapshot.scenario;
+    mFacts.armies = Armies();
+    mModified = true;
+  }
+
+  void EdDocument::SaveDataEdited(SaveSnapshot before)
+  {
+    mSaveUndo.emplace_back(std::move(before), SaveDataNow());
+    EditEnded(EditKind::SaveData);
+    mModified = true;
+  }
+
+  bool EdDocument::WriteLuaFiles(const std::filesystem::path& folder, std::string& error)
+  {
+    const auto write = [&](const std::string& gamePath, const std::string& text) {
+      const std::filesystem::path file = folder / gamePath.substr(gamePath.find_last_of('/') + 1);
+      std::ofstream out(file, std::ios::binary);
+      out.write(text.data(), static_cast<std::streamsize>(text.size()));
+      if (!out) {
+        error = "can't write " + file.string();
+        return false;
+      }
+      return true;
+    };
+    if (mSave.Loaded() && mSave.Changed()) {
+      if (!write(mFacts.savePath, mSave.Text())) {
+        return false;
+      }
+      mSave.MarkSaved();
+    }
+    if (mScript != mScriptRead && !mFacts.scriptPath.empty()) {
+      if (!write(mFacts.scriptPath, mScript)) {
+        return false;
+      }
+      mScriptRead = mScript;
+    }
+    if (mScenario != mScenarioRead && !mFacts.scenarioPath.empty()) {
+      if (!write(mFacts.scenarioPath, mScenario)) {
+        return false;
+      }
+      mScenarioRead = mScenario;
+    }
+    return true;
+  }
+
+  EdDocument::PropSnapshot EdDocument::PropsNow() const
+  {
+    PropSnapshot snapshot;
+    if (mMap != nullptr && mMap->mProps != nullptr) {
+      snapshot.entries.assign(mMap->mProps->mEntries.begin(), mMap->mProps->mEntries.end());
+    }
+    snapshot.records = mFileRecords.props;
+    return snapshot;
+  }
+
+  void EdDocument::RestoreProps(const PropSnapshot& props)
+  {
+    if (mMap == nullptr || mMap->mProps == nullptr) {
+      return;
+    }
+    mMap->mProps->mEntries.clear();
+    for (const moho::CWldPropEntry& entry : props.entries) {
+      mMap->mProps->mEntries.push_back(entry);
+    }
+    mFileRecords.props = props.records;
+    mModified = true;
+  }
+
+  void EdDocument::PropsEdited(PropSnapshot before)
+  {
+    mPropUndo.emplace_back(std::move(before), PropsNow());
+    // A long session keeps the newest 200 prop edits (a 5000-prop map is about 0.3 MB a step, twice).
+    if (mPropUndo.size() > 200) {
+      mPropUndo.erase(mPropUndo.begin());
+    }
+    EditEnded(EditKind::Props);
+    mModified = true;
+  }
+
+  std::vector<CheckIssue> EdDocument::CheckScripts() const
+  {
+    std::vector<CheckIssue> issues;
+    if (mLua == nullptr) {
+      return issues;
+    }
+    lua_State* const L = mLua->GetCState();
+    const auto name = [](const std::string& path, const char* const fallback) {
+      const std::size_t slash = path.find_last_of('/');
+      return path.empty() ? std::string(fallback) : path.substr(slash == std::string::npos ? 0 : slash + 1);
+    };
+    const std::pair<std::string, const std::string*> files[] = {
+      {name(mPath, "_scenario.lua"), &mScenario},
+      {name(mFacts.savePath, "_save.lua"), nullptr},
+      {name(mFacts.scriptPath, "_script.lua"), &mScript},
+    };
+    const std::string save = mSave.Text();
+    for (const auto& [file, text] : files) {
+      const std::string& source = text != nullptr ? *text : save;
+      if (source.empty()) {
+        continue;
+      }
+      const int top = lua_gettop(L);
+      const std::string chunk = "=" + file;
+      if (luaL_loadbuffer(L, source.data(), source.size(), chunk.c_str()) != 0) {
+        const char* const message = lua_tostring(L, -1);
+        CheckIssue issue;
+        issue.level = CheckIssue::Level::Error;
+        issue.file = file;
+        int line = 0;
+        std::string text2;
+        if (message != nullptr && ParseLuaError(message, line, text2)) {
+          issue.line = line;
+          issue.text = text2;
+        } else {
+          issue.text = message != nullptr ? message : "does not compile";
+        }
+        issue.marker = file;
+        issues.push_back(std::move(issue));
+      }
+      lua_settop(L, top);
+    }
+    return issues;
+  }
+
+  std::vector<std::string> EdDocument::ArmyNamesInUse() const
+  {
+    std::vector<std::string> names = Armies();
+    const auto add = [&names](const std::string& name) {
+      if (std::find(names.begin(), names.end(), name) == names.end()) {
+        names.push_back(name);
+      }
+    };
+    for (const std::string& army : ExtraArmies()) {
+      add(army);
+    }
+    for (const SaveEntry& army : mSave.Armies()) {
+      add(army.name);
+    }
+    return names;
+  }
+
+  std::vector<WaveRecord> EdDocument::WavesNow() const
+  {
+    std::vector<WaveRecord> waves;
+    moho::WaveSystem* const system = mMap != nullptr && mMap->mTerrainRes != nullptr ? mMap->mTerrainRes->GetWaveSystem() : nullptr;
+    if (system == nullptr) {
+      return waves;
+    }
+    gpg::PipeStream pipe;
+    {
+      gpg::BinaryWriter writer(&pipe);
+      system->Save(writer);
+    }
+    pipe.VirtFlush();
+    // Drained in chunks: GetLength (0x009566C0) counts the first block only from where a read left it, so before any
+    // read it comes up short on a stream of several blocks.
+    std::string bytes;
+    char chunk[65536];
+    for (;;) {
+      const std::size_t got = pipe.VirtReadNonBlocking(chunk, sizeof(chunk));
+      if (got == 0) {
+        break;
+      }
+      bytes.append(chunk, got);
+    }
+    if (!WaveRecordsFromBytes(bytes, waves)) {
+      gpg::Warnf("editor: the wave generators didn't read back (%zu bytes)", bytes.size());
+    }
+    return waves;
+  }
+
+  int EdDocument::WaveCount() const
+  {
+    moho::WaveSystem* const system = mMap != nullptr && mMap->mTerrainRes != nullptr ? mMap->mTerrainRes->GetWaveSystem() : nullptr;
+    return system != nullptr ? static_cast<int>(system->mWaveGenerators.end_ - system->mWaveGenerators.start_) : 0;
+  }
+
+  void EdDocument::ApplyWaves(const std::vector<WaveRecord>& waves)
+  {
+    moho::WaveSystem* const system = mMap != nullptr && mMap->mTerrainRes != nullptr ? mMap->mTerrainRes->GetWaveSystem() : nullptr;
+    const moho::CHeightField* const field = system != nullptr ? mMap->mTerrainRes->GetHeightField() : nullptr;
+    if (field == nullptr) {
+      return;
+    }
+    const std::string bytes = WaveRecordsToBytes(waves);
+    gpg::PipeStream pipe;
+    pipe.VirtWrite(bytes.data(), bytes.size());
+    pipe.VirtFlush();
+    gpg::BinaryReader reader(&pipe);
+    // The map's current format (above 51: every float of a generator is read, WaveGenerator::LoadSerializedState).
+    system->Load(60, field->height - 1, field->width - 1, reader);
+    mModified = true;
+  }
+
+  void EdDocument::WavesEdited(std::vector<WaveRecord> before)
+  {
+    mWavesUndo.emplace_back(std::move(before), WavesNow());
+    // A retail map has thousands; a few steps are enough.
+    if (mWavesUndo.size() > 20) {
+      mWavesUndo.erase(mWavesUndo.begin());
+    }
+    EditEnded(EditKind::Waves);
+    mModified = true;
+  }
+
+  SkyboxState EdDocument::SkyboxNow() const
+  {
+    SkyboxState sky;
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr) {
+      return sky;
+    }
+    const moho::SkyDome& dome = static_cast<const moho::IWldTerrainRes&>(*mMap->mTerrainRes).GetSkyDome();
+    const auto three = [](const Wm3::Vector3f& v, float (&out)[3]) {
+      out[0] = v.x;
+      out[1] = v.y;
+      out[2] = v.z;
+    };
+    three(dome.mDomeOrigin, sky.position);
+    // SkyDome::Load's order (0x00815FA0), FAFME's names.
+    sky.horizonHeight = dome.mDomeShapeParams.x;
+    sky.scale = dome.mDomeShapeParams.y;
+    sky.subtractHeight = dome.mDomeShapeParams.z;
+    sky.subdivisionsAxis = dome.mWidth;
+    sky.subdivisionsHeight = dome.mHeight;
+    sky.zenithHeight = dome.mHorizonSize;
+    three(dome.mHorizonColor, sky.horizonColor);
+    three(dome.mSkyColor, sky.zenithColor);
+    sky.decalGlow = dome.mHorizonBlend;
+    sky.albedo = dome.mAtmosphereTexPath.c_str();
+    sky.glow = dome.mAtmosphereTexPath2.c_str();
+    for (const moho::SkyDomeDecalVertices& record : dome.mDecalUploads) {
+      SkyboxPlanet planet;
+      std::memcpy(&planet, record.mBytes, sizeof(planet));
+      sky.planets.push_back(planet);
+    }
+    sky.cirrusMultiplier = dome.mCirrusMultiplier;
+    sky.cirrusColor[0] = dome.mCirrusColor_R;
+    sky.cirrusColor[1] = dome.mCirrusColor_G;
+    sky.cirrusColor[2] = dome.mCirrusColor_B;
+    sky.cirrusTexture = dome.mCirrusTexPath.c_str();
+    static_assert(sizeof(sky.cirrus) == sizeof(dome.mCirrusData), "four 20-byte cirrus layers");
+    std::memcpy(sky.cirrus, dome.mCirrusData, sizeof(sky.cirrus));
+    return sky;
+  }
+
+  void EdDocument::ApplySkybox(const SkyboxState& sky)
+  {
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr) {
+      return;
+    }
+    moho::SkyDome& dome = mMap->mTerrainRes->GetSkyDome();
+    // As SkyDome::Load: its GPU resources dropped first, so the next frame builds the dome from these.
+    dome.Reset();
+    dome.mDomeOrigin = Wm3::Vector3f(sky.position[0], sky.position[1], sky.position[2]);
+    dome.mDomeShapeParams = Wm3::Vector3f(sky.horizonHeight, sky.scale, sky.subtractHeight);
+    dome.mWidth = sky.subdivisionsAxis;
+    dome.mHeight = sky.subdivisionsHeight;
+    dome.mHorizonSize = sky.zenithHeight;
+    dome.mHorizonColor = Wm3::Vector3f(sky.horizonColor[0], sky.horizonColor[1], sky.horizonColor[2]);
+    dome.mSkyColor = Wm3::Vector3f(sky.zenithColor[0], sky.zenithColor[1], sky.zenithColor[2]);
+    dome.mHorizonBlend = sky.decalGlow;
+    dome.mAtmosphereTexPath.assign(sky.albedo.c_str());
+    dome.mAtmosphereTexPath2.assign(sky.glow.c_str());
+    dome.mDecalUploads.clear();
+    for (const SkyboxPlanet& planet : sky.planets) {
+      moho::SkyDomeDecalVertices record{};
+      std::memcpy(record.mBytes, &planet, sizeof(planet));
+      dome.mDecalUploads.push_back(record);
+    }
+    dome.mCirrusMultiplier = sky.cirrusMultiplier;
+    dome.mCirrusColor_R = sky.cirrusColor[0];
+    dome.mCirrusColor_G = sky.cirrusColor[1];
+    dome.mCirrusColor_B = sky.cirrusColor[2];
+    dome.mCirrusTexPath.assign(sky.cirrusTexture.c_str());
+    std::memcpy(dome.mCirrusData, sky.cirrus, sizeof(sky.cirrus));
+    mModified = true;
+  }
+
+  void EdDocument::SkyboxEdited(SkyboxState before)
+  {
+    mSkyboxUndo.emplace_back(std::move(before), SkyboxNow());
+    if (mSkyboxUndo.size() > 50) {
+      mSkyboxUndo.erase(mSkyboxUndo.begin());
+    }
+    EditEnded(EditKind::Skybox);
+    mModified = true;
+  }
+
+  LightingState EdDocument::LightingNow() const
+  {
+    LightingState lighting;
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr) {
+      return lighting;
+    }
+    const moho::IWldTerrainRes& terrain = *mMap->mTerrainRes;
+    const auto three = [](const Wm3::Vector3f& v, float (&out)[3]) {
+      out[0] = v.x;
+      out[1] = v.y;
+      out[2] = v.z;
+    };
+    lighting.multiplier = terrain.GetLightingMultiplier();
+    three(terrain.GetSunDirection(), lighting.sunDirection);
+    three(terrain.GetSunAmbience(), lighting.sunAmbience);
+    three(terrain.GetSunColor(), lighting.sunColor);
+    three(terrain.GetShadowFillColor(), lighting.shadowFill);
+    const moho::Vector4f specular = terrain.GetSpecularColor();
+    lighting.specular[0] = specular.x;
+    lighting.specular[1] = specular.y;
+    lighting.specular[2] = specular.z;
+    lighting.specular[3] = specular.w;
+    lighting.bloom = terrain.GetBloom();
+    // The fog as WRenViewport::FogOn reads it: the colour from the first three floats, start and end from the next two.
+    const moho::SFogInfo& fog = terrain.GetFogInfo();
+    lighting.fogColor[0] = fog.mStartDistance;
+    lighting.fogColor[1] = fog.mCutoffDistance;
+    lighting.fogColor[2] = fog.mMinClamp;
+    lighting.fogStart = fog.mMaxClamp;
+    lighting.fogEnd = fog.mCurveExponent;
+    return lighting;
+  }
+
+  void EdDocument::ApplyLighting(const LightingState& lighting)
+  {
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr) {
+      return;
+    }
+    moho::IWldTerrainRes& terrain = *mMap->mTerrainRes;
+    const auto vec = [](const float (&v)[3]) { return Wm3::Vector3f(v[0], v[1], v[2]); };
+    terrain.SetLightingMultiplier(lighting.multiplier);
+    terrain.SetSunDirection(vec(lighting.sunDirection));
+    terrain.SetSunAmbience(vec(lighting.sunAmbience));
+    terrain.SetSunColor(vec(lighting.sunColor));
+    terrain.SetShadowFillColor(vec(lighting.shadowFill));
+    moho::Vector4f specular = terrain.GetSpecularColor();
+    specular.x = lighting.specular[0];
+    specular.y = lighting.specular[1];
+    specular.z = lighting.specular[2];
+    specular.w = lighting.specular[3];
+    terrain.SetSpecularColor(specular);
+    terrain.SetBloom(lighting.bloom);
+    moho::SFogInfo fog = terrain.GetFogInfo();
+    fog.mStartDistance = lighting.fogColor[0];
+    fog.mCutoffDistance = lighting.fogColor[1];
+    fog.mMinClamp = lighting.fogColor[2];
+    fog.mMaxClamp = lighting.fogStart;
+    fog.mCurveExponent = lighting.fogEnd;
+    terrain.SetFogInfo(fog);
+    mModified = true;
+  }
+
+  void EdDocument::LightingEdited(LightingState before)
+  {
+    mLightingUndo.emplace_back(before, LightingNow());
+    if (mLightingUndo.size() > 200) {
+      mLightingUndo.erase(mLightingUndo.begin());
+    }
+    EditEnded(EditKind::Lighting);
+    mModified = true;
+  }
+
+  WaterState EdDocument::WaterNow() const
+  {
+    WaterState water;
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr || mMap->mTerrainRes->mMap == nullptr) {
+      return water;
+    }
+    const moho::STIMap& map = *mMap->mTerrainRes->mMap;
+    water.enabled = map.mWaterEnabled != 0u;
+    water.elevation = map.mWaterElevation;
+    water.deep = map.mWaterElevationDeep;
+    water.abyss = map.mWaterElevationAbyss;
+    if (const moho::CWaterShaderProperties* const shader = mMap->mTerrainRes->GetWaterShaderProperties(); shader != nullptr) {
+      static_assert(sizeof(WaterNumbers) == sizeof(moho::WaterShaderNumericState), "WaterNumbers mirrors WaterShaderNumericState");
+      std::memcpy(&water.shader, &shader->mNumericState, sizeof(water.shader));
+      water.textures[0] = shader->mWaterCubemap.c_str();
+      water.textures[1] = shader->mWaterRamp.c_str();
+      for (int i = 0; i < 4; ++i) {
+        water.textures[2 + i] = shader->mShaderNames[i].c_str();
+      }
+    }
+    return water;
+  }
+
+  void EdDocument::ApplyWater(const WaterState& water)
+  {
+    if (mMap == nullptr || mMap->mTerrainRes == nullptr || mMap->mTerrainRes->mMap == nullptr) {
+      return;
+    }
+    moho::IWldTerrainRes* const terrain = mMap->mTerrainRes;
+    const WaterState now = WaterNow();
+    terrain->WaterEnabled(water.enabled);
+    terrain->SetWaterElevation(water.elevation);
+    terrain->SetWaterElevationDeep(water.deep);
+    terrain->SetWaterElevationAbyss(water.abyss);
+    if (moho::CWaterShaderProperties* const shader = terrain->GetWaterShaderProperties(); shader != nullptr) {
+      std::memcpy(&shader->mNumericState, &water.shader, sizeof(water.shader));
+      // The textures: new names, and the loaded ones dropped; the water's draw loads each again the next time it binds it
+      // (GetCubeMap 0x0089FC40, GetWaterRamp 0x0089FD70, GetNormalMap 0x0089FB00 load a slot that is empty).
+      fa::string* const paths[6] = {&shader->mWaterCubemap, &shader->mWaterRamp, &shader->mShaderNames[0], &shader->mShaderNames[1],
+                                    &shader->mShaderNames[2], &shader->mShaderNames[3]};
+      bool texturesChanged = false;
+      for (int i = 0; i < 6; ++i) {
+        if (water.textures[i] != paths[i]->c_str()) {
+          paths[i]->assign(water.textures[i].c_str());
+          texturesChanged = true;
+          if (std::string probe; !water.textures[i].empty() && !ReadGameFile(water.textures[i], probe)) {
+            gpg::Warnf("editor: water texture %s isn't in the game's files; the game draws a stand-in", water.textures[i].c_str());
+          }
+        }
+      }
+      if (texturesChanged) {
+        shader->releaseTextures();
+      }
+    }
+    // The water map (depth below the sea, for the shore and the water's colour) follows the levels.
+    if (now.enabled != water.enabled || now.elevation != water.elevation || now.deep != water.deep || now.abyss != water.abyss) {
+      terrain->UpdateWaterMap();
+    }
+    mFacts.water = water.enabled;
+    mFacts.waterElevation = water.elevation;
+    mFacts.waterDeep = water.deep;
+    mFacts.waterAbyss = water.abyss;
+    mModified = true;
+  }
+
+  void EdDocument::WaterEdited(WaterState before)
+  {
+    mWaterUndo.emplace_back(std::move(before), WaterNow());
+    if (mWaterUndo.size() > 200) {
+      mWaterUndo.erase(mWaterUndo.begin());
+    }
+    EditEnded(EditKind::Water);
+    mModified = true;
+  }
+
+  moho::IDecalManager* EdDocument::Decals() const
+  {
+    return mMap != nullptr && mMap->mTerrainRes != nullptr ? mMap->mTerrainRes->GetDecalManager() : nullptr;
+  }
+
+  EdDocument::DecalSnapshot EdDocument::DecalsNow() const
+  {
+    moho::IDecalManager* const decals = Decals();
+    return decals != nullptr ? CaptureDecals(*decals) : DecalSnapshot{};
+  }
+
+  void EdDocument::RestoreDecals(const DecalSnapshot& decals)
+  {
+    if (moho::IDecalManager* const manager = Decals(); manager != nullptr) {
+      faf::editor::RestoreDecals(*manager, decals);
+      mModified = true;
+    }
+  }
+
+  void EdDocument::DecalsEdited(DecalSnapshot before)
+  {
+    mDecalUndo.emplace_back(std::move(before), DecalsNow());
+    // About 120 bytes a decal: a 2,000-decal map is about half a megabyte a step, twice.
+    if (mDecalUndo.size() > 100) {
+      mDecalUndo.erase(mDecalUndo.begin());
+    }
+    EditEnded(EditKind::Decals);
+    mModified = true;
+  }
+
+  void EdDocument::SetPropRecord(const std::size_t index, const PropRecord& record)
+  {
+    if (mMap == nullptr || mMap->mProps == nullptr || index >= mMap->mProps->mEntries.size()) {
+      return;
+    }
+    mFileRecords.props.resize(mMap->mProps->mEntries.size());
+    mFileRecords.props[index] = record;
+  }
+
+  void EdDocument::AddProp(const moho::CWldPropEntry& entry, const PropRecord& record)
+  {
+    if (mMap == nullptr || mMap->mProps == nullptr) {
+      return;
+    }
+    // The records follow the entries index for index; a new prop's record is empty, so it is written from
+    // its transform.
+    mFileRecords.props.resize(mMap->mProps->mEntries.size());
+    mMap->mProps->mEntries.push_back(entry);
+    mFileRecords.props.push_back(record);
+  }
+
+  void EdDocument::DeletePropAt(const std::size_t index)
+  {
+    if (mMap == nullptr || mMap->mProps == nullptr || index >= mMap->mProps->mEntries.size()) {
+      return;
+    }
+    mMap->mProps->mEntries.erase(mMap->mProps->mEntries.begin() + static_cast<std::ptrdiff_t>(index));
+    if (index < mFileRecords.props.size()) {
+      mFileRecords.props.erase(mFileRecords.props.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+  }
+
   void EdDocument::EditEnded(const EditKind kind)
   {
     mUndoOrder.push_back(kind);
@@ -362,6 +1040,13 @@ namespace faf::editor
     mHeights.ClearRedo();
     mMaskHistory.ClearRedo();
     mLayerRedo.clear();
+    mPropRedo.clear();
+    mSaveRedo.clear();
+    mDecalRedo.clear();
+    mWaterRedo.clear();
+    mLightingRedo.clear();
+    mSkyboxRedo.clear();
+    mWavesRedo.clear();
   }
 
   bool EdDocument::PopUndo(EditKind& kind)
@@ -430,6 +1115,16 @@ namespace faf::editor
     mError = std::move(load->error);
     mMap = std::move(load->map);
     mFileRecords = std::move(load->records);
+    mSave = std::move(load->save);
+    mScript = std::move(load->script);
+    mScriptRead = mScript;
+    mScenario = std::move(load->scenario);
+    mScenarioRead = mScenario;
+    // The markers the save's text gives, against those its Lua gave (every map should agree).
+    if (mSave.Loaded() && static_cast<int>(mSave.Markers().size()) != load->facts.markerCount) {
+      gpg::Warnf("editor: %s: %zu markers in the save's text, %d in its Lua", load->facts.savePath.c_str(), mSave.Markers().size(),
+                 load->facts.markerCount);
+    }
     mLua = std::move(load->lua);
     // A missing save keeps the map open: the editor still has its terrain, props and decals.
     mState = mMap != nullptr ? State::Open : State::Failed;
@@ -444,6 +1139,10 @@ namespace faf::editor
                                                        [](const std::string& layer) { return !layer.empty(); })),
                 mFacts.props, mFacts.decals, mFacts.markerCount, mFacts.armies.size(), mError.empty() ? "" : "; ",
                 mError.c_str());
+      gpg::Logf("editor: water: %s, level %.2f, deep %.2f, abyss %.2f", mFacts.water ? "on" : "off",
+                static_cast<double>(mFacts.waterElevation), static_cast<double>(mFacts.waterDeep), static_cast<double>(mFacts.waterAbyss));
+      gpg::Logf("editor: symmetry from the heights: mode %d, %d turns (%.1f%% of points match)", static_cast<int>(mFacts.symmetry.symmetry),
+                mFacts.symmetry.turns, static_cast<double>(mFacts.symmetry.matched) * 100.0);
     } else {
       gpg::Warnf("editor: %s did not open: %s", mPath.c_str(), mError.c_str());
     }
@@ -601,7 +1300,13 @@ namespace faf::editor
         continue;
       }
       std::string bytes;
-      if (!ReadGameFile(source, bytes)) {
+      if (Lower(source) == Lower(mFacts.savePath) && mSave.Loaded() && mSave.Changed()) {
+        bytes = mSave.Text(); // the edited markers and areas
+      } else if (Lower(source) == Lower(mFacts.scriptPath) && mScript != mScriptRead) {
+        bytes = mScript; // the edited script (its playable area)
+      } else if (Lower(source) == Lower(mFacts.scenarioPath) && mScenario != mScenarioRead) {
+        bytes = mScenario; // the edited army list (its paths are moved below, as the copy's)
+      } else if (!ReadGameFile(source, bytes)) {
         message = "Can't read " + source;
         return false;
       }
@@ -609,6 +1314,10 @@ namespace faf::editor
         // Paths into the old folder point into the new one, with the new base name.
         bytes = ReplaceNoCase(bytes, oldPrefix + oldBase, newPrefix + newBase);
         bytes = ReplaceNoCase(bytes, oldPrefix, newPrefix);
+      }
+      // The scenario's map_version is the new folder's version (the vault checks they match).
+      if (Lower(source) == Lower(mFacts.scenarioPath) && FolderVersion(folder) > 0) {
+        bytes = WithMapVersion(bytes, FolderVersion(folder));
       }
       std::ofstream out(destination, std::ios::binary);
       out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
@@ -630,6 +1339,13 @@ namespace faf::editor
     mSaveTarget = newMapFile;
     mBackedUp = true; // a new folder has nothing to back up
     mModified = false;
+    // From now on the map's files are the new folder's: a later Save writes there, under the new names.
+    mSave.MarkSaved();
+    mScriptRead = mScript;
+    mScenarioRead = mScenario;
+    for (std::string* const path : {&mFacts.mapPath, &mFacts.savePath, &mFacts.scriptPath, &mFacts.scenarioPath}) {
+      *path = ReplaceNoCase(ReplaceNoCase(*path, oldPrefix + oldBase, newPrefix + newBase), oldPrefix, newPrefix);
+    }
     message = "Saved as " + target.string() + " (" + std::to_string(copied + 1) + " files); the game lists it from its next start";
     return true;
   }
@@ -640,6 +1356,61 @@ namespace faf::editor
       return {};
     }
     return mSaveTarget.empty() ? DiskFileOf(mFacts.mapPath) : mSaveTarget;
+  }
+
+  PackagePlan EdDocument::PlanPackage() const
+  {
+    const std::filesystem::path file = MapDiskFile();
+    if (file.empty()) {
+      PackagePlan plan;
+      plan.errors.push_back("this map is inside the game's archives: save it as a new map folder in your vault first");
+      return plan;
+    }
+    const std::filesystem::path folder = file.parent_path();
+    std::string scenario;
+    for (const std::string& name : FilesUnder(folder)) {
+      if (name.find('/') == std::string::npos && name.size() > 13 && name.compare(name.size() - 13, 13, "_scenario.lua") == 0) {
+        std::ifstream in(folder / name, std::ios::binary);
+        scenario.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+      }
+    }
+    PackagePlan plan = faf::editor::PlanPackage(folder.filename().string(), scenario, FilesUnder(folder));
+    if (mModified) {
+      plan.warnings.insert(plan.warnings.begin(), "the map has unsaved edits: the package is the folder as saved");
+    }
+    return plan;
+  }
+
+  bool EdDocument::WritePackage(const PackagePlan& plan, std::filesystem::path& written, std::string& message) const
+  {
+    const std::filesystem::path file = MapDiskFile();
+    if (file.empty() || !plan.errors.empty()) {
+      message = plan.errors.empty() ? "no folder to package" : plan.errors.front();
+      return false;
+    }
+    const std::filesystem::path folder = file.parent_path();
+    std::vector<ZipEntry> entries;
+    for (const std::string& name : plan.files) {
+      std::ifstream in(folder / name, std::ios::binary);
+      if (!in) {
+        message = "can't read " + (folder / name).string();
+        return false;
+      }
+      entries.push_back({plan.folder + "/" + name, std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>())});
+    }
+    const std::string zip = WriteZip(entries);
+    std::error_code error;
+    const std::filesystem::path packages = mVault / "packages";
+    std::filesystem::create_directories(packages, error);
+    written = packages / (plan.folder + ".zip");
+    std::ofstream out(written, std::ios::binary | std::ios::trunc);
+    out.write(zip.data(), static_cast<std::streamsize>(zip.size()));
+    if (!out) {
+      message = "can't write " + written.string();
+      return false;
+    }
+    message = "packaged " + std::to_string(entries.size()) + " files, " + std::to_string(zip.size()) + " bytes, as " + written.string();
+    return true;
   }
 
   bool EdDocument::Save(std::string& message)
@@ -690,6 +1461,10 @@ namespace faf::editor
       message = "Saving " + file.string() + " failed: " + failure;
       return false;
     }
+    if (!WriteLuaFiles(file.parent_path(), failure)) {
+      message = "Saved " + file.string() + ", but " + failure;
+      return false;
+    }
     mModified = false;
     message = "Saved " + file.string();
     return true;
@@ -711,6 +1486,15 @@ namespace faf::editor
     mRedoOrder.clear();
     mLayerUndo.clear();
     mLayerRedo.clear();
+    mPropUndo.clear();
+    mPropRedo.clear();
+    mSave = {};
+    mScript.clear();
+    mScriptRead.clear();
+    mScenario.clear();
+    mScenarioRead.clear();
+    mSaveUndo.clear();
+    mSaveRedo.clear();
     mFileRecords = {};
     mSaveTarget.clear();
     mModified = false;

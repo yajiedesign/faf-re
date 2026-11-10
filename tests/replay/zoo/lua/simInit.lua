@@ -201,6 +201,27 @@ do
         Log('sweep ' .. tableName .. ': ' .. called .. ' calls, ' .. failed .. ' errors')
     end
 
+    -- Every global getter the engine registers in the sim's Lua (a C function whose name says it reads), without an
+    -- argument and with 1.
+    function Zoo.SweepGlobals()
+        local globals = getfenv(0)
+        local names = {}
+        for name, value in globals do
+            if type(name) == 'string' and type(value) == 'cfunction' and IsGetter(name) and not SkipGetters['_G.' .. name] then
+                TableInsert(names, name)
+            end
+        end
+        table.sort(names)
+        local failed = 0
+        for i = 1, TableGetn(names) do
+            if Zoo.trace then Log('call _G.' .. names[i]) end
+            local fn = globals[names[i]]
+            if not pcall(fn) then failed = failed + 1 end
+            if not pcall(fn, 1) then failed = failed + 1 end
+        end
+        Log('sweep globals: ' .. TableGetn(names) .. ' getters, ' .. failed .. ' errors')
+    end
+
     function Zoo.SweepUnit(unit)
         if not Alive(unit) then
             return
@@ -266,7 +287,234 @@ do
             Try('DisbandPlatoon', brainA.DisbandPlatoon, brainA, platoon)
         end
         Zoo.DestroyAll(sample)
+        Zoo.SweepGlobals()
         Log('sweeps done')
+    end
+
+    -- Methods the fuzz leaves out: they end the object, or wait (a yield inside pcall only errors).
+    local FuzzSkip = {
+        Destroy = true, Kill = true, KillSelf = true, DestroyIntel = true, PlayCommanderWarpInEffect = true,
+    }
+    -- Calls that crash the original game the same way, left out of the fuzz:
+    -- unit:CanPathTo on a unit with no navigator (a structure): 0x006CB960 calls through [unit+0x54C] unchecked;
+    -- a number where a table goes: lua_getn (0x0090AD30) reads any value as a table, and these count such an argument
+    -- with no type check first: platoon:FormPlatoon (0x0072D8F0), brain:FindUpgradeBP (0x00588C90),
+    -- brain:BuildStructure (0x0058B690).
+    local FuzzCrashes = {
+        ['unit_methods.CanPathTo'] = true,
+        ['platoon_methods.FormPlatoon'] = true,
+        ['aibrain_methods.FindUpgradeBP'] = true,
+        ['aibrain_methods.BuildStructure'] = true,
+    }
+
+    -- Every method of moho[tableName] on `object` with each argument pattern: nothing, an enemy unit, a position, a
+    -- unit blueprint id, 1, true, two numbers, a position and a number, a unit and a number. The wrong patterns stop
+    -- at the engine's argument checks; the right ones run the method. Errors are expected and counted.
+    function Zoo.Fuzz(tableName, object, ctx, label)
+        local key = label or tableName
+        local methods = rawget(moho, tableName)
+        if not methods or not object then
+            return
+        end
+        local patterns = {
+            {},
+            { ctx.enemy },
+            { ctx.pos },
+            { 'uel0201' },
+            { 1 },
+            { true },
+            { 1, 1 },
+            { ctx.pos, 1 },
+            { ctx.enemy, 1 },
+        }
+        local names = SortedFunctionNames(methods)
+        local calls = 0
+        local failed = 0
+        for i = 1, TableGetn(names) do
+            local name = names[i]
+            if not FuzzSkip[name] and not SkipGetters[key .. '.' .. name] and not FuzzCrashes[key .. '.' .. name] then
+                local fn = methods[name]
+                for p = 1, TableGetn(patterns) do
+                    if Zoo.trace then Log('fuzz ' .. key .. '.' .. name .. ' #' .. p) end
+                    local args = patterns[p]
+                    local ok
+                    if TableGetn(args) == 0 then
+                        ok = pcall(fn, object)
+                    elseif TableGetn(args) == 1 then
+                        ok = pcall(fn, object, args[1])
+                    else
+                        ok = pcall(fn, object, args[1], args[2])
+                    end
+                    calls = calls + 1
+                    if not ok then failed = failed + 1 end
+                end
+            end
+        end
+        Log('fuzz ' .. key .. ': ' .. calls .. ' calls, ' .. failed .. ' errors')
+    end
+
+    -- The same calls on any object, through its metatable's methods (the engine's classes whose method table has no
+    -- moho.<name>_methods entry: manipulators, effects, economy events, decals, projectiles, props).
+    function Zoo.FuzzObject(label, object, ctx)
+        if not object then
+            Log('fuzz ' .. label .. ': no object')
+            return
+        end
+        local methods = getmetatable(object)
+        if type(methods) == 'table' and type(rawget(methods, '__index')) == 'table' then
+            methods = rawget(methods, '__index')
+        end
+        if type(methods) ~= 'table' then
+            Log('fuzz ' .. label .. ': no methods')
+            return
+        end
+        local saved = moho['zoo_fuzz']
+        moho['zoo_fuzz'] = methods
+        Zoo.Fuzz('zoo_fuzz', object, ctx, label)
+        moho['zoo_fuzz'] = saved
+    end
+
+    -- Projectiles, props, a shield, every kind of manipulator, effects, an economy event, a decal and a blip, each
+    -- made here and given the same calls.
+    function Zoo.FuzzMore(ctx)
+        -- A global the engine may not register: FAF's Lua errors on reading a missing global, rawget doesn't.
+        local function G(name)
+            return rawget(getfenv(0), name) or function() error(name .. ' is not registered') end
+        end
+        local a = Zoo.a
+        local x = Zoo.cx
+        local z = Zoo.cz - 70
+        local tank = Zoo.Spawn('uel0201', a, x, z, 0)
+        local shieldGen = Zoo.Spawn('ueb4202', a, x + 10, z, 0)
+        local engineer = Zoo.Spawn('uel0105', a, x - 10, z, 0)
+        WaitTicks(5)
+        if not Alive(tank) then
+            Log('fuzz more: no tank')
+            return
+        end
+        local weapon = Try('GetWeapon', tank.GetWeapon, tank, 1)
+        local made = {
+            { 'projectile', Try('CreateProjectile', tank.CreateProjectile, tank,
+                '/projectiles/TDFGauss01/TDFGauss01_proj.bp', 0, 1, 0, 0, 0, 1) },
+            { 'rotator', Try('CreateRotator', G('CreateRotator'), tank, 0, 'y') },
+            { 'animator', Try('CreateAnimator', G('CreateAnimator'), tank) },
+            { 'slider', Try('CreateSlider', G('CreateSlider'), tank, 0, 0, 1, 0, 1) },
+            { 'aim', weapon and Try('CreateAimController', G('CreateAimController'), weapon, 'Zoo', 0, 0, 0) },
+            { 'footplant', Try('CreateFootPlantController', G('CreateFootPlantController'), tank, 0, 0, 0, true, 1) },
+            { 'collision', Try('CreateCollisionDetector', G('CreateCollisionDetector'), tank) },
+            { 'storage', Try('CreateStorageManip', G('CreateStorageManip'), tank, 0, 'MASS', 0, 0, 0, 0, 1, 0) },
+            { 'thrust', Try('CreateThrustController', G('CreateThrustController'), tank, 'Zoo', 0) },
+            { 'builderarm', engineer and Try('CreateBuilderArmController', G('CreateBuilderArmController'), engineer, 0, 0, 0) },
+            { 'slave', Try('CreateSlaveManipulator', G('CreateSlaveManipulator'), tank, 0, 0) },
+            { 'emitter', Try('CreateEmitterAtEntity', G('CreateEmitterAtEntity'), tank, a,
+                '/effects/emitters/destruction_explosion_fire_01_emit.bp') },
+            { 'attached emitter', Try('CreateAttachedEmitter', G('CreateAttachedEmitter'), tank, 0, a,
+                '/effects/emitters/destruction_explosion_fire_01_emit.bp') },
+            { 'economy event', engineer and Try('CreateEconomyEvent', G('CreateEconomyEvent'), engineer, 10, 10, 1) },
+            { 'decal', Try('CreateDecal', G('CreateDecal'), { x, 0, z }, 0, 'scorch_001_albedo', '', 'Albedo', 4, 4, 100, 10, a) },
+            { 'blip', Try('GetBlip', tank.GetBlip, tank, 2) },
+            { 'shield', shieldGen and shieldGen.MyShield },
+        }
+        local wrecks = Try('GetReclaimablesInRect', G('GetReclaimablesInRect'), Rect(Zoo.cx - 60, Zoo.cz - 60, Zoo.cx + 60, Zoo.cz + 60))
+        if wrecks and wrecks[1] then
+            TableInsert(made, { 'prop', wrecks[1] })
+        end
+        for i = 1, TableGetn(made) do
+            Zoo.FuzzObject(made[i][1], made[i][2], ctx)
+        end
+        WaitTicks(10)
+        Zoo.DestroyAll({ tank, shieldGen, engineer })
+        Log('fuzz more done')
+    end
+
+    -- A platoon of tanks, a transport and an engineer given each platoon order with typed arguments - target units,
+    -- positions, an entity category, each squad name - so the orders' own code runs (the fuzz's patterns stop most of
+    -- them at the argument checks). After the part compared with the original game.
+    function Zoo.PlatoonOrders(ctx)
+        local brainA = GetArmyBrain(Zoo.a)
+        local x = Zoo.cx
+        local z = Zoo.cz + 60
+        local members = {}
+        for i = 1, 4 do
+            local tank = Zoo.Spawn('uel0201', Zoo.a, x + i * 3, z, 0)
+            if tank then TableInsert(members, tank) end
+        end
+        local transport = Zoo.Spawn('uea0107', Zoo.a, x - 6, z, 0)
+        local engineer = Zoo.Spawn('uel0105', Zoo.a, x - 10, z, 0)
+        if transport then TableInsert(members, transport) end
+        if engineer then TableInsert(members, engineer) end
+        local enemy = Zoo.Spawn('uel0201', Zoo.b, x + 30, z + 10, 0)
+        WaitTicks(5)
+        local platoon = Try('MakePlatoon', brainA.MakePlatoon, brainA, 'ZooOrders', '')
+        if not platoon then
+            return
+        end
+        Try('AssignUnitsToPlatoon', brainA.AssignUnitsToPlatoon, brainA, platoon, members, 'Attack', 'GrowthFormation')
+        local land = categories.LAND
+        local there = { x + 20, GetSurfaceHeight(x + 20, z + 20), z + 20 }
+        local squads = { 'Attack', 'Artillery', 'Guard', 'Support', 'Scout', 'Unassigned' }
+        for q = 1, TableGetn(squads) do
+            local squad = squads[q]
+            if enemy and Alive(enemy) then
+                Try('GuardTarget', platoon.GuardTarget, platoon, enemy, squad)
+                Try('MoveToTarget', platoon.MoveToTarget, platoon, enemy, false, squad)
+                Try('AttackTarget', platoon.AttackTarget, platoon, enemy, squad)
+            end
+            Try('Patrol', platoon.Patrol, platoon, there, squad)
+            Try('MoveToLocation', platoon.MoveToLocation, platoon, there, false, squad)
+            if transport and Alive(transport) then
+                Try('UseTeleporter', platoon.UseTeleporter, platoon, transport, squad)
+            end
+            WaitTicks(3)
+        end
+        Try('LoadUnits', platoon.LoadUnits, platoon, land)
+        WaitTicks(30)
+        Try('UnloadUnitsAtLocation', platoon.UnloadUnitsAtLocation, platoon, land, there)
+        WaitTicks(20)
+        Try('UnloadAllAtLocation', platoon.UnloadAllAtLocation, platoon, there)
+        Try('FerryToLocation', platoon.FerryToLocation, platoon, there)
+        if transport and Alive(transport) then
+            Try('UseFerryBeacon', platoon.UseFerryBeacon, platoon, land, transport)
+        end
+        WaitTicks(30)
+        Try('Stop', platoon.Stop, platoon)
+        Try('DisbandPlatoon', brainA.DisbandPlatoon, brainA, platoon)
+        Zoo.DestroyAll(members)
+        if enemy then Zoo.DestroyAll({ enemy }) end
+        Log('platoon orders done')
+    end
+
+    -- The fuzz on a unit of every kind, its weapon and navigator, an army brain and a platoon. Last of all: setters
+    -- change the game in ways no checksum was checked for.
+    function Zoo.FuzzAll()
+        local brainA = GetArmyBrain(Zoo.a)
+        local enemy = Zoo.Spawn('uel0201', Zoo.b, Zoo.cx + 10, Zoo.cz - 50, 0)
+        local ctx = { enemy = enemy, pos = { Zoo.cx, GetSurfaceHeight(Zoo.cx, Zoo.cz), Zoo.cz } }
+        local sample = Zoo.SpawnSample(Zoo.a, Zoo.cz - 60)
+        WaitTicks(10)
+        for i = 1, TableGetn(sample) do
+            local unit = sample[i]
+            if Alive(unit) then
+                local weapon = Try('GetWeapon', unit.GetWeapon, unit, 1)
+                local navigator = Try('GetNavigator', unit.GetNavigator, unit)
+                Zoo.Fuzz('unit_methods', unit, ctx)
+                if Alive(unit) then Zoo.Fuzz('entity_methods', unit, ctx) end
+                if weapon and Alive(unit) then Zoo.Fuzz('weapon_methods', weapon, ctx) end
+                if navigator and Alive(unit) then Zoo.Fuzz('navigator_methods', navigator, ctx) end
+            end
+            WaitTicks(1)
+        end
+        local platoon = Try('MakePlatoon', brainA.MakePlatoon, brainA, 'ZooFuzz', '')
+        if platoon then
+            Try('AssignUnitsToPlatoon', brainA.AssignUnitsToPlatoon, brainA, platoon, sample, 'Attack', 'GrowthFormation')
+            Zoo.Fuzz('platoon_methods', platoon, ctx)
+        end
+        Zoo.Fuzz('aibrain_methods', brainA, ctx)
+        WaitTicks(10)
+        Zoo.DestroyAll(sample)
+        Zoo.PlatoonOrders(ctx)
+        Zoo.FuzzMore(ctx)
+        Log('fuzz done')
     end
 
     -- The calls ordinary games make rarely: an AI platoon, building, factories, upgrades, transports, missiles,
@@ -406,6 +654,7 @@ do
         Log('waves done, ' .. total .. ' units spawned')
         Zoo.Scenarios()
         Zoo.Sweeps()
+        Zoo.FuzzAll()
     end
 
     local ZooBeginSession = BeginSession
